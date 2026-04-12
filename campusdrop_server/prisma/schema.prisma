@@ -1,0 +1,76 @@
+// https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// 계정·로그인 식별(PII 최소화). 원본 이메일은 저장하지 않고 `emailHash`만 보관합니다.
+model Identity {
+  id        String   @id @default(uuid()) @db.Uuid
+  /// 정규화된 이메일 문자열에 대한 bcrypt 해시(솔트 포함). 로그인 시 `bcrypt.compare`로만 대조합니다.
+  emailHash String
+  kakaoId   String?
+  createdAt DateTime @default(now())
+  trait     Trait?
+
+  @@index([emailHash])
+  @@map("identities")
+}
+
+/// 성향·설문 등 비식별 속성(1:1 `Identity`). PK = `Identity.id`와 동일(FK).
+model Trait {
+  id         String   @id @db.Uuid
+  identity   Identity @relation(fields: [id], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  mbti       String?
+  gender     String?
+  surveyData Json?
+  updatedAt  DateTime @updatedAt
+
+  @@map("traits")
+}
+
+// --- 감사 로그 / 관리자 접근 (설계 주석) ---
+// 비상(break-glass) 시에만 관리자가 PII에 근접할 수 있도록 다음을 권장합니다(코드가 아닌 운영·보안 정책으로 강제):
+// 1) 관리자 API는 본 앱과 분리된 내부망 + mTLS + 단기 자격 증명만 허용.
+// 2) 역할: `break_glass_auditor` 등 최소 역할 + 2인 승인(M-of-N) + 시간창(예: 4시간) 제한.
+// 3) 모든 특권 조회/보내기는 반드시 `AccessLog`에 남기고, SOC에서 `actorType === "admin"` 알림.
+// 4) DB 직접 접속은 금지하거나 별도 Vault 감사와 이중화.
+// 5) 구현 시: 관리 라우트에서 `writeAccessLog({ actorType: "admin", ... })` 호출을 강제하는 미들웨어를 둘 것.
+model AccessLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  /// 예: "user_session" | "system" | "admin" | "job"
+  actorType  String
+  /// 불투명 actor 식별자(관리자 서브 등). 없으면 null.
+  actorId    String?
+  /// 예: "AUTH_SESSION_VALIDATE" | "TRAIT_UPDATE" | "ADMIN_EXPORT"
+  action     String
+  /// 예: "Trait:<uuid>" — 원문 이메일·카카오 ID는 기록하지 말 것.
+  resource   String?
+  ip         String?
+  userAgent  String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorType, action])
+  @@map("access_logs")
+}
+
+/// 주간 배치 매칭 결과(한 주기·한 쌍당 1행).
+model Matching {
+  id        String   @id @default(uuid()) @db.Uuid
+  userAId   String   @map("user_a_id") @db.Uuid
+  userBId   String   @map("user_b_id") @db.Uuid
+  score     Float
+  matchedAt DateTime @default(now()) @map("matched_at")
+
+  @@index([matchedAt])
+  @@index([userAId])
+  @@index([userBId])
+  @@map("matchings")
+}

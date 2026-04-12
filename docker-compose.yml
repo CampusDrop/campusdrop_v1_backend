@@ -1,0 +1,76 @@
+# 통합 배포: repo 루트(campusdrop_backend)에서 실행
+# cp .env.example .env 후 값 수정 → docker compose up -d --build
+
+services:
+  db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-campus_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-strong}
+      POSTGRES_DB: ${POSTGRES_DB:-campusdrop}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  matching:
+    build:
+      context: ./campusdrop_matching
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://campus_admin:change-me-strong@db:5432/campusdrop}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      MATCHING_SERVICE_URL: ${MATCHING_SERVICE_URL:-http://matching:8000}
+    ports:
+      - "${SERVER_PUBLISH_PORT:-3000}:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      matching:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:

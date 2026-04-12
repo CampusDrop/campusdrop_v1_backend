@@ -1,0 +1,25 @@
+# Campus Drop API — monorepo 루트에서 빌드 (docker-compose: context `.`)
+FROM node:20-alpine
+
+RUN apk add --no-cache libc6-compat openssl
+
+WORKDIR /app
+
+COPY campusdrop_server/package.json campusdrop_server/package-lock.json* ./
+COPY campusdrop_server/prisma ./prisma
+RUN npm ci
+
+COPY campusdrop_server/ ./
+RUN npx prisma generate
+
+COPY entrypoint.server.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
+
+ENV NODE_ENV=production
+
+EXPOSE 3000
+
+RUN chown -R node:node /app
+USER node
+
+ENTRYPOINT ["./entrypoint.sh"]

@@ -1,0 +1,14 @@
+# docker compose server 빌드: context = repo 루트
+.git
+**/node_modules
+campusdrop_matching/
+**/__pycache__
+*.pyc
+.env
+.env.*
+!.env.example
+*.pem
+.cursor
+.vscode
+terminals
+coverage

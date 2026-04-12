@@ -1,0 +1,137 @@
+from __future__ import annotations
+
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, field_validator
+
+
+CONTINUOUS_KEYS: tuple[str, ...] = (
+    "energy",
+    "weekend",
+    "pattern",
+    "trend",
+    "alcohol",
+    "contact",
+    "meeting",
+    "planning",
+    "affection",
+    "date_expense",
+    "friends",
+    "jealousy",
+    "skinship_speed",
+    "skinship_limit",
+    "politics",
+    "marriage_view",
+    "meeting_seriousness",
+    "job_view",
+    "spending",
+    "conflict",
+    "empathy",
+    "honesty",
+    "trust",
+)
+
+# 연속형 항목별 가중치(기본 1.0). 핵심 가치관 축은 1.5~2.0배.
+CONTINUOUS_WEIGHTS: dict[str, float] = {
+    "marriage_view": 2.0,
+    "meeting_seriousness": 2.0,
+    "politics": 1.75,
+    "trust": 1.5,
+    "honesty": 1.5,
+    "conflict": 1.5,
+    "empathy": 1.5,
+    "job_view": 1.5,
+}
+
+# religion_type은 척도가 아니므로 소프트 정렬에 별도 가중치로 반영(≈1.5~2배의 한 축).
+RELIGION_SOFT_WEIGHT: float = 1.8
+
+
+class LifestyleUser(BaseModel):
+    """32개 키 중 연속형 + 하드필터 + (선택) cc 본인값."""
+
+    model_config = {"extra": "forbid"}
+
+    energy: int
+    weekend: int
+    pattern: int
+    trend: int
+    alcohol: int
+    contact: int
+    meeting: int
+    planning: int
+    affection: int
+    date_expense: int
+    friends: int
+    jealousy: int
+    skinship_speed: int
+    skinship_limit: int
+    politics: int
+    marriage_view: int
+    meeting_seriousness: int
+    job_view: int
+    spending: int
+    conflict: int
+    empathy: int
+    honesty: int
+    trust: int
+
+    smoking: Any
+    tattoo: Any
+    religion_type: Any
+    pref_smoking: Any
+    pref_tattoo: Any
+    pref_religion: Any
+    pref_cc: Any
+    cc: Any | None = None
+
+    @field_validator(*CONTINUOUS_KEYS)
+    @classmethod
+    def _likert(cls, v: int) -> int:
+        if not isinstance(v, int):
+            raise TypeError("연속형 항목은 정수(1~5)여야 합니다.")
+        if v < 1 or v > 5:
+            raise ValueError("연속형 항목은 1~5 범위여야 합니다.")
+        return v
+
+
+class CalculateMatchRequest(BaseModel):
+    """하드 필터는 항상 엄격 적용(violated 시 0점). 구버전 필드는 무시한다."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    user_A: LifestyleUser
+    user_B: LifestyleUser
+
+
+class CalculateMatchResponse(BaseModel):
+    final_score: float
+    match_status: Literal["ok", "violated"]
+    group_a_score: float
+    group_b_penalty: float
+    match_report: dict[str, Any]
+
+
+class BatchMatchUserEntry(BaseModel):
+    """배치 매칭용: 외부 Identity UUID + LifestyleUser 프로필."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    user_id: str
+    profile: LifestyleUser
+
+
+class BatchMatchRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    users: list[BatchMatchUserEntry]
+
+
+class BatchMatchPair(BaseModel):
+    user_a_id: str
+    user_b_id: str
+    score: float
+
+
+class BatchMatchResponse(BaseModel):
+    pairs: list[BatchMatchPair]

@@ -1,0 +1,20 @@
+# 공통
+node_modules/
+.env
+.env.*
+!.env.example
+dist/
+build/
+*.pem
+.DS_Store
+
+# Python (matching)
+__pycache__/
+*.py[cod]
+campusdrop_matching/venv/
+
+# IDE / 로컬
+.cursor/
+.vscode/
+terminals/
+coverage/

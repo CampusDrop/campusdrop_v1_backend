@@ -4,6 +4,19 @@ const { prisma } = require('../lib/prisma');
 const { getDummyMatchUsers } = require('../lib/matchDummyUsers');
 const { surveyDataToLifestyleUser } = require('../lib/surveyToLifestyleUser');
 const { getMatchingCalculateMatchUrl } = require('../lib/resolveMatchingServiceUrl');
+const {
+  MIN_MATCH_SCORE,
+  getMatchingPeriodStart,
+  getMatchingPeriodEnd,
+  getHistoricalPartnerIds,
+  deleteMatchingsForUsersInPeriod,
+} = require('../lib/matchPolicy');
+const { slimMatchReportForDb } = require('../lib/slimMatchReport');
+const {
+  normalizeTraitGender,
+  areOppositeTraitGenders,
+  traitGenderLabelKo,
+} = require('../lib/genderPolicy');
 
 const router = express.Router();
 
@@ -51,7 +64,8 @@ async function postCalculateMatch(body) {
  *                     type: object
  *                     properties:
  *                       id: { type: string }
- *                       mbti: { type: string, nullable: true }
+ *                       email: { type: string, nullable: true }
+ *                       gender: { type: string, nullable: true }
  *                 comparisons:
  *                   type: array
  *                   items:
@@ -61,12 +75,14 @@ async function postCalculateMatch(body) {
  *                         type: object
  *                         properties:
  *                           id: { type: string }
- *                           mbti: { type: string, nullable: true }
+ *                           email: { type: string, nullable: true }
+ *                           gender: { type: string, nullable: true }
  *                       user_B:
  *                         type: object
  *                         properties:
  *                           id: { type: string }
- *                           mbti: { type: string, nullable: true }
+ *                           email: { type: string, nullable: true }
+ *                           gender: { type: string, nullable: true }
  *                       match:
  *                         type: object
  *                         description: Python CalculateMatchResponse
@@ -126,8 +142,8 @@ router.get('/test', async (req, res) => {
       }
 
       comparisons.push({
-        user_A: { id: ua.id, mbti: ua.mbti ?? null },
-        user_B: { id: ub.id, mbti: ub.mbti ?? null },
+        user_A: { id: ua.id, email: ua.email ?? null, gender: ua.gender ?? null },
+        user_B: { id: ub.id, email: ub.email ?? null, gender: ub.gender ?? null },
         match: py.data,
       });
     }
@@ -137,7 +153,8 @@ router.get('/test', async (req, res) => {
       pythonUrl: url,
       inputUsers: users.map((u) => ({
         id: u.id,
-        mbti: u.mbti ?? null,
+        email: u.email ?? null,
+        gender: u.gender ?? null,
       })),
       comparisons,
     });
@@ -204,7 +221,7 @@ router.get('/test', async (req, res) => {
  *             schema:
  *               $ref: '#/components/schemas/ErrorMessage'
  *       404:
- *         description: 후보 없음
+ *         description: 후보 없음 또는 매칭 점수 미달(50점 미만 상대만 있는 경우)
  *         content:
  *           application/json:
  *             schema:
@@ -231,10 +248,21 @@ router.post('/request', async (req, res) => {
     return res.status(400).json({ error: '설문을 먼저 제출해 주세요.' });
   }
 
+  const selfGender = normalizeTraitGender(self.trait?.gender);
+  if (!selfGender) {
+    return res.status(400).json({
+      error:
+        '이성 매칭을 위해 설문에 남성/여성 성별이 필요합니다. 설문을 다시 제출해 주세요.',
+    });
+  }
+
+  const periodStart = getMatchingPeriodStart();
+  const periodEnd = getMatchingPeriodEnd(periodStart);
+
   let candidates;
   try {
     candidates = await prisma.identity.findMany({
-      where: { id: { not: self.id } },
+      where: { id: { not: self.id }, blockedAt: null },
       include: { trait: true },
     });
   } catch (err) {
@@ -242,7 +270,7 @@ router.post('/request', async (req, res) => {
     return res.status(500).json({ error: '매칭 후보 조회 중 오류가 발생했습니다.' });
   }
 
-  const withSurvey = candidates.filter(
+  const withSurveyBase = candidates.filter(
     (c) =>
       c.trait &&
       c.trait.surveyData !== null &&
@@ -250,17 +278,43 @@ router.post('/request', async (req, res) => {
       typeof c.trait.surveyData === 'object',
   );
 
-  if (withSurvey.length === 0) {
+  let historicalPartnerIds = new Set();
+  try {
+    historicalPartnerIds = await getHistoricalPartnerIds(prisma, self.id);
+  } catch (err) {
+    console.error('match /request historical matchings error:', err);
+    return res.status(500).json({ error: '매칭 이력 조회 중 오류가 발생했습니다.' });
+  }
+
+  const withSurvey = withSurveyBase.filter((c) => !historicalPartnerIds.has(c.id));
+
+  const withSurveyOpposite = withSurvey.filter((c) =>
+    areOppositeTraitGenders(selfGender, c.trait?.gender),
+  );
+
+  if (withSurveyOpposite.length === 0) {
+    if (withSurvey.length > 0) {
+      return res.status(404).json({
+        error: '이성(남성·여성) 조건에 맞는 매칭 후보가 없습니다.',
+      });
+    }
+    if (withSurveyBase.length > 0) {
+      return res.status(404).json({
+        error:
+          '과거에 한 번이라도 매칭된 적 있는 상대만 남아, 새로 매칭할 사용자가 없습니다.',
+      });
+    }
     return res.status(404).json({ error: '매칭할 다른 사용자가 없습니다.' });
   }
 
   const selfPayload = surveyDataToLifestyleUser(/** @type {Record<string, unknown>} */ (selfSurvey));
 
-  /** @type {{ partnerLabel: string, score: number, report: unknown } | null} */
+  /** @type {{ partnerId: string, partnerLabel: string, partnerEmail: string | null, score: number, report: unknown } | null} */
   let best = null;
+  let anyPythonSuccess = false;
 
   try {
-    for (const c of withSurvey) {
+    for (const c of withSurveyOpposite) {
       const body = {
         user_A: selfPayload,
         user_B: surveyDataToLifestyleUser(
@@ -279,18 +333,22 @@ router.post('/request', async (req, res) => {
         continue;
       }
 
+      anyPythonSuccess = true;
       const data = py.data;
       const score = typeof data.final_score === 'number' ? data.final_score : Number(data.final_score);
-      if (!Number.isFinite(score)) {
+      if (!Number.isFinite(score) || score < MIN_MATCH_SCORE) {
         continue;
       }
 
-      const mbti = c.trait?.mbti && String(c.trait.mbti).trim();
-      const partnerLabel = mbti || '상대';
+      const partnerLabel = traitGenderLabelKo(c.trait?.gender) || '상대';
 
       if (!best || score > best.score) {
+        const partnerEmail =
+          typeof c.email === 'string' && c.email.trim() !== '' ? c.email.trim() : null;
         best = {
+          partnerId: c.id,
           partnerLabel,
+          partnerEmail,
           score,
           report: data.match_report,
         };
@@ -321,15 +379,46 @@ router.post('/request', async (req, res) => {
   }
 
   if (!best) {
+    if (anyPythonSuccess) {
+      return res.status(404).json({
+        error: `매칭 점수 ${MIN_MATCH_SCORE}점 이상인 상대가 없습니다.`,
+      });
+    }
     return res.status(502).json({
       error: '유효한 매칭 결과를 얻지 못했습니다. 매칭 서비스 또는 후보 설문 데이터를 확인해 주세요.',
     });
   }
 
+  const partnerId = best.partnerId;
+  const [userLo, userHi] = [self.id, partnerId].sort();
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await deleteMatchingsForUsersInPeriod(tx, periodStart, [self.id, partnerId]);
+      await tx.matching.create({
+        data: {
+          userAId: userLo,
+          userBId: userHi,
+          score: best.score,
+          matchedAt: new Date(),
+          periodStart,
+          matchReport: slimMatchReportForDb(best.score, best.report),
+        },
+      });
+    });
+  } catch (err) {
+    console.error('match /request persist error:', err);
+    return res.status(500).json({ error: '매칭 결과를 저장하지 못했습니다.' });
+  }
+
+  const reportSlim = slimMatchReportForDb(best.score, best.report);
   return res.status(200).json({
     partnerLabel: best.partnerLabel,
+    partnerEmail: best.partnerEmail,
     score: best.score,
-    report: best.report,
+    report: reportSlim,
+    periodStart: periodStart.toISOString(),
+    periodEnd: periodEnd.toISOString(),
   });
 });
 

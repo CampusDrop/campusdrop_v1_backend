@@ -1,6 +1,8 @@
 /**
  * Node 설문(JSON) → Python `LifestyleUser` (campusdrop_matching/app/schemas.py) 형태.
  * alcohol·skinship_limit는 서버 설문에서는 문자열, Python에서는 1~5 정수.
+ * `availability` 등 LifestyleUser에 없는 키는 DB `Trait.surveyData`에만 남고 여기서는 제외된다.
+ * 하드필터·선호 필드는 JSON 직렬화 시 `undefined`가 빠지면 Python Pydantic이 422를 내므로 null 등으로 항상 키를 채운다.
  */
 
 /** @param {unknown} v @returns {number} */
@@ -77,13 +79,13 @@ function surveyDataToLifestyleUser(surveyData) {
     empathy: clampLikert(surveyData.empathy),
     honesty: clampLikert(surveyData.honesty),
     trust: clampLikert(surveyData.trust),
-    smoking: surveyData.smoking,
-    tattoo: surveyData.tattoo,
-    religion_type: surveyData.religion_type,
-    pref_smoking: surveyData.pref_smoking,
-    pref_tattoo: surveyData.pref_tattoo,
-    pref_religion: surveyData.pref_religion,
-    pref_cc: surveyData.pref_cc,
+    smoking: surveyData.smoking ?? null,
+    tattoo: surveyData.tattoo ?? null,
+    religion_type: surveyData.religion_type ?? null,
+    pref_smoking: surveyData.pref_smoking ?? null,
+    pref_tattoo: surveyData.pref_tattoo ?? null,
+    pref_religion: surveyData.pref_religion ?? null,
+    pref_cc: surveyData.pref_cc ?? null,
     cc: surveyData.cc ?? null,
   };
 }

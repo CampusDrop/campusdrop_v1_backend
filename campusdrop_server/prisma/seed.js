@@ -1,12 +1,21 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env'), override: true });
 
 const { PrismaClient } = require('@prisma/client');
 const { normalizeEmail } = require('../lib/sjuEmail');
 const { hashEmailForStorage } = require('../lib/identityAuth');
+const { hashAdminPassword } = require('../lib/adminDbAuth');
 
 const prisma = new PrismaClient();
 
-/** 설문 32항 — 유저 1·2: 거의 동일한 성향(아침형·계획·외향적 쪽으로 맞춤) */
+const SAMPLE_AVAILABILITY = [
+  { date: '2026-04-20', time_slot: '11:00-12:00' },
+  { date: '2026-04-20', time_slot: '14:00-15:00' },
+  { date: '2026-04-21', time_slot: '10:00-11:00' },
+];
+
+/** 설문 — 유저 1·2: 거의 동일한 성향(아침형·계획·외향적 쪽으로 맞춤) */
 const surveySimilarPair = () => ({
   energy: 2,
   weekend: 3,
@@ -40,6 +49,8 @@ const surveySimilarPair = () => ({
   pref_smoking: '비흡연',
   pref_tattoo: '선호',
   pref_religion: '비슷하면 좋음',
+  availability: SAMPLE_AVAILABILITY,
+  gender: 'male',
 });
 
 const surveyHardFilterA = () => ({
@@ -75,6 +86,8 @@ const surveyHardFilterA = () => ({
   pref_smoking: '비흡연만',
   pref_tattoo: '없음만',
   pref_religion: '무교만',
+  availability: SAMPLE_AVAILABILITY,
+  gender: 'male',
 });
 
 const surveyHardFilterB = () => ({
@@ -110,6 +123,8 @@ const surveyHardFilterB = () => ({
   pref_smoking: '흡연만',
   pref_tattoo: '있음만',
   pref_religion: '종교 있음만',
+  availability: SAMPLE_AVAILABILITY,
+  gender: 'female',
 });
 
 const surveyRandomMix = () => ({
@@ -145,47 +160,45 @@ const surveyRandomMix = () => ({
   pref_smoking: '상관없음',
   pref_tattoo: '상관없음',
   pref_religion: '상관없음',
+  availability: SAMPLE_AVAILABILITY,
+  gender: 'male',
 });
 
-/** `plainEmailForHash`는 시드 스크립트에서만 해시용으로 쓰이며 DB에는 저장되지 않습니다. */
+/** `plainEmailForHash` → 정규화 후 `Identity.email`·`emailHash`에 반영. */
 const SEED_IDENTITIES = [
   {
     id: '00000000-0000-4000-8000-000000000001',
-    plainEmailForHash: 'seed-match-01@sju.ac.kr',
-    mbti: 'INTJ',
-    gender: null,
+    plainEmailForHash: '1@sju.ac.kr',
+    gender: 'male',
     surveyData: surveySimilarPair(),
   },
   {
     id: '00000000-0000-4000-8000-000000000002',
-    plainEmailForHash: 'seed-match-02@sju.ac.kr',
-    mbti: 'ENFP',
-    gender: null,
+    plainEmailForHash: '2@sju.ac.kr',
+    gender: 'female',
     surveyData: {
       ...surveySimilarPair(),
       affection: 3,
       trust: 4,
+      gender: 'female',
     },
   },
   {
     id: '00000000-0000-4000-8000-000000000003',
-    plainEmailForHash: 'seed-hardfilter-03@sju.ac.kr',
-    mbti: 'ESTP',
-    gender: null,
+    plainEmailForHash: '3@sju.ac.kr',
+    gender: 'male',
     surveyData: surveyHardFilterA(),
   },
   {
     id: '00000000-0000-4000-8000-000000000004',
-    plainEmailForHash: 'seed-hardfilter-04@sju.ac.kr',
-    mbti: 'ISFJ',
-    gender: null,
+    plainEmailForHash: '4@sju.ac.kr',
+    gender: 'female',
     surveyData: surveyHardFilterB(),
   },
   {
     id: '00000000-0000-4000-8000-000000000005',
-    plainEmailForHash: 'seed-random-05@sju.ac.kr',
-    mbti: 'INFP',
-    gender: null,
+    plainEmailForHash: '5@sju.ac.kr',
+    gender: 'male',
     surveyData: surveyRandomMix(),
   },
 ];
@@ -203,10 +216,10 @@ async function main() {
     await prisma.identity.create({
       data: {
         id: row.id,
+        email: normalized,
         emailHash,
         trait: {
           create: {
-            mbti: row.mbti,
             gender: row.gender,
             surveyData: row.surveyData,
           },
@@ -217,6 +230,21 @@ async function main() {
 
   console.log(`Seed 완료: Identity(+Trait) ${SEED_IDENTITIES.length}건`);
   console.log(ids.join('\n'));
+
+  const seedAdminEmail = String(process.env.ADMIN_EMAIL || '').trim();
+  const seedAdminPassword = String(process.env.ADMIN_PASSWORD || '').trim();
+  if (seedAdminEmail && seedAdminPassword) {
+    const adminEmail = normalizeEmail(seedAdminEmail);
+    const passwordHash = await hashAdminPassword(seedAdminPassword);
+    await prisma.admin.upsert({
+      where: { email: adminEmail },
+      create: { email: adminEmail, passwordHash },
+      update: { passwordHash },
+    });
+    console.log(`Seed: 관리자 계정 upsert 완료 (${adminEmail})`);
+  } else {
+    console.log('Seed: ADMIN_EMAIL·ADMIN_PASSWORD 없음 — Admin 테이블 스킵');
+  }
 }
 
 main()

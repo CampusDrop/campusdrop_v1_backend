@@ -43,6 +43,61 @@ AXIS_LABEL_KO: dict[str, str] = {
 }
 
 
+def rank_continuous_axes_for_db(per_dim: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    DB·관리자 UI용: 각 리커트 축의 근접도(0~100, 높을수록 값이 가까움) 기준 내림차순.
+    `manhattan_per_dimension`과 동일 수치를 재정렬한 것이며, 표시 순서만 고정한다.
+    """
+    rows: list[dict[str, Any]] = []
+    for d in per_dim:
+        diff = float(d["abs_diff"])
+        axis_match = max(0.0, min(100.0, 100.0 * (1.0 - diff / _LIKERT_MAX_DIFF)))
+        field = str(d["field"])
+        rows.append(
+            {
+                "field": field,
+                "label_ko": AXIS_LABEL_KO.get(field, field),
+                "value_A": d["value_A"],
+                "value_B": d["value_B"],
+                "abs_diff": round(diff, 4),
+                "weight": float(d["weight"]),
+                "weighted_gap": round(float(d["weighted_gap"]), 4),
+                "axis_match_0_100": round(axis_match, 2),
+            }
+        )
+    rows.sort(key=lambda x: float(x["axis_match_0_100"]), reverse=True)
+    for i, row in enumerate(rows, 1):
+        row["rank"] = i
+    return rows
+
+
+def rank_group_a_components_for_db(
+    manhattan_score: float, cosine_score: float, religion_soft_score: float
+) -> list[dict[str, Any]]:
+    """그룹 A에 들어가는 큰 덩어리 점수(0~100)를 높은 순으로 정렬해 DB에서 바로 쓰기 쉽게 한다."""
+    parts = [
+        {
+            "key": "weighted_manhattan_with_religion_soft",
+            "label_ko": "가중 맨하탄(리커트+종교 소프트)",
+            "score_0_100": round(float(manhattan_score), 2),
+        },
+        {
+            "key": "weighted_cosine_likert",
+            "label_ko": "가중 코사인(리커트)",
+            "score_0_100": round(float(cosine_score), 2),
+        },
+        {
+            "key": "religion_soft_only",
+            "label_ko": "종교 라벨 정렬(소프트)",
+            "score_0_100": round(float(religion_soft_score), 2),
+        },
+    ]
+    parts.sort(key=lambda x: float(x["score_0_100"]), reverse=True)
+    for i, p in enumerate(parts, 1):
+        p["rank"] = i
+    return parts
+
+
 def _norm_str(v: Any) -> str:
     if v is None:
         return ""
@@ -396,6 +451,52 @@ def build_summary_text(
     )
 
 
+def build_numbered_reasons_ko(
+    match_status: Literal["ok", "violated"],
+    final_score: float,
+    violations: list[dict[str, Any]],
+    axes_ranked: list[dict[str, Any]],
+    components_ranked: list[dict[str, Any]],
+) -> tuple[list[str], str, str]:
+    """
+    DB·어드민 표시용: '이유1: …', '이유2: …' 형태.
+    배열 + 줄바꿈 연결 + 한 줄(공백 구분)을 함께 반환한다.
+    """
+    bodies: list[str] = []
+    if match_status == "violated":
+        for v in violations[:8]:
+            rule = _rule_label_ko(str(v.get("rule", "")))
+            detail = str(v.get("detail", "")).strip()
+            if len(detail) > 220:
+                detail = detail[:217] + "..."
+            bodies.append(f"하드 필터 위반({rule}). {detail}")
+        if not bodies:
+            bodies.append("하드 필터 위반으로 이 쌍은 매칭에서 제외됩니다.")
+    else:
+        bodies.append(f"최종 궁합 점수는 {final_score:.1f}점입니다.")
+        if axes_ranked:
+            top = axes_ranked[0]
+            bodies.append(
+                f"「{top['label_ko']}」에서 응답이 가장 가깝습니다(정렬도 {float(top['axis_match_0_100']):.0f}/100, A={top['value_A']}, B={top['value_B']})."
+            )
+        if len(axes_ranked) >= 2:
+            t2 = axes_ranked[1]
+            bodies.append(f"「{t2['label_ko']}」에서도 정렬이 좋습니다({float(t2['axis_match_0_100']):.0f}/100).")
+        if components_ranked:
+            c0 = components_ranked[0]
+            bodies.append(f"{c0['label_ko']} 점수가 상대적으로 가장 높습니다({float(c0['score_0_100']):.1f}점).")
+        if final_score < 72.0 and axes_ranked:
+            worst = axes_ranked[-1]
+            bodies.append(
+                f"「{worst['label_ko']}」는 격차가 큰 편입니다({float(worst['axis_match_0_100']):.0f}/100), 기대치 조율이 필요합니다."
+            )
+
+    lines = [f"이유{i}: {t}" for i, t in enumerate(bodies, 1)]
+    joined_nl = "\n".join(lines)
+    joined_sp = " ".join(lines)
+    return lines, joined_nl, joined_sp
+
+
 def compute_match(a: LifestyleUser, b: LifestyleUser) -> dict[str, Any]:
     rel_score, rel_meta = religion_soft_score_0_100(a, b)
     w_rel = float(RELIGION_SOFT_WEIGHT)
@@ -438,8 +539,14 @@ def compute_match(a: LifestyleUser, b: LifestyleUser) -> dict[str, Any]:
         for h in hits
     ]
 
+    axes_ranked = rank_continuous_axes_for_db(m_report["per_dimension"])
+    components_ranked = rank_group_a_components_for_db(m_score, c_score, rel_score)
+
     match_report: dict[str, Any] = {
         "summary_text": "",
+        # DB·어드민: 정렬 고정(별도 정렬 없이 그대로 표시 가능)
+        "continuous_axes_ranked_desc": axes_ranked,
+        "group_a_component_scores_ranked_desc": components_ranked,
         "group_a": {
             "score_0_100": round(group_a_score, 2),
             "likert_component_0_100": round(group_a_likert_only, 2),
@@ -461,6 +568,9 @@ def compute_match(a: LifestyleUser, b: LifestyleUser) -> dict[str, Any]:
         "highlights": {
             "top_match_axes": m_report["best_aligned"],
             "largest_gaps": m_report["worst_aligned"],
+            # 축 요약도 동일 기준(정렬도 높은 순)으로 맞춤
+            "top_axes_by_match_score": axes_ranked[:5],
+            "bottom_axes_by_match_score": list(reversed(axes_ranked))[:5],
         },
     }
 
@@ -472,6 +582,16 @@ def compute_match(a: LifestyleUser, b: LifestyleUser) -> dict[str, Any]:
         m_report["worst_aligned"],
         m_report["best_aligned"],
     )
+    reasons_list, reasons_nl, reasons_1l = build_numbered_reasons_ko(
+        match_status,
+        final_score,
+        violations_out,
+        axes_ranked,
+        components_ranked,
+    )
+    match_report["reasons_numbered_ko"] = reasons_list
+    match_report["reasons_joined_ko"] = reasons_nl
+    match_report["reasons_one_line_ko"] = reasons_1l
 
     return {
         "final_score": round(final_score, 2),

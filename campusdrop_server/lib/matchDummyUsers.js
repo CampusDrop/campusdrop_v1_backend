@@ -1,6 +1,12 @@
 /**
- * 매칭 테스트용 5명 더미(프라이버시: 이메일 없음, `prisma/seed.js` 시드와 동일 설문 구성).
+ * 매칭 테스트용 5명 더미. `id`는 사람이 읽기 쉬운 `@sju.ac.kr` 형식(`prisma/seed.js` 시드 이메일과 동일).
  */
+
+const SAMPLE_AVAILABILITY = [
+  { date: '2026-04-20', time_slot: '11:00-12:00' },
+  { date: '2026-04-20', time_slot: '14:00-15:00' },
+  { date: '2026-04-21', time_slot: '10:00-11:00' },
+];
 
 const surveySimilarPair = () => ({
   energy: 2,
@@ -35,6 +41,8 @@ const surveySimilarPair = () => ({
   pref_smoking: '비흡연',
   pref_tattoo: '선호',
   pref_religion: '비슷하면 좋음',
+  availability: SAMPLE_AVAILABILITY,
+  gender: 'male',
 });
 
 const surveyHardFilterA = () => ({
@@ -70,6 +78,8 @@ const surveyHardFilterA = () => ({
   pref_smoking: '비흡연만',
   pref_tattoo: '없음만',
   pref_religion: '무교만',
+  availability: SAMPLE_AVAILABILITY,
+  gender: 'male',
 });
 
 const surveyHardFilterB = () => ({
@@ -105,6 +115,8 @@ const surveyHardFilterB = () => ({
   pref_smoking: '흡연만',
   pref_tattoo: '있음만',
   pref_religion: '종교 있음만',
+  availability: SAMPLE_AVAILABILITY,
+  gender: 'female',
 });
 
 const surveyRandomMix = () => ({
@@ -140,38 +152,46 @@ const surveyRandomMix = () => ({
   pref_smoking: '상관없음',
   pref_tattoo: '상관없음',
   pref_religion: '상관없음',
+  availability: SAMPLE_AVAILABILITY,
+  gender: 'male',
 });
 
 function getDummyMatchUsers() {
   return [
     {
-      id: 'dummy-match-01',
-      mbti: 'INTJ',
+      id: '1@sju.ac.kr',
+      email: '1@sju.ac.kr',
+      gender: 'male',
       surveyData: surveySimilarPair(),
     },
     {
-      id: 'dummy-match-02',
-      mbti: 'ENFP',
+      id: '2@sju.ac.kr',
+      email: '2@sju.ac.kr',
+      gender: 'female',
       surveyData: {
         ...surveySimilarPair(),
         affection: 3,
         trust: 4,
+        gender: 'female',
       },
     },
     {
-      id: 'dummy-hardfilter-03',
-      mbti: 'ESTP',
+      id: '3@sju.ac.kr',
+      email: '3@sju.ac.kr',
+      gender: 'male',
       surveyData: surveyHardFilterA(),
     },
     {
-      id: 'dummy-hardfilter-04',
-      mbti: 'ISFJ',
+      id: '4@sju.ac.kr',
+      email: '4@sju.ac.kr',
+      gender: 'female',
       surveyData: surveyHardFilterB(),
     },
     {
-      id: 'dummy-random-05',
-      mbti: 'INFP',
-      surveyData: surveyRandomMix(),
+      id: '5@sju.ac.kr',
+      email: '5@sju.ac.kr',
+      gender: 'male',
+      surveyData: { ...surveyRandomMix(), gender: 'male' },
     },
   ];
 }

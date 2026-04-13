@@ -67,7 +67,8 @@ function getSmtpTransporter() {
  */
 async function sendViaSmtp(to, code) {
   const transporter = getSmtpTransporter();
-  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+  const from =
+    process.env.SMTP_FROM || process.env.FROM_EMAIL || process.env.SMTP_USER;
   const { text, html } = buildBodies(code);
 
   await transporter.sendMail({
@@ -79,13 +80,22 @@ async function sendViaSmtp(to, code) {
   });
 }
 
+function resolveEmailTransport() {
+  const mode = (process.env.EMAIL_TRANSPORT || '').toLowerCase().trim();
+  if (mode === 'smtp') return 'smtp';
+  if (mode === 'ses') return 'ses';
+  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+    return 'smtp';
+  }
+  return 'ses';
+}
+
 /**
  * @param {string} to
  * @param {string} code
  */
 async function sendVerificationCode(to, code) {
-  const mode = (process.env.EMAIL_TRANSPORT || 'ses').toLowerCase();
-  if (mode === 'smtp') {
+  if (resolveEmailTransport() === 'smtp') {
     return sendViaSmtp(to, code);
   }
   return sendViaSes(to, code);

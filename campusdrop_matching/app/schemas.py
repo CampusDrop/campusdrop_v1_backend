@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 CONTINUOUS_KEYS: tuple[str, ...] = (
@@ -113,24 +113,31 @@ class CalculateMatchResponse(BaseModel):
 
 
 class BatchMatchUserEntry(BaseModel):
-    """배치 매칭용: 외부 Identity UUID + LifestyleUser 프로필."""
+    """배치 매칭용: 외부 Identity UUID + LifestyleUser 프로필 + 성별(이성 쌍만 엣지 생성)."""
 
     model_config = ConfigDict(extra="ignore")
 
     user_id: str
     profile: LifestyleUser
+    gender: Literal["male", "female"] | None = None
 
 
 class BatchMatchRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     users: list[BatchMatchUserEntry]
+    forbidden_pairs: list[list[str]] = Field(
+        default_factory=list,
+        description="과거 매칭 쌍. 각 원소는 `[uuid_lo, uuid_hi]`(문자열 정렬). 해당 쌍은 배치 엣지에서 제외.",
+    )
 
 
 class BatchMatchPair(BaseModel):
     user_a_id: str
     user_b_id: str
     score: float
+    # `compute_match`의 `match_report` 스냅샷(요약·축별 정렬·위반 목록 등). GET /admin/matches용.
+    match_report: dict[str, Any] | None = None
 
 
 class BatchMatchResponse(BaseModel):

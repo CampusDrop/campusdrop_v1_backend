@@ -1,5 +1,9 @@
 const crypto = require('crypto');
 const express = require('express');
+const {
+  PrismaClientKnownRequestError,
+  PrismaClientInitializationError,
+} = require('@prisma/client/runtime/library');
 const { prisma } = require('../lib/prisma');
 const { isSjuAcKrEmail, normalizeEmail } = require('../lib/sjuEmail');
 const { sendVerificationCode } = require('../lib/mailer');
@@ -18,12 +22,17 @@ function randomSixDigitCode() {
   return String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
 }
 
+/** 비어 있지 않으면 해당 문자열만 코드로 쓰고 메일을 보내지 않습니다. 운영에서는 설정하지 마세요. */
+function fixedVerificationCodeFromEnv() {
+  return String(process.env.AUTH_FIXED_VERIFICATION_CODE || '').trim();
+}
+
 /**
  * @openapi
  * /api/auth/send-code:
  *   post:
  *     tags: [Auth]
- *     summary: 세종대 이메일로 6자리 인증 코드 발송
+ *     summary: 세종대 이메일로 인증 코드 발송 (AUTH_FIXED_VERIFICATION_CODE 설정 시 메일 미발송)
  *     requestBody:
  *       required: true
  *       content:
@@ -67,17 +76,20 @@ router.post('/send-code', async (req, res) => {
     });
   }
 
-  const code = randomSixDigitCode();
+  const fixedCode = fixedVerificationCodeFromEnv();
+  const code = fixedCode || randomSixDigitCode();
   setVerificationCode(normalized, code);
 
-  try {
-    await sendVerificationCode(normalized, code);
-  } catch (err) {
-    console.error('send-code mail error:', err);
-    clearVerificationCode(normalized);
-    return res.status(500).json({
-      error: '인증 메일 발송에 실패했습니다. 이메일(SES/SMTP) 환경 변수를 확인해 주세요.',
-    });
+  if (!fixedCode) {
+    try {
+      await sendVerificationCode(normalized, code);
+    } catch (err) {
+      console.error('send-code mail error:', err);
+      clearVerificationCode(normalized);
+      return res.status(500).json({
+        error: '인증 메일 발송에 실패했습니다. 이메일(SES/SMTP) 환경 변수를 확인해 주세요.',
+      });
+    }
   }
 
   return res.status(200).json({ message: '인증 번호를 발송했습니다.' });
@@ -155,21 +167,46 @@ router.post('/verify-code', async (req, res) => {
     const existingId = await findIdentityIdByNormalizedEmail(prisma, normalized);
     if (existingId) {
       sessionId = existingId;
+      await prisma.identity.update({
+        where: { id: existingId },
+        data: { email: normalized },
+      });
     } else {
       const emailHash = await hashEmailForStorage(normalized);
-      const created = await prisma.identity.create({
-        data: {
-          emailHash,
-          trait: {
-            create: {},
+      try {
+        const created = await prisma.identity.create({
+          data: {
+            email: normalized,
+            emailHash,
+            trait: {
+              create: {},
+            },
           },
-        },
-        select: { id: true },
-      });
-      sessionId = created.id;
+          select: { id: true },
+        });
+        sessionId = created.id;
+      } catch (err) {
+        if (err instanceof PrismaClientKnownRequestError && err.code === 'P2002') {
+          const racedId = await findIdentityIdByNormalizedEmail(prisma, normalized);
+          if (!racedId) throw err;
+          sessionId = racedId;
+          await prisma.identity.update({
+            where: { id: sessionId },
+            data: { email: normalized },
+          });
+        } else {
+          throw err;
+        }
+      }
     }
   } catch (err) {
     console.error('verify-code identity error:', err);
+    if (err instanceof PrismaClientInitializationError) {
+      return res.status(503).json({
+        error:
+          '데이터베이스에 연결할 수 없습니다. .env의 DATABASE_URL을 확인한 뒤 서버를 재시작해 주세요. 인증 메일 발송(send-code)은 DB를 쓰지 않아 정상일 수 있습니다.',
+      });
+    }
     return res.status(500).json({ error: '인증 처리 중 오류가 발생했습니다.' });
   }
 

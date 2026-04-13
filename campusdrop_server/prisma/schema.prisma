@@ -9,14 +9,23 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/// 계정·로그인 식별(PII 최소화). 원본 이메일은 저장하지 않고 `emailHash`만 보관합니다.
+/// 계정·로그인 식별. 인증 완료 시 정규화된 `@sju.ac.kr` 주소를 `email`에 보관(수사·고객 특정).
 model Identity {
   id        String   @id @default(uuid()) @db.Uuid
+  /// `normalizeEmail` 적용 후 문자열. 구 가입자는 재인증 전 null일 수 있음.
+  email     String?  @unique
   /// 정규화된 이메일 문자열에 대한 bcrypt 해시(솔트 포함). 로그인 시 `bcrypt.compare`로만 대조합니다.
   emailHash String
   kakaoId   String?
+  /// 관리자 차단 시각. null이면 정상 이용 가능.
+  blockedAt DateTime? @map("blocked_at")
   createdAt DateTime @default(now())
   trait     Trait?
+
+  /// 이 유저이 `user_a_id`로 참여한 매칭 행(과거·현재 쌍). 특정 유저의 “매칭된 상대 목록”은 `matchesAsUserA` ∪ `matchesAsUserB` 로 `matchings`에서 조회.
+  matchesAsUserA Matching[] @relation("MatchPairUserA")
+  /// 이 유저이 `user_b_id`로 참여한 매칭 행.
+  matchesAsUserB Matching[] @relation("MatchPairUserB")
 
   @@index([emailHash])
   @@map("identities")
@@ -26,7 +35,7 @@ model Identity {
 model Trait {
   id         String   @id @db.Uuid
   identity   Identity @relation(fields: [id], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  mbti       String?
+  /// 설문 `gender`와 동기화. `male` | `female` (이성 매칭용).
   gender     String?
   surveyData Json?
   updatedAt  DateTime @updatedAt
@@ -61,15 +70,35 @@ model AccessLog {
   @@map("access_logs")
 }
 
-/// 주간 배치 매칭 결과(한 주기·한 쌍당 1행).
+/// 관리자 콘솔 전용 계정(일반 `Identity`와 분리). `email`은 로그인용 정규화 문자열(소문자 등).
+model Admin {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("admins")
+}
+
+/// 매칭 이력: 한 행 = 한 쌍(user A, user B). 주간 배치·관리자 강제 매칭 등 동일 테이블에 적재.
+/// 특정 `Identity.id`에 대해 `WHERE user_a_id = :id OR user_b_id = :id` 가 그 유저의 지금까지 매칭 상대 이력.
 model Matching {
   id        String   @id @default(uuid()) @db.Uuid
   userAId   String   @map("user_a_id") @db.Uuid
   userBId   String   @map("user_b_id") @db.Uuid
   score     Float
   matchedAt DateTime @default(now()) @map("matched_at")
+  /// 2026-04-13 KST 앵커부터 7일 단위 주간 버킷 시작. 같은 주·같은 유저가 다시 매칭되면 기존 행을 지우고 다시 넣음.
+  periodStart DateTime? @map("period_start")
+  /// 배치 시점 Python `compute_match`의 `match_report` 스냅샷(요약·축별 정렬 등). 강제 매칭 등 없으면 null.
+  matchReport Json? @map("match_report")
+
+  userA Identity @relation("MatchPairUserA", fields: [userAId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  userB Identity @relation("MatchPairUserB", fields: [userBId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@index([matchedAt])
+  @@index([periodStart])
   @@index([userAId])
   @@index([userBId])
   @@map("matchings")

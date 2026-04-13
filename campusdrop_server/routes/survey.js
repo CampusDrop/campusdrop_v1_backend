@@ -3,6 +3,7 @@ const { Prisma } = require('@prisma/client');
 const { prisma } = require('../lib/prisma');
 const { validateSurveyPayload } = require('../lib/surveyValidation');
 const { writeAccessLog } = require('../lib/accessLog');
+const { storePinForIdentity } = require('../lib/pinSession');
 
 const router = express.Router();
 
@@ -11,7 +12,7 @@ const router = express.Router();
  * /api/survey/submit:
  *   post:
  *     tags: [Survey]
- *     summary: 로그인 유저의 Trait 설문 데이터 저장
+ *     summary: 로그인 유저의 Trait 설문 저장 + 카카오 챗봇 연동용 4자리 PIN 발급 (`GET /api/auth/pin`과 동일)
  *     security:
  *       - UserUuidAuth: []
  *     requestBody:
@@ -69,11 +70,14 @@ router.post('/submit', async (req, res) => {
     const trait = await prisma.trait.upsert({
       where: { id: req.user.id },
       create: {
-        id: req.user.id,
         surveyData: validation.data,
+        gender: String(validation.data.gender),
         identity: { connect: { id: req.user.id } },
       },
-      update: { surveyData: validation.data },
+      update: {
+        surveyData: validation.data,
+        gender: String(validation.data.gender),
+      },
       select: { id: true },
     });
 
@@ -87,9 +91,21 @@ router.post('/submit', async (req, res) => {
       metadata: null,
     });
 
+    let pin = null;
+    let expiresInSec = null;
+    try {
+      const pinResult = await storePinForIdentity(req.user.id);
+      pin = pinResult.pin;
+      expiresInSec = pinResult.expiresInSec;
+    } catch (pinErr) {
+      console.error('survey submit kakao pin error:', pinErr);
+    }
+
     return res.status(200).json({
       message: '설문 결과가 저장되었습니다.',
       userId: trait.id,
+      pin,
+      expiresInSec,
     });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {

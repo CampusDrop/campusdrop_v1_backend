@@ -1,5 +1,6 @@
 const path = require('path');
-require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
+// 이미 설정된 환경 변수(예: Windows 사용자 DATABASE_URL)보다 repo .env가 우선해야 함
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env'), override: true });
 require('dotenv').config({ path: path.resolve(__dirname, '.env'), override: true });
 
 const express = require('express');
@@ -7,9 +8,7 @@ const cors = require('cors');
 const { prisma } = require('./lib/prisma');
 const { requireUserUuid } = require('./lib/requireUserUuid');
 const { disconnectRedis } = require('./lib/redis');
-const cron = require('node-cron');
 const swaggerUi = require('swagger-ui-express');
-const { runWeeklyBatchMatch } = require('./lib/weeklyBatchMatch');
 const { buildSwaggerSpec } = require('./config/swagger');
 
 const app = express();
@@ -23,6 +22,12 @@ const corsAllowedOrigins = new Set([
   'http://www.campus-drop.com',
 ]);
 for (const o of (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)) {
+  corsAllowedOrigins.add(o);
+}
+for (const o of (process.env.ADMIN_CORS_ORIGINS || '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean)) {
@@ -62,6 +67,7 @@ app.use(express.json()); // JSON 데이터 파싱
 const swaggerSpec = buildSwaggerSpec();
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, { explorer: true }));
 
+app.use('/api/admin', require('./routes/admin'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/kakao', require('./routes/kakao'));
 app.use('/api/survey', requireUserUuid, require('./routes/survey'));
@@ -100,15 +106,6 @@ const server = app.listen(PORT, HOST, () => {
     console.log(`📡 안내 URL: ${advertise}`);
     console.log(`📘 Swagger UI: ${advertise}/api-docs`);
     console.log(`========================================`);
-
-    cron.schedule(
-        '0 18 * * 1',
-        () => {
-            runWeeklyBatchMatch().catch((e) => console.error('[cron] weekly batch match:', e));
-        },
-        { timezone: 'Asia/Seoul' },
-    );
-    console.log('[cron] 매주 월요일 18:00 (Asia/Seoul) 배치 매칭 스케줄 등록됨');
 });
 
 async function shutdown() {

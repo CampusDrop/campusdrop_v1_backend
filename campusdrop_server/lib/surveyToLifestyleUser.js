@@ -31,6 +31,7 @@ function likertAlcohol(raw) {
   if (typeof raw === 'number' && Number.isInteger(raw)) return clampLikert(raw);
   if (typeof raw === 'string') {
     const t = raw.trim();
+    if (/^[1-5]$/.test(t)) return Number(t);
     if (Object.prototype.hasOwnProperty.call(ALCOHOL_TO_LIKERT, t)) {
       return /** @type {number} */ (ALCOHOL_TO_LIKERT[t]);
     }
@@ -43,6 +44,7 @@ function likertSkinshipLimit(raw) {
   if (typeof raw === 'number' && Number.isInteger(raw)) return clampLikert(raw);
   if (typeof raw === 'string') {
     const t = raw.trim();
+    if (/^[1-5]$/.test(t)) return Number(t);
     if (Object.prototype.hasOwnProperty.call(SKINSHIP_LIMIT_TO_LIKERT, t)) {
       return /** @type {number} */ (SKINSHIP_LIMIT_TO_LIKERT[t]);
     }

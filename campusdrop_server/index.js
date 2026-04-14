@@ -7,6 +7,7 @@ const express = require('express');
 const cors = require('cors');
 const { prisma } = require('./lib/prisma');
 const { requireUserUuid } = require('./lib/requireUserUuid');
+const { requireImageUuidAccessForSurveyApis } = require('./lib/imageUuidAccess');
 const { disconnectRedis } = require('./lib/redis');
 const swaggerUi = require('swagger-ui-express');
 const { buildSwaggerSpec } = require('./config/swagger');
@@ -64,14 +65,26 @@ app.use(
 );
 app.use(express.json()); // JSON 데이터 파싱
 
+app.use(
+  '/assets',
+  express.static(path.join(__dirname, 'assets'), {
+    maxAge: process.env.NODE_ENV === 'production' ? '7d' : 0,
+  }),
+);
+
 const swaggerSpec = buildSwaggerSpec();
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, { explorer: true }));
+app.get('/openapi.json', (req, res) => {
+  res.json(swaggerSpec);
+});
 
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/auth', require('./routes/schoolProof'));
 app.use('/api/kakao', require('./routes/kakao'));
-app.use('/api/survey', requireUserUuid, require('./routes/survey'));
-app.use('/api/match', requireUserUuid, require('./routes/match'));
+app.use('/api/stats', require('./routes/stats'));
+app.use('/api/survey', requireUserUuid, requireImageUuidAccessForSurveyApis, require('./routes/survey'));
+app.use('/api/match', requireUserUuid, requireImageUuidAccessForSurveyApis, require('./routes/match'));
 
 /**
  * @openapi

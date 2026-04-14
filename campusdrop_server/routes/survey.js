@@ -1,7 +1,10 @@
 const express = require('express');
 const { Prisma } = require('@prisma/client');
 const { prisma } = require('../lib/prisma');
-const { validateSurveyPayload } = require('../lib/surveyValidation');
+const {
+  validateSurveyPayload,
+  identityProfileColumnsFromSurveyData,
+} = require('../lib/surveyValidation');
 const { writeAccessLog } = require('../lib/accessLog');
 const { storePinForIdentity } = require('../lib/pinSession');
 
@@ -40,6 +43,13 @@ const router = express.Router();
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorMessage'
+ *       403:
+ *         description: |
+ *           이메일 없고 이미지 가입 세션(`imageUuidAccessUntil`)도 만료·없음. 또는 설문·매칭 라우트에서 세션 만료(`IMAGE_UUID_ACCESS_EXPIRED`)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorMessage'
  *       404:
  *         description: Trait upsert 실패(P2025)
  *         content:
@@ -54,11 +64,26 @@ const router = express.Router();
  *               $ref: '#/components/schemas/ErrorMessage'
  */
 router.post('/submit', async (req, res) => {
+  const email = req.user && req.user.email != null ? String(req.user.email).trim() : '';
+  const imageUntil = req.user?.imageUuidAccessUntil;
+  const imageSessionOk =
+    imageUntil &&
+    !Number.isNaN(new Date(imageUntil).getTime()) &&
+    Date.now() < new Date(imageUntil).getTime();
+  if (!email && !imageSessionOk) {
+    return res.status(403).json({
+      error:
+        '설문은 학교 이메일(@sju.ac.kr) 인증을 완료한 뒤 제출하거나, 이미지 가입 세션 유효 기간(`imageUuidAccessUntil`) 내에 제출해 주세요.',
+    });
+  }
+
   const { surveyData, survey } = req.body ?? {};
   const payload = surveyData ?? survey;
 
   if (payload === undefined || payload === null) {
-    return res.status(400).json({ error: 'surveyData가 필요합니다.' });
+    return res.status(400).json({
+      error: 'surveyData 또는 survey 본문이 필요합니다. (프론트 설문 패키지: surveyAnswers·matchAvailability·participantMeta 등 포함 가능)',
+    });
   }
 
   const validation = validateSurveyPayload(payload);
@@ -80,6 +105,14 @@ router.post('/submit', async (req, res) => {
       },
       select: { id: true },
     });
+
+    const profileCols = identityProfileColumnsFromSurveyData(validation.data);
+    if (Object.keys(profileCols).length > 0) {
+      await prisma.identity.update({
+        where: { id: req.user.id },
+        data: profileCols,
+      });
+    }
 
     await writeAccessLog({
       actorType: 'user_session',

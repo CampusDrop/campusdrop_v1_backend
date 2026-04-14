@@ -19,8 +19,17 @@ model Identity {
   kakaoId   String?
   /// 관리자 차단 시각. null이면 정상 이용 가능.
   blockedAt DateTime? @map("blocked_at")
+  /// 학생증·재학증명 등 이미지 제출을 관리자가 승인한 시각. null이면 아직 이미지 인증 미완료.
+  schoolProofVerifiedAt DateTime? @map("school_proof_verified_at")
+  /// 익명(이미지 전용) 온보딩으로 생성된 계정만 설정. `matchPolicy` 매칭 주 종료 시각까지 `x-user-uuid`로 설문·매칭 API 접근 허용. 이메일 연동 시 null로 돌림.
+  imageUuidAccessUntil DateTime? @map("image_uuid_access_until")
+  /// 설문 `participantMeta.profile`에서 동기화(선택). 조회·운영 편의용.
+  studentId String? @map("student_id")
+  birthYear String? @map("birth_year")
   createdAt DateTime @default(now())
   trait     Trait?
+
+  schoolProofSubmissions SchoolProofSubmission[]
 
   /// 이 유저이 `user_a_id`로 참여한 매칭 행(과거·현재 쌍). 특정 유저의 “매칭된 상대 목록”은 `matchesAsUserA` ∪ `matchesAsUserB` 로 `matchings`에서 조회.
   matchesAsUserA Matching[] @relation("MatchPairUserA")
@@ -102,4 +111,25 @@ model Matching {
   @@index([userAId])
   @@index([userBId])
   @@map("matchings")
+}
+
+/// 학교 소속 증빙 이미지 제출 1건. 이메일 인증과 별도로 관리자가 `approved` 처리하면 `Identity.schoolProofVerifiedAt`이 설정됩니다.
+model SchoolProofSubmission {
+  id         String   @id @default(uuid()) @db.Uuid
+  identityId String   @map("identity_id") @db.Uuid
+  identity   Identity @relation(fields: [identityId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  /// 서버 루트 기준 상대 경로(예: uploads/school-proof/<uuid>.jpg). 외부 공개 URL이 아닙니다.
+  storedPath String   @map("stored_path")
+  mimeType   String   @map("mime_type")
+  fileSize   Int      @map("file_size")
+  /// pending | approved | rejected
+  status     String   @default("pending")
+  reviewedAt DateTime? @map("reviewed_at")
+  reviewerAdminId String? @map("reviewer_admin_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([identityId, status])
+  @@index([status, createdAt])
+  @@map("school_proof_submissions")
 }

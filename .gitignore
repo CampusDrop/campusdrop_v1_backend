@@ -18,3 +18,6 @@ campusdrop_matching/venv/
 .vscode/
 terminals/
 coverage/
+
+# 업로드(학교 증빙 이미지 등 — 로컬 디스크 저장)
+campusdrop_server/uploads/

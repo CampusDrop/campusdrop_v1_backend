@@ -1,6 +1,7 @@
 /** @typedef {{ code: string, expiresAt: number }} VerificationEntry */
 
-const TTL_MS = 3 * 60 * 1000;
+const TTL_MINUTES = 10;
+const TTL_MS = TTL_MINUTES * 60 * 1000;
 
 /** @type {Map<string, VerificationEntry>} */
 const store = new Map();
@@ -42,4 +43,5 @@ module.exports = {
   setVerificationCode,
   clearVerificationCode,
   verifyAndConsume,
+  TTL_MINUTES,
 };

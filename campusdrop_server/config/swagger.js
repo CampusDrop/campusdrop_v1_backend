@@ -14,6 +14,8 @@ const swaggerDefinition = {
       description:
         '관리자 페이지용 API. 로그인은 DB `admins` 이메일·비밀번호, `POST /api/admin/login` 후 Bearer JWT',
     },
+    { name: 'Auth', description: '이메일 인증·세션·증빙·PIN 등' },
+    { name: 'Stats', description: '공개 랜딩용 통계(인증 불필요)' },
   ],
   components: {
     securitySchemes: {
@@ -21,7 +23,8 @@ const swaggerDefinition = {
         type: 'apiKey',
         in: 'header',
         name: 'x-user-uuid',
-        description: '`POST /api/auth/verify-code` 응답의 `uuid` 값 (= DB `Identity.id`)',
+        description:
+          '`POST /api/auth/verify-code` 응답의 `uuid`(= DB `Identity.id`). 기존 계정은 이메일 재인증으로 같은 `uuid`를 다시 받을 수 있음',
       },
       AdminBearerAuth: {
         type: 'http',
@@ -60,16 +63,96 @@ const swaggerDefinition = {
             description:
               'send-code 직후 저장된 인증 번호(기본 6자리; AUTH_FIXED_VERIFICATION_CODE 사용 시 그 값)',
           },
+          linkUuid: {
+            type: 'string',
+            format: 'uuid',
+            description:
+              '이미 알고 있는 익명 `Identity.id`에 이메일을 붙일 때. `POST /api/auth/complete-anonymous-onboarding` 응답의 `uuid` 등.',
+          },
+          profile: {
+            type: 'object',
+            description:
+              '선택. 신규 이메일(아직 Identity 없음)일 때만 — `Identity`·`Trait.gender`에 반영 후 설문은 `/api/survey/submit`',
+            properties: {
+              studentId: { type: 'string' },
+              birthYear: { type: 'string' },
+              gender: { type: 'string', description: '남성·여성 등(서버에서 male/female로 정규화)' },
+            },
+          },
+        },
+      },
+      SchoolProofSubmitResponse: {
+        type: 'object',
+        properties: {
+          message: { type: 'string' },
+          submission: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', format: 'uuid' },
+              status: { type: 'string', example: 'pending' },
+              createdAt: { type: 'string', format: 'date-time' },
+            },
+          },
         },
       },
       VerifyCodeResponse: {
         type: 'object',
+        required: ['verified'],
         properties: {
           verified: { type: 'boolean', example: true },
           uuid: {
             type: 'string',
             format: 'uuid',
-            description: '세션 식별자 — 이후 `x-user-uuid` 헤더',
+            description:
+              '기존 계정 복구·linkUuid 연결·**신규 이메일이면 verify-code 직후 즉시 생성된** `Identity.id`. 이후 `x-user-uuid` 헤더',
+          },
+          registrationToken: {
+            type: 'string',
+            description:
+              '구 클라이언트만: 예전 서버가 토큰을 준 경우 `POST /api/auth/complete-registration`에 전달. 신규 플로우에서는 생략',
+          },
+          expiresInSec: {
+            type: 'integer',
+            description: '`registrationToken`과 함께 쓰이던 TTL(초). 신규 플로우에서는 생략',
+          },
+        },
+      },
+      CompleteRegistrationResponse: {
+        type: 'object',
+        properties: {
+          message: { type: 'string' },
+          uuid: { type: 'string', format: 'uuid', description: '`x-user-uuid`' },
+          pin: { type: 'string', nullable: true },
+          expiresInSec: { type: 'integer', nullable: true },
+        },
+      },
+      AnonymousOnboardingResponse: {
+        type: 'object',
+        properties: {
+          message: { type: 'string' },
+          uuid: {
+            type: 'string',
+            format: 'uuid',
+            description: '신규 `Identity.id`. 이후 `x-user-uuid` 및 `verify-code`의 `linkUuid`에 사용',
+          },
+          pin: {
+            type: 'string',
+            nullable: true,
+            description: '카카오 챗봇 연동용 4자리 PIN(Redis 실패·충돌 시 null)',
+          },
+          expiresInSec: { type: 'integer', nullable: true, description: 'PIN TTL(초). `pin`이 있을 때' },
+          imageUuidAccessUntil: {
+            type: 'string',
+            format: 'date-time',
+            description:
+              '이미지 전용 세션으로 `/api/survey`·`/api/match` 접근 가능한 시각(UTC ISO). `matchPolicy` 매칭 주 종료까지',
+          },
+          submission: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', format: 'uuid' },
+              status: { type: 'string', example: 'pending' },
+            },
           },
         },
       },
@@ -100,13 +183,13 @@ const swaggerDefinition = {
       SurveySubmitRequest: {
         type: 'object',
         description:
-          '`surveyData` 또는 `survey` 중 하나 필수. 설문 본문에 `gender`(남성/여성, 이성 매칭용) 및 `availability`(만남 가능 시간 목록) 포함.',
+          '`surveyData` 또는 `survey` 중 하나 필수. (1) 레거시: 척도·선호 키를 한 객체에 두고 `availability`는 `{ date, time_slot }[]`. (2) 프론트 패키지: `surveyAnswers`(또는 `answers`)에 척도·선호, `matchAvailability`(availableSlots에 date·hourStart·hourEnd 0~23), `participantMeta`(profile.studentId·birthYear·gender 등, 서버는 email·registrationToken·userUuid 저장 안 함).',
         properties: {
           surveyData: {
             type: 'object',
             additionalProperties: true,
             description:
-              '라이프스타일 척도·선호 + `availability`: `{ date, time_slot }[]` (time_slot 예: 11:00-12:00)',
+              '라이프스타일 척도·선호 + `availability` 또는 `matchAvailability`+`surveyAnswers` 패키지',
           },
           survey: { type: 'object', additionalProperties: true },
         },
@@ -222,6 +305,54 @@ const swaggerDefinition = {
           status: { type: 'string' },
         },
       },
+      AuthMeResponse: {
+        type: 'object',
+        properties: {
+          uuid: { type: 'string', format: 'uuid' },
+          email: { type: 'string', nullable: true, description: '@sju.ac.kr 또는 익명 null' },
+          profile: {
+            type: 'object',
+            properties: {
+              studentId: { type: 'string', nullable: true },
+              birthYear: { type: 'string', nullable: true },
+              gender: { type: 'string', nullable: true, description: '설문 UI 정렬용 한글(남성/여성). 없으면 null' },
+              genderTrait: {
+                type: 'string',
+                nullable: true,
+                enum: ['male', 'female'],
+                description: 'DB Trait.gender',
+              },
+            },
+          },
+          participantMeta: {
+            type: 'object',
+            description: '프론트 설문 패키지 형태 호환 — `profile`은 위와 동일',
+            properties: {
+              profile: { type: 'object', additionalProperties: true },
+            },
+          },
+          imageUuidAccessUntil: {
+            type: 'string',
+            format: 'date-time',
+            nullable: true,
+            description: '이미지 전용 세션 만료 시각(없으면 null)',
+          },
+        },
+      },
+      LogoutResponse: {
+        type: 'object',
+        properties: {
+          ok: { type: 'boolean', example: true },
+          message: { type: 'string' },
+        },
+      },
+      ExcitementCountResponse: {
+        type: 'object',
+        properties: {
+          excitementCount: { type: 'integer', example: 42 },
+          description: { type: 'string' },
+        },
+      },
       KakaoWebhookRequest: {
         type: 'object',
         description: '오픈빌더 스킬 페이로드(필요 필드만)',
@@ -248,6 +379,8 @@ const apis = [
   path.join(__dirname, '..', 'index.js'),
   path.join(__dirname, '..', 'routes', 'admin.js'),
   path.join(__dirname, '..', 'routes', 'auth.js'),
+  path.join(__dirname, '..', 'routes', 'schoolProof.js'),
+  path.join(__dirname, '..', 'routes', 'stats.js'),
   path.join(__dirname, '..', 'routes', 'survey.js'),
   path.join(__dirname, '..', 'routes', 'match.js'),
   path.join(__dirname, '..', 'routes', 'kakao.js'),

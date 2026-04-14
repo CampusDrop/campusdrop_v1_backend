@@ -1,3 +1,4 @@
+const fs = require('fs');
 const express = require('express');
 const { Prisma } = require('@prisma/client');
 const { prisma } = require('../lib/prisma');
@@ -17,6 +18,7 @@ const {
 } = require('../lib/matchPolicy');
 const { loadEligibleTraits } = require('../lib/weeklyBatchMatch');
 const { areOppositeTraitGenders, normalizeTraitGender } = require('../lib/genderPolicy');
+const { absoluteSchoolProofPath } = require('../lib/schoolProofMulter');
 
 const router = express.Router();
 
@@ -158,6 +160,9 @@ router.get('/users', async (req, res) => {
           email: true,
           kakaoId: true,
           blockedAt: true,
+          schoolProofVerifiedAt: true,
+          studentId: true,
+          birthYear: true,
           createdAt: true,
           trait: {
             select: {
@@ -173,8 +178,12 @@ router.get('/users', async (req, res) => {
     const users = rows.map((row) => ({
       id: row.id,
       email: row.email,
-      /** 현재 플로우에서는 verify-code 이후에만 Identity가 생성되므로 이메일 인증 완료로 간주 */
-      emailVerified: true,
+      /** `email`이 있으면 학교 이메일이 연결된 것으로 간주(증빙만 올리고 이메일 미연결 계정은 null) */
+      emailVerified: Boolean(row.email),
+      schoolImageVerified: Boolean(row.schoolProofVerifiedAt),
+      schoolProofVerifiedAt: row.schoolProofVerifiedAt,
+      studentId: row.studentId,
+      birthYear: row.birthYear,
       kakaoLinked: Boolean(row.kakaoId && String(row.kakaoId).trim()),
       blockedAt: row.blockedAt,
       createdAt: row.createdAt,
@@ -700,6 +709,18 @@ router.get('/users/:id', async (req, res) => {
       where: { id },
       include: {
         trait: true,
+        schoolProofSubmissions: {
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+          select: {
+            id: true,
+            status: true,
+            mimeType: true,
+            fileSize: true,
+            createdAt: true,
+            reviewedAt: true,
+          },
+        },
       },
     });
 
@@ -721,11 +742,16 @@ router.get('/users/:id', async (req, res) => {
       user: {
         id: row.id,
         email: row.email,
-        emailVerified: true,
+        emailVerified: Boolean(row.email),
+        schoolImageVerified: Boolean(row.schoolProofVerifiedAt),
+        schoolProofVerifiedAt: row.schoolProofVerifiedAt,
+        studentId: row.studentId,
+        birthYear: row.birthYear,
         kakaoLinked: Boolean(row.kakaoId && String(row.kakaoId).trim()),
         blockedAt: row.blockedAt,
         createdAt: row.createdAt,
       },
+      schoolProofSubmissions: row.schoolProofSubmissions ?? [],
       trait: row.trait
         ? {
             id: row.trait.id,
@@ -824,6 +850,286 @@ router.delete('/users/:id', async (req, res) => {
     }
     console.error('admin DELETE /users/:id error:', err);
     return res.status(500).json({ error: '사용자 삭제/차단 처리 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/school-proofs:
+ *   get:
+ *     tags: [Admin]
+ *     summary: 학교 증빙 이미지 제출 목록 (기본 status=pending)
+ *     security:
+ *       - AdminBearerAuth: []
+ */
+router.get('/school-proofs', async (req, res) => {
+  const statusRaw = String(req.query.status || 'pending').toLowerCase();
+  const allowed = new Set(['pending', 'approved', 'rejected', 'all']);
+  if (!allowed.has(statusRaw)) {
+    return res.status(400).json({
+      error: 'status는 pending, approved, rejected, all 중 하나여야 합니다.',
+    });
+  }
+  const limitRaw = req.query.limit;
+  const offsetRaw = req.query.offset;
+  const limit = Math.min(Math.max(Number(limitRaw ?? 50) || 50, 1), 200);
+  const offset = Math.max(Number(offsetRaw ?? 0) || 0, 0);
+  const where = statusRaw === 'all' ? {} : { status: statusRaw };
+
+  try {
+    const [total, rows] = await prisma.$transaction([
+      prisma.schoolProofSubmission.count({ where }),
+      prisma.schoolProofSubmission.findMany({
+        where,
+        orderBy: { createdAt: statusRaw === 'pending' ? 'asc' : 'desc' },
+        skip: offset,
+        take: limit,
+        select: {
+          id: true,
+          identityId: true,
+          status: true,
+          mimeType: true,
+          fileSize: true,
+          createdAt: true,
+          reviewedAt: true,
+          identity: { select: { email: true, schoolProofVerifiedAt: true } },
+        },
+      }),
+    ]);
+
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin.adminId,
+      action: 'ADMIN_LIST_SCHOOL_PROOFS',
+      resource: `GET /api/admin/school-proofs?status=${statusRaw}`,
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: { total, returned: rows.length },
+    });
+
+    return res.status(200).json({
+      total,
+      limit,
+      offset,
+      status: statusRaw,
+      submissions: rows.map((r) => ({
+        id: r.id,
+        identityId: r.identityId,
+        userEmail: r.identity?.email ?? null,
+        status: r.status,
+        mimeType: r.mimeType,
+        fileSize: r.fileSize,
+        createdAt: r.createdAt,
+        reviewedAt: r.reviewedAt,
+        identitySchoolProofVerifiedAt: r.identity?.schoolProofVerifiedAt ?? null,
+      })),
+    });
+  } catch (err) {
+    console.error('admin GET /school-proofs error:', err);
+    return res.status(500).json({ error: '증빙 목록 조회 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/school-proofs/{id}/file:
+ *   get:
+ *     tags: [Admin]
+ *     summary: 제출 이미지 바이너리 (관리자 전용)
+ *     security:
+ *       - AdminBearerAuth: []
+ */
+router.get('/school-proofs/:id/file', async (req, res) => {
+  const { id } = req.params;
+  if (!isUuid(id)) {
+    return res.status(400).json({ error: '유효한 UUID가 아닙니다.' });
+  }
+
+  try {
+    const row = await prisma.schoolProofSubmission.findUnique({
+      where: { id },
+      select: { id: true, storedPath: true, mimeType: true },
+    });
+    if (!row) {
+      return res.status(404).json({ error: '제출을 찾을 수 없습니다.' });
+    }
+
+    let abs;
+    try {
+      abs = absoluteSchoolProofPath(row.storedPath);
+    } catch (_) {
+      return res.status(500).json({ error: '파일 경로가 올바르지 않습니다.' });
+    }
+    if (!fs.existsSync(abs)) {
+      return res.status(404).json({ error: '파일이 디스크에 없습니다.' });
+    }
+
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin.adminId,
+      action: 'ADMIN_SCHOOL_PROOF_FILE_VIEW',
+      resource: `SchoolProofSubmission:${id}`,
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: null,
+    });
+
+    res.setHeader('Content-Type', row.mimeType || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'private, no-store');
+    const stream = fs.createReadStream(abs);
+    stream.on('error', () => {
+      if (!res.headersSent) {
+        res.status(500).json({ error: '파일 읽기에 실패했습니다.' });
+      }
+    });
+    stream.pipe(res);
+  } catch (err) {
+    console.error('admin GET /school-proofs/:id/file error:', err);
+    return res.status(500).json({ error: '파일 제공 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/school-proofs/{id}/approve:
+ *   post:
+ *     tags: [Admin]
+ *     summary: 증빙 승인 (동일 유저의 다른 pending 제출은 자동 거절, Identity.schoolProofVerifiedAt 설정)
+ *     security:
+ *       - AdminBearerAuth: []
+ */
+router.post('/school-proofs/:id/approve', async (req, res) => {
+  const { id } = req.params;
+  if (!isUuid(id)) {
+    return res.status(400).json({ error: '유효한 UUID가 아닙니다.' });
+  }
+  const adminId = req.admin.adminId;
+  const now = new Date();
+
+  try {
+    const outcome = await prisma.$transaction(async (tx) => {
+      const sub = await tx.schoolProofSubmission.findUnique({
+        where: { id },
+        select: { id: true, identityId: true, status: true },
+      });
+      if (!sub) {
+        return { kind: 'not_found' };
+      }
+      if (sub.status !== 'pending') {
+        return { kind: 'not_pending', status: sub.status };
+      }
+
+      await tx.schoolProofSubmission.updateMany({
+        where: {
+          identityId: sub.identityId,
+          status: 'pending',
+          NOT: { id: sub.id },
+        },
+        data: {
+          status: 'rejected',
+          reviewedAt: now,
+          reviewerAdminId: adminId,
+        },
+      });
+
+      await tx.schoolProofSubmission.update({
+        where: { id: sub.id },
+        data: {
+          status: 'approved',
+          reviewedAt: now,
+          reviewerAdminId: adminId,
+        },
+      });
+
+      await tx.identity.update({
+        where: { id: sub.identityId },
+        data: { schoolProofVerifiedAt: now },
+      });
+
+      return { kind: 'ok', identityId: sub.identityId };
+    });
+
+    if (outcome.kind === 'not_found') {
+      return res.status(404).json({ error: '제출을 찾을 수 없습니다.' });
+    }
+    if (outcome.kind === 'not_pending') {
+      return res.status(400).json({ error: `이미 처리된 제출입니다 (${outcome.status}).` });
+    }
+
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: adminId,
+      action: 'ADMIN_SCHOOL_PROOF_APPROVE',
+      resource: `SchoolProofSubmission:${id}`,
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: { identityId: outcome.identityId },
+    });
+
+    return res.status(200).json({
+      message: '이미지 인증이 승인되었습니다.',
+      submissionId: id,
+      identityId: outcome.identityId,
+      schoolProofVerifiedAt: now.toISOString(),
+    });
+  } catch (err) {
+    console.error('admin POST /school-proofs/:id/approve error:', err);
+    return res.status(500).json({ error: '승인 처리 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/school-proofs/{id}/reject:
+ *   post:
+ *     tags: [Admin]
+ *     summary: 증빙 거절 (pending 만)
+ *     security:
+ *       - AdminBearerAuth: []
+ */
+router.post('/school-proofs/:id/reject', async (req, res) => {
+  const { id } = req.params;
+  if (!isUuid(id)) {
+    return res.status(400).json({ error: '유효한 UUID가 아닙니다.' });
+  }
+  const adminId = req.admin.adminId;
+  const now = new Date();
+
+  try {
+    const sub = await prisma.schoolProofSubmission.findUnique({
+      where: { id },
+      select: { id: true, status: true },
+    });
+    if (!sub) {
+      return res.status(404).json({ error: '제출을 찾을 수 없습니다.' });
+    }
+    if (sub.status !== 'pending') {
+      return res.status(400).json({ error: `이미 처리된 제출입니다 (${sub.status}).` });
+    }
+
+    await prisma.schoolProofSubmission.update({
+      where: { id },
+      data: {
+        status: 'rejected',
+        reviewedAt: now,
+        reviewerAdminId: adminId,
+      },
+    });
+
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: adminId,
+      action: 'ADMIN_SCHOOL_PROOF_REJECT',
+      resource: `SchoolProofSubmission:${id}`,
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: null,
+    });
+
+    return res.status(200).json({ message: '제출이 거절 처리되었습니다.', submissionId: id });
+  } catch (err) {
+    console.error('admin POST /school-proofs/:id/reject error:', err);
+    return res.status(500).json({ error: '거절 처리 중 오류가 발생했습니다.' });
   }
 });
 

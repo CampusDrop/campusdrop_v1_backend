@@ -28,6 +28,7 @@
     "seed": "node prisma/seed.js"
   },
   "dependencies": {
+    "@aws-sdk/client-ses": "^3.1029.0",
     "@aws-sdk/client-sesv2": "^3.1029.0",
     "@prisma/client": "^6.19.0",
     "axios": "^1.15.0",
@@ -36,6 +37,7 @@
     "dotenv": "^17.4.1",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
+    "multer": "^1.4.5-lts.2",
     "nodemailer": "^7.0.11",
     "redis": "^4.7.1",
     "swagger-jsdoc": "^6.2.8",

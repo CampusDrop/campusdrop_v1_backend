@@ -1,10 +1,8 @@
 const crypto = require('crypto');
 const express = require('express');
-const {
-  PrismaClientKnownRequestError,
-  PrismaClientInitializationError,
-} = require('@prisma/client/runtime/library');
+const { PrismaClientInitializationError } = require('@prisma/client/runtime/library');
 const { prisma } = require('../lib/prisma');
+const { parseSignupProfile } = require('../lib/signupProfile');
 const { isSjuAcKrEmail, normalizeEmail } = require('../lib/sjuEmail');
 const { sendVerificationCode } = require('../lib/mailer');
 const {
@@ -15,8 +13,16 @@ const {
 const { hashEmailForStorage, findIdentityIdByNormalizedEmail } = require('../lib/identityAuth');
 const { requireUserUuid } = require('../lib/requireUserUuid');
 const { storePinForIdentity } = require('../lib/pinSession');
+const { traitGenderLabelKo } = require('../lib/genderPolicy');
 
 const router = express.Router();
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuidString(s) {
+  return typeof s === 'string' && UUID_RE.test(s);
+}
 
 function randomSixDigitCode() {
   return String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
@@ -92,6 +98,17 @@ router.post('/send-code', async (req, res) => {
     }
   }
 
+  if (
+    process.env.NODE_ENV !== 'production' ||
+    process.env.AUTH_LOG_SEND_CODE === 'true'
+  ) {
+    console.log(
+      '[send-code]',
+      fixedCode ? '메일 생략(AUTH_FIXED_VERIFICATION_CODE)' : '메일 발송 호출 완료',
+      normalized,
+    );
+  }
+
   return res.status(200).json({ message: '인증 번호를 발송했습니다.' });
 });
 
@@ -100,7 +117,10 @@ router.post('/send-code', async (req, res) => {
  * /api/auth/verify-code:
  *   post:
  *     tags: [Auth]
- *     summary: 이메일·코드 검증 후 세션 UUID 발급
+ *     summary: |
+ *       이메일·코드 검증. DB에 해당 이메일 계정이 이미 있으면 `uuid`만 반환해 세션을 복구합니다.
+ *       아직 `Identity`가 없으면 **즉시** `Identity`+빈 `Trait`을 만들고 `uuid`를 반환합니다(선택 `profile`: studentId, birthYear, gender).
+ *       설문은 이후 `POST /api/survey/submit`으로 저장합니다. `registrationToken`·`complete-registration`은 구 클라이언트용으로만 유지됩니다.
  *     requestBody:
  *       required: true
  *       content:
@@ -128,7 +148,7 @@ router.post('/send-code', async (req, res) => {
  *               $ref: '#/components/schemas/ErrorMessage'
  */
 router.post('/verify-code', async (req, res) => {
-  const { email, code } = req.body ?? {};
+  const { email, code, linkUuid } = req.body ?? {};
 
   if (email === undefined || email === null || email === '') {
     return res.status(400).json({ error: 'email이 필요합니다.' });
@@ -162,41 +182,76 @@ router.post('/verify-code', async (req, res) => {
     return res.status(400).json({ error: '인증 번호가 올바르지 않습니다.' });
   }
 
-  let sessionId;
+  const linkRaw =
+    linkUuid !== undefined && linkUuid !== null && linkUuid !== ''
+      ? String(linkUuid).trim()
+      : '';
+  if (linkRaw && !isUuidString(linkRaw)) {
+    return res.status(400).json({ error: 'linkUuid는 유효한 UUID 형식이어야 합니다.' });
+  }
+  const linkId = linkRaw && isUuidString(linkRaw) ? linkRaw : null;
+
+  let sessionId = null;
   try {
-    const existingId = await findIdentityIdByNormalizedEmail(prisma, normalized);
-    if (existingId) {
-      sessionId = existingId;
-      await prisma.identity.update({
-        where: { id: existingId },
-        data: { email: normalized },
+    if (linkId) {
+      const anon = await prisma.identity.findUnique({
+        where: { id: linkId },
+        select: { id: true, email: true, blockedAt: true },
       });
-    } else {
+      if (!anon) {
+        return res.status(400).json({ error: '연결할 세션(UUID)을 찾을 수 없습니다.' });
+      }
+      if (anon.blockedAt) {
+        return res.status(403).json({
+          error: '이 계정은 이용이 제한되었습니다. 문의가 필요하면 운영팀에 연락해 주세요.',
+        });
+      }
+      if (anon.email) {
+        return res.status(400).json({
+          error: '이 세션에는 이미 이메일이 연결되어 있습니다. linkUuid 없이 인증해 주세요.',
+        });
+      }
+      const emailOwnerId = await findIdentityIdByNormalizedEmail(prisma, normalized);
+      if (emailOwnerId && emailOwnerId !== linkId) {
+        return res.status(400).json({
+          error: '해당 학교 이메일은 다른 계정에서 이미 사용 중입니다. 해당 계정으로 로그인해 주세요.',
+        });
+      }
       const emailHash = await hashEmailForStorage(normalized);
-      try {
+      await prisma.identity.update({
+        where: { id: linkId },
+        data: { email: normalized, emailHash, imageUuidAccessUntil: null },
+      });
+      sessionId = linkId;
+    } else {
+      const existingId = await findIdentityIdByNormalizedEmail(prisma, normalized);
+      if (existingId) {
+        sessionId = existingId;
+        await prisma.identity.update({
+          where: { id: existingId },
+          data: { email: normalized, imageUuidAccessUntil: null },
+        });
+      } else {
+        const prof = parseSignupProfile(req.body?.profile);
+        if (!prof.ok) {
+          return res.status(400).json({ error: prof.error });
+        }
+        const emailHash = await hashEmailForStorage(normalized);
         const created = await prisma.identity.create({
           data: {
             email: normalized,
             emailHash,
+            ...(prof.studentId ? { studentId: prof.studentId } : {}),
+            ...(prof.birthYear ? { birthYear: prof.birthYear } : {}),
             trait: {
-              create: {},
+              create: {
+                gender: prof.genderTrait,
+              },
             },
           },
           select: { id: true },
         });
         sessionId = created.id;
-      } catch (err) {
-        if (err instanceof PrismaClientKnownRequestError && err.code === 'P2002') {
-          const racedId = await findIdentityIdByNormalizedEmail(prisma, normalized);
-          if (!racedId) throw err;
-          sessionId = racedId;
-          await prisma.identity.update({
-            where: { id: sessionId },
-            data: { email: normalized },
-          });
-        } else {
-          throw err;
-        }
       }
     }
   } catch (err) {
@@ -255,5 +310,74 @@ router.get('/pin', requireUserUuid, async (req, res) => {
     });
   }
 });
+
+/**
+ * @openapi
+ * /api/auth/me:
+ *   get:
+ *     tags: [Auth]
+ *     summary: 현재 세션(`x-user-uuid`)의 서버 저장 프로필·이메일 요약
+ *     security:
+ *       - UserUuidAuth: []
+ *     responses:
+ *       200:
+ *         description: OK
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/AuthMeResponse'
+ *       401:
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorMessage'
+ */
+router.get('/me', requireUserUuid, async (req, res) => {
+  const u = req.user;
+  const studentId = u.studentId != null ? String(u.studentId).trim() : null;
+  const birthYear = u.birthYear != null ? String(u.birthYear).trim() : null;
+  const genderTrait = u.trait?.gender != null ? String(u.trait.gender).trim() : null;
+  const genderLabel = traitGenderLabelKo(u.trait?.gender) || null;
+  const profile = {
+    studentId: studentId || null,
+    birthYear: birthYear || null,
+    gender: genderLabel,
+    genderTrait: genderTrait || null,
+  };
+  return res.status(200).json({
+    uuid: u.id,
+    email: u.email ?? null,
+    profile,
+    participantMeta: { profile: { ...profile } },
+    imageUuidAccessUntil: u.imageUuidAccessUntil
+      ? new Date(u.imageUuidAccessUntil).toISOString()
+      : null,
+  });
+});
+
+/**
+ * @openapi
+ * /api/auth/logout:
+ *   post:
+ *     tags: [Auth]
+ *     summary: |
+ *       서버 무상태 세션 — 별도 토큰 폐기 없음. 클라이언트에서 `x-user-uuid`/쿠키 삭제용.
+ *     responses:
+ *       200:
+ *         description: OK
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/LogoutResponse'
+ */
+router.post('/logout', (req, res) => {
+  return res.status(200).json({
+    ok: true,
+    message:
+      '서버에 저장된 로그인 토큰은 없습니다. 클라이언트에서 x-user-uuid(또는 이를 둔 쿠키)를 삭제하면 로그아웃됩니다.',
+  });
+});
+
+router.use(require('./authOnboarding'));
 
 module.exports = router;

@@ -305,8 +305,11 @@ router.get('/pin', requireUserUuid, async (req, res) => {
     if (err && typeof err === 'object' && 'code' in err && err.code === 'PIN_COLLISION') {
       return res.status(503).json({ error: 'PIN 발급에 실패했습니다. 잠시 후 다시 시도해 주세요.' });
     }
+    if (err && typeof err === 'object' && 'code' in err && err.code === 'IDENTITY_NOT_FOUND') {
+      return res.status(404).json({ error: '계정을 찾을 수 없습니다.' });
+    }
     return res.status(503).json({
-      error: 'PIN을 발급할 수 없습니다. Redis 연결(REDIS_URL)을 확인해 주세요.',
+      error: 'PIN을 발급할 수 없습니다. Redis(REDIS_URL)와 데이터베이스 연결을 확인해 주세요.',
     });
   }
 });

@@ -17,6 +17,8 @@ model Identity {
   /// 정규화된 이메일 문자열에 대한 bcrypt 해시(솔트 포함). 로그인 시 `bcrypt.compare`로만 대조합니다.
   emailHash String
   kakaoId   String?
+  /// 카카오 챗봇 연동용 4자리 PIN. 다른 `Identity`와 중복 불가. 재요청 시 동일 값 유지, 연동 성공 시 null.
+  kakaoLinkPin String? @unique @map("kakao_link_pin")
   /// 관리자 차단 시각. null이면 정상 이용 가능.
   blockedAt DateTime? @map("blocked_at")
   /// 학생증·재학증명 등 이미지 제출을 관리자가 승인한 시각. null이면 아직 이미지 인증 미완료.

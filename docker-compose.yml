@@ -17,6 +17,9 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
+    # 호스트(EC2)에서만 접속: Prisma Studio·psql·GUI 툴이 db 호스트명 없이 127.0.0.1 로 붙게 함
+    ports:
+      - "127.0.0.1:5432:5432"
 
   redis:
     image: redis:7-alpine

@@ -68,7 +68,7 @@ router.post('/webhook', async (req, res) => {
   try {
     identityId = await getIdentityIdByPin(pin);
   } catch (err) {
-    console.error('kakao webhook redis:', err);
+    console.error('kakao webhook pin resolve:', err);
     return res.status(200).json(kakaoSimpleResponse('일시적인 오류입니다. 잠시 후 다시 시도해 주세요.'));
   }
 
@@ -85,7 +85,7 @@ router.post('/webhook', async (req, res) => {
   try {
     await prisma.identity.update({
       where: { id: identityId },
-      data: { kakaoId: kakaoUserId },
+      data: { kakaoId: kakaoUserId, kakaoLinkPin: null },
     });
     await deletePinKey(pin);
   } catch (err) {

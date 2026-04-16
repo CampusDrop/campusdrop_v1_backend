@@ -16,6 +16,11 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = (process.env.HOST || '0.0.0.0').trim();
 
+const trustProxy = (process.env.TRUST_PROXY || '').trim().toLowerCase();
+if (trustProxy === '1' || trustProxy === 'true' || trustProxy === 'yes') {
+  app.set('trust proxy', 1);
+}
+
 const corsAllowedOrigins = new Set([
   'https://campus-drop.com',
   'https://www.campus-drop.com',
@@ -63,6 +68,9 @@ app.use(
     credentials: true,
   }),
 );
+
+const { jsonBodyLimitBytes } = require('./lib/analyticsConstants');
+app.use('/api/analytics', express.json({ limit: jsonBodyLimitBytes }), require('./routes/analytics'));
 app.use(express.json()); // JSON 데이터 파싱
 
 app.use(

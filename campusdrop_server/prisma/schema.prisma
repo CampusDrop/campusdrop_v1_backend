@@ -137,3 +137,66 @@ model SchoolProofSubmission {
   @@index([status, createdAt])
   @@map("school_proof_submissions")
 }
+
+/// 공개 웹앱 행동 분석 — 의미 있는 이벤트(퍼널·화면 등). 행 단위 append-only.
+model AnalyticsEvent {
+  id             String    @id @default(uuid()) @db.Uuid
+  sessionId      String    @map("session_id") @db.Uuid
+  userUuid       String?   @map("user_uuid") @db.Uuid
+  app            String
+  release        String?
+  clientTs       DateTime? @map("client_ts")
+  name           String
+  eventTs        DateTime  @map("event_ts")
+  props          Json?
+  /// 선택. 이후 idempotency·중복 제거용으로 클라이언트가 보낼 수 있음(현재는 저장만).
+  clientEventId  String?   @map("client_event_id") @db.Uuid
+  receivedAt     DateTime  @default(now()) @map("received_at")
+
+  @@index([sessionId, receivedAt])
+  @@index([app, eventTs])
+  @@index([receivedAt])
+  @@map("analytics_events")
+}
+
+/// 세션당 최신 하트비트·이탈(10분 무활동) 집계용 narrow 행. UPSERT.
+model AnalyticsSessionHeartbeat {
+  sessionId                String    @id @map("session_id") @db.Uuid
+  userUuid                 String?   @map("user_uuid") @db.Uuid
+  lastMeaningfulActivityAt DateTime  @map("last_meaningful_activity_at")
+  visibility               String?
+  context                  Json?
+  clientTs                 DateTime? @map("client_ts")
+  updatedAt                DateTime  @updatedAt @map("updated_at")
+
+  @@index([lastMeaningfulActivityAt])
+  @@map("analytics_session_heartbeats")
+}
+
+/// dead click·rage tap 등 고밀도 상호작용. append-only.
+model AnalyticsInteraction {
+  id              String   @id @default(uuid()) @db.Uuid
+  sessionId       String   @map("session_id") @db.Uuid
+  userUuid        String?  @map("user_uuid") @db.Uuid
+  type            String
+  ts              DateTime
+  xNorm           Float    @map("x_norm")
+  yNorm           Float    @map("y_norm")
+  nearestRegion   String   @map("nearest_region")
+  view            String
+  receivedAt      DateTime @default(now()) @map("received_at")
+
+  @@index([sessionId, ts])
+  @@index([type, receivedAt])
+  @@map("analytics_interactions")
+}
+
+/// `x-user-uuid`가 온 요청에서 session_id ↔ Identity.id 연결(선택).
+model AnalyticsSessionUserLink {
+  sessionId String   @id @map("session_id") @db.Uuid
+  userUuid  String   @map("user_uuid") @db.Uuid
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([userUuid])
+  @@map("analytics_session_user_links")
+}

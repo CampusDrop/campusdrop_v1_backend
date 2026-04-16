@@ -16,6 +16,11 @@ const swaggerDefinition = {
     },
     { name: 'Auth', description: '이메일 인증·세션·증빙·PIN 등' },
     { name: 'Stats', description: '공개 랜딩용 통계(인증 불필요)' },
+    {
+      name: 'Analytics',
+      description:
+        '공개 웹앱 행동 분석(인증 불필요). 선택 헤더 `x-user-uuid`는 `components.securitySchemes.UserUuidAuth`와 동일.',
+    },
   ],
   components: {
     securitySchemes: {
@@ -362,6 +367,117 @@ const swaggerDefinition = {
           description: { type: 'string' },
         },
       },
+      AnalyticsAcceptedResponse: {
+        type: 'object',
+        properties: {
+          accepted: { type: 'integer', description: '저장된 행 수' },
+          dropped: {
+            type: 'integer',
+            description: '배열 상한·스키마 불일치 등으로 버린 항목 수',
+          },
+        },
+      },
+      AnalyticsEventsRequest: {
+        type: 'object',
+        required: ['session_id', 'app', 'events'],
+        properties: {
+          client_ts: { type: 'string', format: 'date-time', description: '클라이언트 시각(선택)' },
+          session_id: { type: 'string', format: 'uuid' },
+          app: { type: 'string', example: 'public' },
+          release: { type: 'string', description: '배포 버전·커밋 해시(선택)' },
+          events: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['name', 'ts'],
+              properties: {
+                name: { type: 'string' },
+                ts: { type: 'string', format: 'date-time' },
+                props: { type: 'object', additionalProperties: true },
+                event_id: {
+                  type: 'string',
+                  format: 'uuid',
+                  description: '선택. 이후 멱등·중복 제거 확장용(현재는 저장만)',
+                },
+              },
+            },
+          },
+        },
+      },
+      AnalyticsHeartbeatRequest: {
+        type: 'object',
+        required: ['session_id', 'last_meaningful_activity_at'],
+        properties: {
+          session_id: { type: 'string', format: 'uuid' },
+          client_ts: { type: 'string', format: 'date-time' },
+          last_meaningful_activity_at: { type: 'string', format: 'date-time' },
+          visibility: { type: 'string', example: 'visible', description: 'document.visibilityState 정렬' },
+          context: {
+            type: 'object',
+            additionalProperties: true,
+            description: '예: view, phase_index, gate_step',
+          },
+        },
+      },
+      AnalyticsInteractionItem: {
+        type: 'object',
+        required: ['type', 'ts', 'x_norm', 'y_norm', 'nearest_region', 'view'],
+        properties: {
+          type: {
+            type: 'string',
+            description: 'dead_click | disabled_primary_tap | rage_tap | scroll_overscroll 등',
+          },
+          ts: { type: 'string', format: 'date-time' },
+          x_norm: { type: 'number', minimum: 0, maximum: 1 },
+          y_norm: { type: 'number', minimum: 0, maximum: 1 },
+          nearest_region: { type: 'string' },
+          view: { type: 'string' },
+        },
+      },
+      AnalyticsInteractionRequest: {
+        type: 'object',
+        required: ['session_id', 'interactions'],
+        properties: {
+          session_id: { type: 'string', format: 'uuid' },
+          client_ts: { type: 'string', format: 'date-time' },
+          interactions: {
+            type: 'array',
+            items: { $ref: '#/components/schemas/AnalyticsInteractionItem' },
+          },
+        },
+      },
+      AnalyticsBatchItem: {
+        type: 'object',
+        required: ['kind'],
+        properties: {
+          kind: { type: 'string', enum: ['event', 'heartbeat', 'interaction'] },
+          payload: {
+            type: 'object',
+            description: 'kind별 필드는 단일 엔드포인트와 동일. kind 외 필드를 루트에 둬도 됨.',
+            additionalProperties: true,
+          },
+        },
+      },
+      AnalyticsBatchRequest: {
+        type: 'object',
+        required: ['items'],
+        properties: {
+          items: {
+            type: 'array',
+            items: { $ref: '#/components/schemas/AnalyticsBatchItem' },
+          },
+        },
+      },
+      AnalyticsBatchResponse: {
+        type: 'object',
+        properties: {
+          results: {
+            type: 'array',
+            items: { type: 'object', additionalProperties: true },
+          },
+          droppedItems: { type: 'integer', description: 'items 상한(기본 50)으로 잘린 개수' },
+        },
+      },
       KakaoWebhookRequest: {
         type: 'object',
         description: '오픈빌더 스킬 페이로드(필요 필드만)',
@@ -393,6 +509,7 @@ const apis = [
   path.join(__dirname, '..', 'routes', 'survey.js'),
   path.join(__dirname, '..', 'routes', 'match.js'),
   path.join(__dirname, '..', 'routes', 'kakao.js'),
+  path.join(__dirname, '..', 'routes', 'analytics.js'),
 ];
 
 const swaggerOptions = {

@@ -95,9 +95,9 @@ router.post('/submit', async (req, res) => {
     const trait = await prisma.trait.upsert({
       where: { id: req.user.id },
       create: {
+        id: req.user.id,
         surveyData: validation.data,
         gender: String(validation.data.gender),
-        identity: { connect: { id: req.user.id } },
       },
       update: {
         surveyData: validation.data,

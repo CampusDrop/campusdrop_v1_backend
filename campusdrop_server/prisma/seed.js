@@ -60,7 +60,6 @@ const surveySimilarPair = () => ({
   pref_tattoo: '선호',
   pref_religion: '비슷하면 좋음',
   self_care_habit: '상황에 따라 다름, 컨디션이 좋을 때는 집중 관리하고 바쁠 때는 쉬어감',
-  religion_acceptance: '종교 상관없으나 권유는 사절',
   availability: SAMPLE_AVAILABILITY,
   gender: 'male',
 });
@@ -100,7 +99,6 @@ const surveyHardFilterA = () => ({
   pref_religion: '무교만',
   self_care_habit:
     '자기관리 중심, 운동과 식단이 일상의 최우선이며 완벽한 자기통제를 선호',
-  religion_acceptance: '무조건 무교인 사람만 선호',
   availability: SAMPLE_AVAILABILITY,
   gender: 'male',
 });
@@ -140,7 +138,6 @@ const surveyHardFilterB = () => ({
   pref_religion: '종교 있음만',
   self_care_habit:
     '자유로운 생활 선호, 규칙적인 관리보다는 현재의 편안함과 여유를 즐김',
-  religion_acceptance: '같은 종교와 깊은 신앙심 희망',
   availability: SAMPLE_AVAILABILITY,
   gender: 'female',
 });
@@ -179,7 +176,6 @@ const surveyRandomMix = () => ({
   pref_tattoo: '상관없음',
   pref_religion: '상관없음',
   self_care_habit: '자기관리 철저, 주 3회 이상 꾸준한 운동과 규칙적인 생활 루틴을 유지함',
-  religion_acceptance: '상대 신념 존중 및 가끔 동행',
   availability: SAMPLE_AVAILABILITY,
   gender: 'male',
 });

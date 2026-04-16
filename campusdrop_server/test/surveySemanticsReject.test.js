@@ -36,7 +36,6 @@ const MINIMAL = {
   pref_tattoo: '상관없음',
   pref_religion: '상관없음',
   self_care_habit: '상황에 따라 다름, 컨디션이 좋을 때는 집중 관리하고 바쁠 때는 쉬어감',
-  religion_acceptance: '종교 상관없으나 권유는 사절',
   availability: [{ date: '2026-04-20', time_slot: '11:00-12:00' }],
 };
 

@@ -1,7 +1,9 @@
 const path = require('path');
-// 이미 설정된 환경 변수(예: Windows 사용자 DATABASE_URL)보다 repo .env가 우선해야 함
-require('dotenv').config({ path: path.resolve(__dirname, '..', '.env'), override: true });
-require('dotenv').config({ path: path.resolve(__dirname, '.env'), override: true });
+// Docker Compose 등에서 이미 주입된 DATABASE_URL은 유지하고, 비어 있을 때만 .env로 채움.
+// (컨테이너에 /app/.env 등에 @db URL이 있으면 override:true가 RDS를 덮어써 verify-code가 db:5432로 붙는 문제가 생김)
+const dotenvOverride = !process.env.DATABASE_URL;
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env'), override: dotenvOverride });
+require('dotenv').config({ path: path.resolve(__dirname, '.env'), override: dotenvOverride });
 
 const express = require('express');
 const cors = require('cors');

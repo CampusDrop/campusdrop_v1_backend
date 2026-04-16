@@ -18,6 +18,7 @@ const { writeAccessLog } = require('../lib/accessLog');
 const { storePinForIdentity } = require('../lib/pinSession');
 const { computeImageUuidAccessUntil } = require('../lib/imageUuidAccess');
 const { parseSignupProfile } = require('../lib/signupProfile');
+const { parsePrivacyPolicyAgreed } = require('../lib/privacyPolicyConsent');
 
 const router = express.Router();
 const upload = createSchoolProofUploader();
@@ -82,9 +83,10 @@ function parseOptionalSurveyField(raw) {
  *         multipart/form-data:
  *           schema:
  *             type: object
- *             required: [registrationToken]
+ *             required: [registrationToken, privacyPolicyAgreed]
  *             properties:
  *               registrationToken: { type: string }
+ *               privacyPolicyAgreed: { type: string, description: '개인정보처리방침 동의 — `true` 또는 문자열 true(대소문자 무관)' }
  *               survey: { type: string, description: '선택. 설문 JSON 문자열(없으면 빈 Trait 후 /api/survey/submit)' }
  *               profile: { type: string, description: '선택. 설문 없을 때 studentId·birthYear·gender JSON 문자열' }
  *               image: { type: string, format: binary, description: '선택. 없으면 증빙 없이 가입' }
@@ -118,6 +120,30 @@ router.post('/complete-registration', handleSchoolProofMulter, async (req, res) 
       });
     }
     return res.status(401).json({ error: '유효하지 않거나 만료된 가입 토큰입니다. 이메일 인증을 다시 진행해 주세요.' });
+  }
+
+  const ppAgree = parsePrivacyPolicyAgreed(req.body?.privacyPolicyAgreed, { required: true });
+  if (!ppAgree.ok) {
+    if (req.file) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    return res.status(400).json({ error: ppAgree.error });
+  }
+  if (ppAgree.value !== true) {
+    if (req.file) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    return res.status(400).json({
+      error: '개인정보처리방침에 동의해야 가입할 수 있습니다.',
+    });
   }
 
   const parsedSurvey = parseOptionalSurveyField(req.body?.survey);
@@ -207,6 +233,7 @@ router.post('/complete-registration', handleSchoolProofMulter, async (req, res) 
         data: {
           email: normalizedEmail,
           emailHash,
+          privacyPolicyAgreed: true,
           ...profileCols,
           trait: {
             create: traitCreate,
@@ -280,6 +307,7 @@ router.post('/complete-registration', handleSchoolProofMulter, async (req, res) 
  *     summary: |
  *       이메일 인증 없이 학교 증빙(이미지 필수) + 선택 설문(또는 `profile` JSON만). `complete-registration`과 택일입니다.
  *       설문은 이후 `POST /api/survey/submit`으로 넣을 수 있습니다. `imageUuidAccessUntil`까지 설문·매칭 API 접근 가능(이메일 없을 때).
+ *       multipart 필드 `privacyPolicyAgreed`(필수, true) — 개인정보처리방침 동의.
  *     responses:
  *       201:
  *         description: 제출 완료
@@ -291,6 +319,26 @@ router.post('/complete-registration', handleSchoolProofMulter, async (req, res) 
 router.post('/complete-anonymous-onboarding', handleSchoolProofMulter, async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'multipart 필드 image(단일 파일)가 필요합니다.' });
+  }
+
+  const ppAnon = parsePrivacyPolicyAgreed(req.body?.privacyPolicyAgreed, { required: true });
+  if (!ppAnon.ok) {
+    try {
+      fs.unlinkSync(req.file.path);
+    } catch (_) {
+      /* ignore */
+    }
+    return res.status(400).json({ error: ppAnon.error });
+  }
+  if (ppAnon.value !== true) {
+    try {
+      fs.unlinkSync(req.file.path);
+    } catch (_) {
+      /* ignore */
+    }
+    return res.status(400).json({
+      error: '개인정보처리방침에 동의해야 제출할 수 있습니다.',
+    });
   }
 
   const parsedSurvey = parseOptionalSurveyField(req.body?.survey);
@@ -365,6 +413,7 @@ router.post('/complete-anonymous-onboarding', handleSchoolProofMulter, async (re
           email: null,
           emailHash,
           imageUuidAccessUntil: imageAccessUntil,
+          privacyPolicyAgreed: true,
           ...profileCols,
           trait: {
             create: traitCreate,

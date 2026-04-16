@@ -63,6 +63,7 @@ async function ensureSmokeIdentity(prisma) {
       id: SMOKE_UUID,
       email: normalizeEmail(SMOKE_EMAIL),
       emailHash,
+      privacyPolicyAgreed: true,
       trait: { create: {} },
     },
   });

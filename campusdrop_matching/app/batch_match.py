@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.matching import compute_match
-from app.schemas import BatchMatchPair, BatchMatchRequest, BatchMatchResponse, LifestyleUser
+from app.schemas import AvailabilitySlot, BatchMatchPair, BatchMatchRequest, BatchMatchResponse, LifestyleUser
 
 
 def _pair_key(id_lo: str, id_hi: str) -> str:
@@ -27,21 +27,23 @@ def _is_opposite_binary_male_female(ga: str | None, gb: str | None) -> bool:
 
 
 def run_batch_greedy_unique_pairs(
-    users: list[tuple[str, LifestyleUser, str | None]],
+    users: list[tuple[str, LifestyleUser, str | None, list[AvailabilitySlot]]],
     forbidden_keys: set[str],
 ) -> list[BatchMatchPair]:
     """
     모든 쌍의 매칭 점수를 한 번에 계산한 뒤, 점수 내림차순 그리디로 최대 1:1 배정(유저당 최대 한 번 등장).
     `forbidden_keys`에 있는 (정렬된) 쌍은 엣지에서 제외(과거 매칭 재매칭 방지).
     남성·여성 쌍만 점수 계산(이성 매칭 최우선).
+    만남 가능 시간은 정책 B: `compute_match`에 슬롯을 넘겨 하드 필터(겹침 없음·한쪽만 빈 슬롯)로 엣지 제외.
     """
     n = len(users)
     if n < 2:
         return []
 
-    by_id: dict[str, LifestyleUser] = {uid: prof for uid, prof, _ in users}
-    gender_by_id: dict[str, str | None] = {uid: g for uid, _, g in users}
-    ids = [uid for uid, _, _ in users]
+    by_id: dict[str, LifestyleUser] = {uid: prof for uid, prof, _, _ in users}
+    gender_by_id: dict[str, str | None] = {uid: g for uid, _, g, _ in users}
+    avail_by_id: dict[str, list[AvailabilitySlot]] = {uid: av for uid, _, _, av in users}
+    ids = [uid for uid, _, _, _ in users]
 
     edges: list[tuple[float, str, str, dict | None]] = []
     for i in range(n):
@@ -54,13 +56,19 @@ def run_batch_greedy_unique_pairs(
                 continue
             ua, ub = by_id[id_lo], by_id[id_hi]
             # viewer/candidate 고정: UUID 오름차순을 항상 (A, B)로 두어 쌍별 점수 정의를 일관되게 한다.
-            result = compute_match(ua, ub)
+            result = compute_match(
+                ua,
+                ub,
+                availability_a=avail_by_id[id_lo],
+                availability_b=avail_by_id[id_hi],
+            )
             if result["match_status"] != "ok":
                 continue
             score = float(result["final_score"])
             edges.append((score, id_lo, id_hi, result.get("match_report")))
 
-    edges.sort(key=lambda t: t[0], reverse=True)
+    # 점수 내림차순, 동점이면 UUID 쌍(오름차순)으로 결정적 그리디.
+    edges.sort(key=lambda t: (-t[0], t[1], t[2]))
     matched: set[str] = set()
     pairs: list[BatchMatchPair] = []
 
@@ -78,14 +86,15 @@ def run_batch_greedy_unique_pairs(
             )
         )
 
+    pairs.sort(key=lambda p: (-p.score, p.user_a_id, p.user_b_id))
     return pairs
 
 
 def batch_match_endpoint(body: BatchMatchRequest) -> BatchMatchResponse:
-    entries: list[tuple[str, LifestyleUser, str | None]] = []
+    entries: list[tuple[str, LifestyleUser, str | None, list[AvailabilitySlot]]] = []
     for u in body.users:
         g = u.gender if u.gender in ("male", "female") else None
-        entries.append((u.user_id, u.profile, g))
+        entries.append((u.user_id, u.profile, g, u.availability))
     forbidden_keys = _forbidden_pair_key_set(body)
     pairs = run_batch_greedy_unique_pairs(entries, forbidden_keys)
     return BatchMatchResponse(pairs=pairs)

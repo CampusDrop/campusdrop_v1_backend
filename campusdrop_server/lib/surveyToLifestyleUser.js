@@ -1,9 +1,13 @@
 /**
  * Node 설문(JSON) → Python `LifestyleUser` (campusdrop_matching/app/schemas.py) 형태.
- * alcohol·skinship_limit는 서버 설문에서는 문자열, Python에서는 1~5 정수.
+ * alcohol·skinship_limit·date_drinking는 서버 설문에서는 문자열일 수 있음, Python에서는 1~5 정수.
+ * `config/surveySemantics.v1.json` 카탈로그와 `matchProfile`(제출 시 부착)을 우선한다.
  * `availability` 등 LifestyleUser에 없는 키는 DB `Trait.surveyData`에만 남고 여기서는 제외된다.
+ * 만남 가능 시간은 `surveyAvailabilitySlots.surveyDataToAvailabilitySlots`로 별도 전달한다.
  * 하드필터·선호 필드는 JSON 직렬화 시 `undefined`가 빠지면 Python Pydantic이 422를 내므로 null 등으로 항상 키를 채운다.
  */
+
+const { loadSemantics, validateCatalogAndBuildMatchProfile } = require('./surveySemanticsCatalog');
 
 /** @param {unknown} v @returns {number} */
 function clampLikert(v) {
@@ -52,11 +56,40 @@ function likertSkinshipLimit(raw) {
   return 3;
 }
 
+/** @param {unknown} raw @returns {number} */
+function likertDateDrinking(raw) {
+  if (typeof raw === 'number' && Number.isInteger(raw)) return clampLikert(raw);
+  if (typeof raw === 'string') {
+    const t = raw.trim();
+    if (/^[1-5]$/.test(t)) return Number(t);
+    const map = loadSemantics().choice_label_maps.date_drinking;
+    if (map && Object.prototype.hasOwnProperty.call(map, t)) {
+      return /** @type {number} */ (map[t]);
+    }
+  }
+  return likertAlcohol(raw);
+}
+
 /**
  * @param {Record<string, unknown>} surveyData
  * @returns {Record<string, unknown>}
  */
 function surveyDataToLifestyleUser(surveyData) {
+  let matchProfile =
+    surveyData.matchProfile != null
+      ? surveyData.matchProfile
+      : surveyData.match_profile != null
+        ? surveyData.match_profile
+        : null;
+  if (matchProfile == null) {
+    const sem = validateCatalogAndBuildMatchProfile(surveyData);
+    if (sem.ok) matchProfile = sem.patch.matchProfile;
+  }
+
+  const religionNone =
+    typeof surveyData.religion_type === 'string' && surveyData.religion_type.trim() === '없음';
+  const ri = religionNone ? 3 : clampLikert(surveyData.religion_intensity);
+
   return {
     energy: clampLikert(surveyData.energy),
     weekend: clampLikert(surveyData.weekend),
@@ -72,6 +105,8 @@ function surveyDataToLifestyleUser(surveyData) {
     jealousy: clampLikert(surveyData.jealousy),
     skinship_speed: clampLikert(surveyData.skinship_speed),
     skinship_limit: likertSkinshipLimit(surveyData.skinship_limit),
+    date_drinking: likertDateDrinking(surveyData.date_drinking),
+    religion_intensity: religionNone ? 3 : ri,
     politics: clampLikert(surveyData.politics),
     marriage_view: clampLikert(surveyData.marriage_view),
     meeting_seriousness: clampLikert(surveyData.meeting_seriousness),
@@ -89,6 +124,7 @@ function surveyDataToLifestyleUser(surveyData) {
     pref_religion: surveyData.pref_religion ?? null,
     pref_cc: surveyData.pref_cc ?? null,
     cc: surveyData.cc ?? null,
+    match_profile: matchProfile ?? null,
   };
 }
 

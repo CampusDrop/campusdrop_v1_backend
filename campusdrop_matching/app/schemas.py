@@ -20,6 +20,8 @@ CONTINUOUS_KEYS: tuple[str, ...] = (
     "jealousy",
     "skinship_speed",
     "skinship_limit",
+    "date_drinking",
+    "religion_intensity",
     "politics",
     "marriage_view",
     "meeting_seriousness",
@@ -31,20 +33,47 @@ CONTINUOUS_KEYS: tuple[str, ...] = (
     "trust",
 )
 
-# 연속형 항목별 가중치(기본 1.0). 핵심 가치관 축은 1.5~2.0배.
+# 연속형 항목별 가중치 — `config/surveySemantics.v1.json` 의 스케일 weight 와 동기화할 것.
+# 키 생략 시 matching.py 에서 1.0으로 간주(CONTINUOUS_KEYS 전부 나열 권장).
 CONTINUOUS_WEIGHTS: dict[str, float] = {
-    "marriage_view": 2.0,
-    "meeting_seriousness": 2.0,
-    "politics": 1.75,
-    "trust": 1.5,
-    "honesty": 1.5,
-    "conflict": 1.5,
+    "contact": 2.0,
+    "friends": 2.0,
+    "conflict": 2.0,
+    "skinship_limit": 1.5,
+    "trend": 1.5,
+    "alcohol": 1.5,
+    "date_expense": 1.5,
+    "meeting_seriousness": 1.5,
     "empathy": 1.5,
-    "job_view": 1.5,
+    "honesty": 1.5,
+    "trust": 1.5,
+    "politics": 1.25,
+    "job_view": 1.25,
+    "skinship_speed": 1.0,
+    "marriage_view": 1.0,
+    "spending": 1.0,
+    "energy": 1.0,
+    "weekend": 1.0,
+    "pattern": 1.0,
+    "meeting": 1.0,
+    "planning": 1.0,
+    "affection": 1.0,
+    "jealousy": 1.0,
+    "date_drinking": 1.0,
+    "religion_intensity": 1.0,
 }
 
-# religion_type은 척도가 아니므로 소프트 정렬에 별도 가중치로 반영(≈1.5~2배의 한 축).
-RELIGION_SOFT_WEIGHT: float = 1.8
+# religion_type 소프트(맨하탄 블렌드) — 스펙의 religion_soft_score 에 대응.
+RELIGION_SOFT_WEIGHT: float = 1.0
+
+
+class AvailabilitySlot(BaseModel):
+    """설문 검증 후 DB에 저장되는 1시간 단위 가능 슬롯."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    date: str
+    time_slot: str
 
 
 class LifestyleUser(BaseModel):
@@ -66,6 +95,8 @@ class LifestyleUser(BaseModel):
     jealousy: int
     skinship_speed: int
     skinship_limit: int
+    date_drinking: int
+    religion_intensity: int
     politics: int
     marriage_view: int
     meeting_seriousness: int
@@ -84,6 +115,8 @@ class LifestyleUser(BaseModel):
     pref_religion: Any
     pref_cc: Any
     cc: Any | None = None
+    # Node `matchProfile` — 시맨틱 v1 선호 단계·흡연/타투 코드 등. 없으면 레거시 문자열 규칙.
+    match_profile: dict[str, Any] | None = None
 
     @field_validator(*CONTINUOUS_KEYS)
     @classmethod
@@ -102,6 +135,9 @@ class CalculateMatchRequest(BaseModel):
 
     user_A: LifestyleUser
     user_B: LifestyleUser
+    # 둘 다 생략(None)이면 기존과 같이 시간 겹침을 보지 않음. 둘 다 주어지면 `compute_match`에서 하드 검사.
+    availability_a: list[AvailabilitySlot] | None = None
+    availability_b: list[AvailabilitySlot] | None = None
 
 
 class CalculateMatchResponse(BaseModel):
@@ -120,6 +156,8 @@ class BatchMatchUserEntry(BaseModel):
     user_id: str
     profile: LifestyleUser
     gender: Literal["male", "female"] | None = None
+    # Node가 `Trait.surveyData`에서 추출해 전달. 키 생략 시 [] — 구버전 호출자는 시간 제약 없음(양쪽 []).
+    availability: list[AvailabilitySlot] = Field(default_factory=list)
 
 
 class BatchMatchRequest(BaseModel):

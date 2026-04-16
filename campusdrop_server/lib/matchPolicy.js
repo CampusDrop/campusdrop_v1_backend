@@ -85,6 +85,44 @@ async function getForbiddenPairTuplesForBatch(prisma, periodStart) {
 }
 
 /**
+ * 이번 매칭 주에 이미 짝이 된 쌍 중, `exceptUserId`를 포함하지 않는 행만 `[lo,hi]`로 반환.
+ * 실시간 `/match/request`에서 전역 그리디를 돌릴 때 타인의 이번 주 짝은 유지하고 싶을 때 금지 쌍으로 합친다.
+ *
+ * @param {import('@prisma/client').PrismaClient} prisma
+ * @param {Date} periodStart
+ * @param {string} exceptUserId
+ * @returns {Promise<string[][]>}
+ */
+async function getSamePeriodLockedPairTuplesExceptUser(prisma, periodStart, exceptUserId) {
+  const pe = getMatchingPeriodEnd(periodStart);
+  const rows = await prisma.matching.findMany({
+    where: {
+      OR: [
+        { periodStart },
+        {
+          AND: [{ periodStart: null }, { matchedAt: { gte: periodStart, lt: pe } }],
+        },
+      ],
+    },
+    select: { userAId: true, userBId: true },
+  });
+  const seen = new Set();
+  /** @type {string[][]} */
+  const out = [];
+  for (const r of rows) {
+    if (r.userAId === exceptUserId || r.userBId === exceptUserId) {
+      continue;
+    }
+    const [lo, hi] = [r.userAId, r.userBId].sort();
+    const k = `${lo}|${hi}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push([lo, hi]);
+  }
+  return out;
+}
+
+/**
  * 이번 매칭 주(`periodStart`~`periodEnd`) `matchings`에 한 번이라도 올라간 `Identity.id`.
  * @param {import('@prisma/client').PrismaClient} prisma
  * @param {Date} periodStart
@@ -146,6 +184,7 @@ module.exports = {
   getMatchingPeriodEnd,
   getHistoricalPartnerIds,
   getForbiddenPairTuplesForBatch,
+  getSamePeriodLockedPairTuplesExceptUser,
   getUserIdsMatchedInPeriod,
   deleteMatchingsForUsersInPeriod,
 };

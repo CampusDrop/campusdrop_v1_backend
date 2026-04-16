@@ -14,6 +14,7 @@ const { hashEmailForStorage, findIdentityIdByNormalizedEmail } = require('../lib
 const { requireUserUuid } = require('../lib/requireUserUuid');
 const { storePinForIdentity } = require('../lib/pinSession');
 const { traitGenderLabelKo } = require('../lib/genderPolicy');
+const { parsePrivacyPolicyAgreed } = require('../lib/privacyPolicyConsent');
 
 const router = express.Router();
 
@@ -119,7 +120,7 @@ router.post('/send-code', async (req, res) => {
  *     tags: [Auth]
  *     summary: |
  *       이메일·코드 검증. DB에 해당 이메일 계정이 이미 있으면 `uuid`만 반환해 세션을 복구합니다.
- *       아직 `Identity`가 없으면 **즉시** `Identity`+빈 `Trait`을 만들고 `uuid`를 반환합니다(선택 `profile`: studentId, birthYear, gender).
+ *       아직 `Identity`가 없으면 **즉시** `Identity`+빈 `Trait`을 만들고 `uuid`를 반환합니다(선택 `profile`: studentId, birthYear, gender). 신규 가입·`linkUuid` 이메일 연결 시 `privacyPolicyAgreed: true` 필수.
  *       설문은 이후 `POST /api/survey/submit`으로 저장합니다. `registrationToken`·`complete-registration`은 구 클라이언트용으로만 유지됩니다.
  *     requestBody:
  *       required: true
@@ -194,6 +195,15 @@ router.post('/verify-code', async (req, res) => {
   let sessionId = null;
   try {
     if (linkId) {
+      const ppLink = parsePrivacyPolicyAgreed(req.body?.privacyPolicyAgreed, { required: true });
+      if (!ppLink.ok) {
+        return res.status(400).json({ error: ppLink.error });
+      }
+      if (ppLink.value !== true) {
+        return res.status(400).json({
+          error: '개인정보처리방침에 동의해야 학교 이메일을 연결할 수 있습니다.',
+        });
+      }
       const anon = await prisma.identity.findUnique({
         where: { id: linkId },
         select: { id: true, email: true, blockedAt: true },
@@ -220,7 +230,12 @@ router.post('/verify-code', async (req, res) => {
       const emailHash = await hashEmailForStorage(normalized);
       await prisma.identity.update({
         where: { id: linkId },
-        data: { email: normalized, emailHash, imageUuidAccessUntil: null },
+        data: {
+          email: normalized,
+          emailHash,
+          imageUuidAccessUntil: null,
+          privacyPolicyAgreed: true,
+        },
       });
       sessionId = linkId;
     } else {
@@ -232,6 +247,15 @@ router.post('/verify-code', async (req, res) => {
           data: { email: normalized, imageUuidAccessUntil: null },
         });
       } else {
+        const ppNew = parsePrivacyPolicyAgreed(req.body?.privacyPolicyAgreed, { required: true });
+        if (!ppNew.ok) {
+          return res.status(400).json({ error: ppNew.error });
+        }
+        if (ppNew.value !== true) {
+          return res.status(400).json({
+            error: '개인정보처리방침에 동의해야 가입할 수 있습니다.',
+          });
+        }
         const prof = parseSignupProfile(req.body?.profile);
         if (!prof.ok) {
           return res.status(400).json({ error: prof.error });
@@ -241,6 +265,7 @@ router.post('/verify-code', async (req, res) => {
           data: {
             email: normalized,
             emailHash,
+            privacyPolicyAgreed: true,
             ...(prof.studentId ? { studentId: prof.studentId } : {}),
             ...(prof.birthYear ? { birthYear: prof.birthYear } : {}),
             trait: {
@@ -352,6 +377,7 @@ router.get('/me', requireUserUuid, async (req, res) => {
     email: u.email ?? null,
     profile,
     participantMeta: { profile: { ...profile } },
+    privacyPolicyAgreed: Boolean(u.privacyPolicyAgreed),
     imageUuidAccessUntil: u.imageUuidAccessUntil
       ? new Date(u.imageUuidAccessUntil).toISOString()
       : null,

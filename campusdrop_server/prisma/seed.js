@@ -6,6 +6,16 @@ const { PrismaClient } = require('@prisma/client');
 const { normalizeEmail } = require('../lib/sjuEmail');
 const { hashEmailForStorage } = require('../lib/identityAuth');
 const { hashAdminPassword } = require('../lib/adminDbAuth');
+const { validateSurveyPayload } = require('../lib/surveyValidation');
+
+/** @param {Record<string, unknown>} raw */
+function validatedSurvey(raw) {
+  const v = validateSurveyPayload(raw);
+  if (!v.ok) {
+    throw new Error(`Seed 설문 검증 실패: ${v.error}`);
+  }
+  return v.data;
+}
 
 const prisma = new PrismaClient();
 
@@ -170,36 +180,36 @@ const SEED_IDENTITIES = [
     id: '00000000-0000-4000-8000-000000000001',
     plainEmailForHash: '1@sju.ac.kr',
     gender: 'male',
-    surveyData: surveySimilarPair(),
+    surveyData: validatedSurvey(surveySimilarPair()),
   },
   {
     id: '00000000-0000-4000-8000-000000000002',
     plainEmailForHash: '2@sju.ac.kr',
     gender: 'female',
-    surveyData: {
+    surveyData: validatedSurvey({
       ...surveySimilarPair(),
       affection: 3,
       trust: 4,
       gender: 'female',
-    },
+    }),
   },
   {
     id: '00000000-0000-4000-8000-000000000003',
     plainEmailForHash: '3@sju.ac.kr',
     gender: 'male',
-    surveyData: surveyHardFilterA(),
+    surveyData: validatedSurvey(surveyHardFilterA()),
   },
   {
     id: '00000000-0000-4000-8000-000000000004',
     plainEmailForHash: '4@sju.ac.kr',
     gender: 'female',
-    surveyData: surveyHardFilterB(),
+    surveyData: validatedSurvey(surveyHardFilterB()),
   },
   {
     id: '00000000-0000-4000-8000-000000000005',
     plainEmailForHash: '5@sju.ac.kr',
     gender: 'male',
-    surveyData: surveyRandomMix(),
+    surveyData: validatedSurvey(surveyRandomMix()),
   },
 ];
 
@@ -218,6 +228,7 @@ async function main() {
         id: row.id,
         email: normalized,
         emailHash,
+        privacyPolicyAgreed: true,
         trait: {
           create: {
             gender: row.gender,

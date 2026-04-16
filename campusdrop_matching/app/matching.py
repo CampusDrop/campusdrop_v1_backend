@@ -6,10 +6,20 @@ from typing import Any, Literal
 
 import numpy as np
 
+from app.availability import availability_pair_compatible_for_matching
+from app.survey_semantics_runtime import (
+    collect_soft_penalty_entries,
+    get_match_profile,
+    partner_smoking_code,
+    partner_tattoo_code,
+    pref_level,
+    survey_semantics,
+)
 from app.schemas import (
     CONTINUOUS_KEYS,
     CONTINUOUS_WEIGHTS,
     RELIGION_SOFT_WEIGHT,
+    AvailabilitySlot,
     LifestyleUser,
 )
 
@@ -30,6 +40,8 @@ AXIS_LABEL_KO: dict[str, str] = {
     "jealousy": "질투",
     "skinship_speed": "스킨십 속도",
     "skinship_limit": "스킨십 한계",
+    "date_drinking": "데이트 음주",
+    "religion_intensity": "종교 실천·중요도",
     "politics": "정치·사회관",
     "marriage_view": "결혼·연애관",
     "meeting_seriousness": "만남의 진지함",
@@ -276,11 +288,44 @@ class HardHit:
     detail: str
 
 
-def collect_hard_violations(a: LifestyleUser, b: LifestyleUser) -> list[HardHit]:
+def collect_hard_violations(
+    a: LifestyleUser,
+    b: LifestyleUser,
+    *,
+    availability_a: list[AvailabilitySlot] | None = None,
+    availability_b: list[AvailabilitySlot] | None = None,
+) -> list[HardHit]:
     hits: list[HardHit] = []
 
     def check(viewer: LifestyleUser, cand: LifestyleUser, v_lit: Literal["A", "B"], c_lit: Literal["A", "B"]) -> None:
-        if _pref_requires_non_smoker(viewer.pref_smoking) and _is_smoker_status(cand.smoking):
+        mpv = get_match_profile(viewer)
+        ps = pref_level(viewer, "pref_smoking") if mpv else None
+        if ps is not None:
+            rules = survey_semantics()["preference_policies"]["pref_smoking"]["hard_rules"]
+            sc = partner_smoking_code(cand)
+            if ps == 1 and sc >= int(rules.get("level_1_violation_if_smoking_code_gte", 1)):
+                hits.append(
+                    HardHit(
+                        viewer=v_lit,
+                        candidate=c_lit,
+                        rule="smoking",
+                        constraint_field="pref_smoking",
+                        state_field="smoking",
+                        detail=f"{v_lit}의 흡연 선호(시맨틱 단계 1·절대 비흡연)과 {c_lit}의 흡연 코드({sc})가 충돌합니다.",
+                    )
+                )
+            if ps == 5 and sc < int(rules.get("level_5_violation_if_smoking_code_lt", 2)):
+                hits.append(
+                    HardHit(
+                        viewer=v_lit,
+                        candidate=c_lit,
+                        rule="smoking",
+                        constraint_field="pref_smoking",
+                        state_field="smoking",
+                        detail=f"{v_lit}는 흡연 파트너만(시맨틱 단계 5) 허용하지만 {c_lit}의 흡연 코드({sc})가 맞지 않습니다.",
+                    )
+                )
+        elif _pref_requires_non_smoker(viewer.pref_smoking) and _is_smoker_status(cand.smoking):
             hits.append(
                 HardHit(
                     viewer=v_lit,
@@ -291,7 +336,34 @@ def collect_hard_violations(a: LifestyleUser, b: LifestyleUser) -> list[HardHit]
                     detail=f"{v_lit}의 pref_smoking(비흡연 요구)과 {c_lit}의 smoking(흡연/간헐 흡연)이 상호 배타적입니다.",
                 )
             )
-        if _pref_forbids_tattoo(viewer.pref_tattoo) and _has_tattoo_status(cand.tattoo):
+
+        pt = pref_level(viewer, "pref_tattoo") if mpv else None
+        if pt is not None:
+            tr = survey_semantics()["preference_policies"]["pref_tattoo"]["hard_rules"]
+            tc = partner_tattoo_code(cand)
+            if pt == 1 and tc >= int(tr.get("level_1_violation_if_tattoo_code_gte", 1)):
+                hits.append(
+                    HardHit(
+                        viewer=v_lit,
+                        candidate=c_lit,
+                        rule="tattoo",
+                        constraint_field="pref_tattoo",
+                        state_field="tattoo",
+                        detail=f"{v_lit}의 타투 선호(시맨틱 단계 1)와 {c_lit}의 타투 코드({tc})가 충돌합니다.",
+                    )
+                )
+            if pt == 5 and tc < int(tr.get("level_5_violation_if_tattoo_code_lt", 2)):
+                hits.append(
+                    HardHit(
+                        viewer=v_lit,
+                        candidate=c_lit,
+                        rule="tattoo",
+                        constraint_field="pref_tattoo",
+                        state_field="tattoo",
+                        detail=f"{v_lit}는 타투·문신이 있는 파트너만(시맨틱 단계 5) 허용하지만 {c_lit}의 타투 코드({tc})가 맞지 않습니다.",
+                    )
+                )
+        elif _pref_forbids_tattoo(viewer.pref_tattoo) and _has_tattoo_status(cand.tattoo):
             hits.append(
                 HardHit(
                     viewer=v_lit,
@@ -302,42 +374,114 @@ def collect_hard_violations(a: LifestyleUser, b: LifestyleUser) -> list[HardHit]
                     detail=f"{v_lit}의 pref_tattoo(타투 불가)와 {c_lit}의 tattoo(타투 있음)가 충돌합니다.",
                 )
             )
-        if _religion_conflict_same_only(viewer, cand):
-            hits.append(
-                HardHit(
-                    viewer=v_lit,
-                    candidate=c_lit,
-                    rule="religion_same_only",
-                    constraint_field="pref_religion",
-                    state_field="religion_type",
-                    detail=f"{v_lit}의 pref_religion(동일 종교만)과 {c_lit}의 religion_type이 일치하지 않습니다.",
+
+        pr = pref_level(viewer, "pref_religion") if mpv else None
+        if mpv and pr is not None:
+            if pr == 1:
+                va = _norm_str(viewer.religion_type)
+                ca = _norm_str(cand.religion_type)
+                if not va or not ca or va != ca:
+                    hits.append(
+                        HardHit(
+                            viewer=v_lit,
+                            candidate=c_lit,
+                            rule="religion_same_only",
+                            constraint_field="pref_religion",
+                            state_field="religion_type",
+                            detail=f"{v_lit}의 pref_religion(동일 종교만·시맨틱)과 {c_lit}의 religion_type이 일치하지 않습니다.",
+                        )
+                    )
+            elif pr == 5:
+                if not _is_effectively_no_religion(cand.religion_type):
+                    hits.append(
+                        HardHit(
+                            viewer=v_lit,
+                            candidate=c_lit,
+                            rule="religion_none_partner_only",
+                            constraint_field="pref_religion",
+                            state_field="religion_type",
+                            detail=f"{v_lit}의 pref_religion(무교·비종교 파트너만·시맨틱)과 {c_lit}의 religion_type이 충돌합니다.",
+                        )
+                    )
+            elif pr == 6:
+                if _is_effectively_no_religion(cand.religion_type):
+                    hits.append(
+                        HardHit(
+                            viewer=v_lit,
+                            candidate=c_lit,
+                            rule="religion_religious_partner_required",
+                            constraint_field="pref_religion",
+                            state_field="religion_type",
+                            detail=f"{v_lit}는 종교가 있는 파트너만(시맨틱 단계 6) 허용하지만 {c_lit}는 무(無) 종교에 가깝습니다.",
+                        )
+                    )
+        else:
+            if _religion_conflict_same_only(viewer, cand):
+                hits.append(
+                    HardHit(
+                        viewer=v_lit,
+                        candidate=c_lit,
+                        rule="religion_same_only",
+                        constraint_field="pref_religion",
+                        state_field="religion_type",
+                        detail=f"{v_lit}의 pref_religion(동일 종교만)과 {c_lit}의 religion_type이 일치하지 않습니다.",
+                    )
                 )
-            )
-        if _religion_conflict_none_partner_only(viewer, cand):
-            hits.append(
-                HardHit(
-                    viewer=v_lit,
-                    candidate=c_lit,
-                    rule="religion_none_partner_only",
-                    constraint_field="pref_religion",
-                    state_field="religion_type",
-                    detail=f"{v_lit}의 pref_religion(무교·비종교 파트너만)과 {c_lit}의 religion_type이 충돌합니다.",
+            if _religion_conflict_none_partner_only(viewer, cand):
+                hits.append(
+                    HardHit(
+                        viewer=v_lit,
+                        candidate=c_lit,
+                        rule="religion_none_partner_only",
+                        constraint_field="pref_religion",
+                        state_field="religion_type",
+                        detail=f"{v_lit}의 pref_religion(무교·비종교 파트너만)과 {c_lit}의 religion_type이 충돌합니다.",
+                    )
                 )
-            )
-        if _cc_violation(viewer, cand):
-            hits.append(
-                HardHit(
-                    viewer=v_lit,
-                    candidate=c_lit,
-                    rule="pref_cc",
-                    constraint_field="pref_cc",
-                    state_field="cc",
-                    detail=f"{v_lit}의 pref_cc와 {c_lit}의 cc 값이 엄격 일치하지 않습니다.",
+
+        pcl = pref_level(viewer, "pref_cc") if mpv else None
+        if pcl is None:
+            if _cc_violation(viewer, cand):
+                hits.append(
+                    HardHit(
+                        viewer=v_lit,
+                        candidate=c_lit,
+                        rule="pref_cc",
+                        constraint_field="pref_cc",
+                        state_field="cc",
+                        detail=f"{v_lit}의 pref_cc와 {c_lit}의 cc 값이 엄격 일치하지 않습니다.",
+                    )
                 )
-            )
+        elif pcl == 1:
+            if _cc_violation(viewer, cand):
+                hits.append(
+                    HardHit(
+                        viewer=v_lit,
+                        candidate=c_lit,
+                        rule="pref_cc",
+                        constraint_field="pref_cc",
+                        state_field="cc",
+                        detail=f"{v_lit}의 pref_cc(시맨틱 단계 1·엄격 일치)와 {c_lit}의 cc가 일치하지 않습니다.",
+                    )
+                )
 
     check(a, b, "A", "B")
     check(b, a, "B", "A")
+
+    # 시간: HTTP에서 `availability_a`/`availability_b`가 모두 올 때만 적용(구 calculate-match 호환).
+    # 배치는 항상 두 리스트를내며, 양쪽 []이면 레거시로 시간축 검사 생략.
+    if availability_a is not None and availability_b is not None:
+        if not availability_pair_compatible_for_matching(availability_a, availability_b):
+            hits.append(
+                HardHit(
+                    viewer="A",
+                    candidate="B",
+                    rule="availability_mismatch",
+                    constraint_field="availability",
+                    state_field="availability",
+                    detail="만남 가능 시간(동일 날짜·동일 1시간 time_slot)의 교집합이 없거나, 한쪽만 일정이 있어 동시 만남을 확정할 수 없습니다.",
+                )
+            )
     return hits
 
 
@@ -400,7 +544,9 @@ def _rule_label_ko(rule: str) -> str:
         "tattoo": "타투·문신 조건",
         "religion_same_only": "종교(동일 종교만)",
         "religion_none_partner_only": "종교(무교·비종교만)",
+        "religion_religious_partner_required": "종교(파트너 종교 필요)",
         "pref_cc": "기타(pref_cc)",
+        "availability_mismatch": "만남 가능 시간",
     }.get(rule, rule)
 
 
@@ -414,7 +560,9 @@ def build_summary_text(
 ) -> str:
     if match_status == "violated":
         rules = [str(v.get("rule", "")) for v in violations]
-        if any(r.startswith("religion") for r in rules):
+        if "religion_religious_partner_required" in rules:
+            s1 = "상대에게 종교가 있어야 한다는 조건과 맞지 않아 매칭이 권장되지 않습니다."
+        elif any(str(r).startswith("religion") for r in rules):
             s1 = "종교적 가치관·수용 조건의 차이로 매칭이 권장되지 않습니다."
         elif "smoking" in rules:
             s1 = "흡연 선호(pref_smoking)와 상대의 실제 흡연(smoking)이 맞지 않아 매칭이 권장되지 않습니다."
@@ -422,6 +570,8 @@ def build_summary_text(
             s1 = "타투·문신 관련 수용 조건과 상대 상태가 맞지 않아 매칭이 권장되지 않습니다."
         elif "pref_cc" in rules:
             s1 = "기타(pref_cc) 조건과 상대(cc) 정보가 맞지 않아 매칭이 권장되지 않습니다."
+        elif "availability_mismatch" in rules:
+            s1 = "만남 가능 시간이 겹치지 않거나 한쪽만 일정이 있어 동시 만남이 어렵습니다."
         else:
             s1 = "상호 배타적인 하드 필터가 감지되어 매칭이 권장되지 않습니다."
         if len(violations) > 1:
@@ -497,7 +647,13 @@ def build_numbered_reasons_ko(
     return lines, joined_nl, joined_sp
 
 
-def compute_match(a: LifestyleUser, b: LifestyleUser) -> dict[str, Any]:
+def compute_match(
+    a: LifestyleUser,
+    b: LifestyleUser,
+    *,
+    availability_a: list[AvailabilitySlot] | None = None,
+    availability_b: list[AvailabilitySlot] | None = None,
+) -> dict[str, Any]:
     rel_score, rel_meta = religion_soft_score_0_100(a, b)
     w_rel = float(RELIGION_SOFT_WEIGHT)
 
@@ -515,8 +671,18 @@ def compute_match(a: LifestyleUser, b: LifestyleUser) -> dict[str, Any]:
     group_a_likert_only = float((likert_manhattan_only + c_score) / 2.0)
     group_a_score = float((m_score + c_score) / 2.0)
 
-    hits = collect_hard_violations(a, b)
+    hits = collect_hard_violations(
+        a,
+        b,
+        availability_a=availability_a,
+        availability_b=availability_b,
+    )
     n_hits = len(hits)
+
+    soft_entries: list[dict[str, Any]] = []
+    if n_hits == 0:
+        soft_entries = collect_soft_penalty_entries(a, b)
+    soft_total = sum(float(e["points"]) for e in soft_entries)
 
     if n_hits > 0:
         match_status: Literal["ok", "violated"] = "violated"
@@ -524,7 +690,8 @@ def compute_match(a: LifestyleUser, b: LifestyleUser) -> dict[str, Any]:
         group_b_penalty = 100.0
     else:
         match_status = "ok"
-        final_score = max(0.0, min(100.0, group_a_score))
+        base_score = max(0.0, min(100.0, group_a_score))
+        final_score = max(0.0, min(100.0, base_score - soft_total))
         group_b_penalty = 0.0
 
     violations_out = [
@@ -572,6 +739,11 @@ def compute_match(a: LifestyleUser, b: LifestyleUser) -> dict[str, Any]:
             "top_axes_by_match_score": axes_ranked[:5],
             "bottom_axes_by_match_score": list(reversed(axes_ranked))[:5],
         },
+        "semantics": {
+            "survey_schema_version": int(survey_semantics().get("version", 1)),
+            "soft_penalties": soft_entries,
+            "soft_penalty_total": round(soft_total, 2),
+        },
     }
 
     match_report["summary_text"] = build_summary_text(
@@ -589,6 +761,15 @@ def compute_match(a: LifestyleUser, b: LifestyleUser) -> dict[str, Any]:
         axes_ranked,
         components_ranked,
     )
+    if match_status == "ok" and soft_entries:
+        idx = len(reasons_list) + 1
+        extra_body = (
+            f"선호(소프트) 조정 {len(soft_entries)}건, 합계 {soft_total:.1f}점 감점 "
+            f"(세부: match_report.semantics.soft_penalties)."
+        )
+        reasons_list = [*reasons_list, f"이유{idx}: {extra_body}"]
+        reasons_nl = "\n".join(reasons_list)
+        reasons_1l = " ".join(reasons_list)
     match_report["reasons_numbered_ko"] = reasons_list
     match_report["reasons_joined_ko"] = reasons_nl
     match_report["reasons_one_line_ko"] = reasons_1l

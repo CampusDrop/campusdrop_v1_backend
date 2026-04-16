@@ -33,7 +33,12 @@ def health() -> dict[str, str]:
 
 @app.post("/calculate-match", response_model=CalculateMatchResponse)
 def calculate_match(body: CalculateMatchRequest) -> CalculateMatchResponse:
-    result = compute_match(body.user_A, body.user_B)
+    result = compute_match(
+        body.user_A,
+        body.user_B,
+        availability_a=body.availability_a,
+        availability_b=body.availability_b,
+    )
     return CalculateMatchResponse.model_validate(result)
 
 

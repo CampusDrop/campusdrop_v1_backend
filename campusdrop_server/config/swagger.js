@@ -63,6 +63,11 @@ const swaggerDefinition = {
             description:
               'send-code 직후 저장된 인증 번호(기본 6자리; AUTH_FIXED_VERIFICATION_CODE 사용 시 그 값)',
           },
+          privacyPolicyAgreed: {
+            type: 'boolean',
+            description:
+              '개인정보처리방침 동의. **신규 이메일 가입** 또는 **`linkUuid`로 익명 계정에 이메일 연결** 시 반드시 `true`. 기존 계정 이메일 재인증만 할 때는 생략 가능.',
+          },
           linkUuid: {
             type: 'string',
             format: 'uuid',
@@ -310,6 +315,10 @@ const swaggerDefinition = {
         properties: {
           uuid: { type: 'string', format: 'uuid' },
           email: { type: 'string', nullable: true, description: '@sju.ac.kr 또는 익명 null' },
+          privacyPolicyAgreed: {
+            type: 'boolean',
+            description: 'DB `Identity.privacy_policy_agreed`',
+          },
           profile: {
             type: 'object',
             properties: {

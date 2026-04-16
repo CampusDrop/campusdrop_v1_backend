@@ -28,6 +28,8 @@ model Identity {
   /// 설문 `participantMeta.profile`에서 동기화(선택). 조회·운영 편의용.
   studentId String? @map("student_id")
   birthYear String? @map("birth_year")
+  /// 가입·이메일 연결·온보딩 시 수집. 구 가입자 마이그레이션 후 기본값 false일 수 있음.
+  privacyPolicyAgreed Boolean @default(false) @map("privacy_policy_agreed")
   createdAt DateTime @default(now())
   trait     Trait?
 

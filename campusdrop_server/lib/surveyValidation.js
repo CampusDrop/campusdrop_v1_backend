@@ -6,6 +6,7 @@
  */
 
 const { normalizeTraitGender } = require('./genderPolicy');
+const { validateCatalogAndBuildMatchProfile } = require('./surveySemanticsCatalog');
 
 const MAX_AVAILABILITY_SLOTS = 100;
 
@@ -489,6 +490,8 @@ function validateSurveyPayload(surveyData) {
     return { ok: false, error: unwrapped.error };
   }
   raw = unwrapped.raw;
+  delete raw.matchProfile;
+  delete raw.surveySchemaVersion;
 
   for (const key of Object.keys(raw)) {
     if (!ALL_KEYS_SET.has(key)) {
@@ -641,6 +644,12 @@ function validateSurveyPayload(surveyData) {
   if (pmStored) {
     data.participantMeta = pmStored;
   }
+
+  const sem = validateCatalogAndBuildMatchProfile(data);
+  if (!sem.ok) {
+    return { ok: false, error: sem.error };
+  }
+  Object.assign(data, sem.patch);
 
   return { ok: true, data };
 }

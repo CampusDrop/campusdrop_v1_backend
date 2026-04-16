@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { prisma } = require('./prisma');
 const { surveyDataToLifestyleUser } = require('./surveyToLifestyleUser');
+const { surveyDataToAvailabilitySlots } = require('./surveyAvailabilitySlots');
 const { getMatchingBatchMatchUrl } = require('./resolveMatchingServiceUrl');
 const { sendWeeklyMatchAlimtalkMock } = require('./kakaoAlimtalk');
 const { writeAccessLog } = require('./accessLog');
@@ -8,6 +9,7 @@ const {
   MIN_MATCH_SCORE,
   getMatchingPeriodStart,
   getForbiddenPairTuplesForBatch,
+  getSamePeriodLockedPairTuplesExceptUser,
   deleteMatchingsForUsersInPeriod,
 } = require('./matchPolicy');
 const { slimMatchReportForDb } = require('./slimMatchReport');
@@ -42,43 +44,71 @@ async function loadEligibleTraits() {
 }
 
 /**
- * Python `/batch-match` 호출 → DB `matchings` 저장 → kakaoId 있는 유저에 알림톡(Mock).
- * @param {{ actorType?: string, actorId?: string | null, requestIp?: string | null, requestUserAgent?: string | null }} [options] 관리자 실행 시 `actorType: 'admin'`, `actorId`: Admin.id
+ * 설문·비차단 유저를 로드한 뒤 남/여만 골라 Python `/batch-match`를 호출한다.
+ * (점수 내림차순 그리디는 Python 쪽과 동일. 각 유저에 `availability` 슬롯 배열을 포함해 시간 겹침을 적용한다.)
+ *
+ * @param {import('@prisma/client').PrismaClient} prismaClient
+ * @param {Date} periodStart
+ * @param {{ lockSamePeriodPairsExceptUserId?: string | null }} [options] 실시간 매칭 시 이번 주 타인의 짝을 금지 쌍에 합침.
+ * @returns {Promise<{ pairs: any[], skipped: boolean, skipReason?: string, batchTraitsCount: number, eligibleSurveyCount: number, url: string }>}
  */
-async function runWeeklyBatchMatch(options = {}) {
-  const actorType = options.actorType || 'job';
-  const actorId = options.actorId !== undefined ? options.actorId : null;
-  const logAction = actorType === 'admin' ? 'ADMIN_BATCH_MATCH' : 'WEEKLY_BATCH_MATCH';
+async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
+  const { lockSamePeriodPairsExceptUserId = null } = options;
+  const url = getMatchingBatchMatchUrl();
   const traits = await loadEligibleTraits();
   if (traits.length < 2) {
-    console.warn('[weeklyBatchMatch] 설문이 있는 유저가 2명 미만이라 스킵합니다.', traits.length);
-    return { skipped: true, reason: 'not_enough_users', count: traits.length };
+    return {
+      pairs: [],
+      skipped: true,
+      skipReason: 'not_enough_users',
+      batchTraitsCount: 0,
+      eligibleSurveyCount: traits.length,
+      url,
+    };
   }
 
   const batchTraits = traits.filter((t) => isBinaryTraitGender(t.gender));
   if (batchTraits.length < 2) {
-    console.warn(
-      '[weeklyBatchMatch] 남/여 성별이 모두 있는 유저가 2명 미만이라 스킵합니다.',
-      batchTraits.length,
-      '/',
-      traits.length,
-    );
     return {
+      pairs: [],
       skipped: true,
-      reason: 'not_enough_binary_gender_users',
-      count: batchTraits.length,
+      skipReason: 'not_enough_binary_gender_users',
+      batchTraitsCount: batchTraits.length,
       eligibleSurveyCount: traits.length,
+      url,
     };
   }
 
-  const url = getMatchingBatchMatchUrl();
-  const periodStartForBatch = getMatchingPeriodStart();
   let forbiddenPairs;
   try {
-    forbiddenPairs = await getForbiddenPairTuplesForBatch(prisma, periodStartForBatch);
+    forbiddenPairs = await getForbiddenPairTuplesForBatch(prismaClient, periodStart);
   } catch (err) {
-    console.error('[weeklyBatchMatch] forbidden pairs load error:', err);
+    console.error('[fetchPythonBatchPairs] forbidden pairs load error:', err);
     throw err;
+  }
+
+  /** @type {string[][]} */
+  let mergedForbidden = forbiddenPairs.slice();
+  if (lockSamePeriodPairsExceptUserId) {
+    let locked;
+    try {
+      locked = await getSamePeriodLockedPairTuplesExceptUser(
+        prismaClient,
+        periodStart,
+        lockSamePeriodPairsExceptUserId,
+      );
+    } catch (err) {
+      console.error('[fetchPythonBatchPairs] same-period locked pairs load error:', err);
+      throw err;
+    }
+    const seen = new Set(mergedForbidden.map(([a, b]) => `${a}|${b}`));
+    for (const [a, b] of locked) {
+      const k = `${a}|${b}`;
+      if (!seen.has(k)) {
+        seen.add(k);
+        mergedForbidden.push([a, b]);
+      }
+    }
   }
 
   const body = {
@@ -86,11 +116,11 @@ async function runWeeklyBatchMatch(options = {}) {
       user_id: t.id,
       gender: normalizeTraitGender(t.gender),
       profile: surveyDataToLifestyleUser(/** @type {Record<string, unknown>} */ (t.surveyData)),
+      availability: surveyDataToAvailabilitySlots(/** @type {Record<string, unknown>} */ (t.surveyData)),
     })),
-    forbidden_pairs: forbiddenPairs,
+    forbidden_pairs: mergedForbidden,
   };
 
-  let pairs;
   try {
     const { data, status } = await axios.post(url, body, {
       timeout: batchTimeoutMs(),
@@ -98,18 +128,63 @@ async function runWeeklyBatchMatch(options = {}) {
       validateStatus: () => true,
     });
     if (status < 200 || status >= 300) {
-      console.error('[weeklyBatchMatch] Python 오류', { status, url, data });
+      console.error('[fetchPythonBatchPairs] Python 오류', { status, url, data });
       if (status === 422 && data != null) {
         const s = typeof data === 'string' ? data : JSON.stringify(data);
         throw new Error(`BATCH_MATCH_HTTP_422:${s.slice(0, 1500)}`);
       }
       throw new Error(`BATCH_MATCH_HTTP_${status}`);
     }
-    pairs = Array.isArray(data.pairs) ? data.pairs : [];
+    const pairs = Array.isArray(data.pairs) ? data.pairs : [];
+    return {
+      pairs,
+      skipped: false,
+      batchTraitsCount: batchTraits.length,
+      eligibleSurveyCount: traits.length,
+      url,
+    };
   } catch (err) {
-    console.error('[weeklyBatchMatch] 요청 실패:', err.message);
+    console.error('[fetchPythonBatchPairs] 요청 실패:', err.message);
     throw err;
   }
+}
+
+/**
+ * Python `/batch-match` 호출 → DB `matchings` 저장 → kakaoId 있는 유저에 알림톡(Mock).
+ * @param {{ actorType?: string, actorId?: string | null, requestIp?: string | null, requestUserAgent?: string | null }} [options] 관리자 실행 시 `actorType: 'admin'`, `actorId`: Admin.id
+ */
+async function runWeeklyBatchMatch(options = {}) {
+  const actorType = options.actorType || 'job';
+  const actorId = options.actorId !== undefined ? options.actorId : null;
+  const logAction = actorType === 'admin' ? 'ADMIN_BATCH_MATCH' : 'WEEKLY_BATCH_MATCH';
+  const periodStartForBatch = getMatchingPeriodStart();
+  const fetched = await fetchPythonBatchPairs(prisma, periodStartForBatch);
+
+  if (fetched.skipped) {
+    if (fetched.skipReason === 'not_enough_users') {
+      console.warn('[weeklyBatchMatch] 설문이 있는 유저가 2명 미만이라 스킵합니다.', fetched.eligibleSurveyCount);
+      return { skipped: true, reason: 'not_enough_users', count: fetched.eligibleSurveyCount };
+    }
+    if (fetched.skipReason === 'not_enough_binary_gender_users') {
+      console.warn(
+        '[weeklyBatchMatch] 남/여 성별이 모두 있는 유저가 2명 미만이라 스킵합니다.',
+        fetched.batchTraitsCount,
+        '/',
+        fetched.eligibleSurveyCount,
+      );
+      return {
+        skipped: true,
+        reason: 'not_enough_binary_gender_users',
+        count: fetched.batchTraitsCount,
+        eligibleSurveyCount: fetched.eligibleSurveyCount,
+      };
+    }
+  }
+
+  const pairs = fetched.pairs;
+  const url = fetched.url;
+  const batchTraitsCount = fetched.batchTraitsCount;
+  const traitsCount = fetched.eligibleSurveyCount;
 
   const matchedAt = new Date();
   const periodStart = periodStartForBatch;
@@ -128,7 +203,8 @@ async function runWeeklyBatchMatch(options = {}) {
         matchReport,
       };
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score);
   if (insertRows.length > 0) {
     const userIds = [...new Set(insertRows.flatMap((r) => [r.userAId, r.userBId]))];
     await prisma.$transaction(async (tx) => {
@@ -167,22 +243,22 @@ async function runWeeklyBatchMatch(options = {}) {
     userAgent: options.requestUserAgent || null,
     metadata: {
       pairCount: insertRows.length,
-      userCount: batchTraits.length,
-      eligibleSurveyCount: traits.length,
+      userCount: batchTraitsCount,
+      eligibleSurveyCount: traitsCount,
       pythonUrl: url,
       periodStart: insertRows.length > 0 ? insertRows[0].periodStart?.toISOString?.() ?? null : null,
     },
   });
 
   console.log(
-    `[weeklyBatchMatch] 완료: 배치대상(남/여) ${batchTraits.length}명(설문보유 ${traits.length}명), 쌍 ${insertRows.length}건, 알림 대상(kakaoId 보유) 처리`,
+    `[weeklyBatchMatch] 완료: 배치대상(남/여) ${batchTraitsCount}명(설문보유 ${traitsCount}명), 쌍 ${insertRows.length}건, 알림 대상(kakaoId 보유) 처리`,
   );
   return {
     skipped: false,
-    userCount: batchTraits.length,
-    eligibleSurveyCount: traits.length,
+    userCount: batchTraitsCount,
+    eligibleSurveyCount: traitsCount,
     pairCount: insertRows.length,
   };
 }
 
-module.exports = { runWeeklyBatchMatch, loadEligibleTraits };
+module.exports = { runWeeklyBatchMatch, loadEligibleTraits, fetchPythonBatchPairs };

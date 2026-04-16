@@ -44,6 +44,8 @@ const ALL_KEYS = [
   'pref_smoking',
   'pref_tattoo',
   'pref_religion',
+  'self_care_habit',
+  'religion_acceptance',
   'availability',
 ];
 
@@ -60,6 +62,8 @@ const STRING_KEYS = new Set([
   'pref_smoking',
   'pref_tattoo',
   'pref_religion',
+  'self_care_habit',
+  'religion_acceptance',
 ]);
 
 /** 척도(1~5 정수) — religion_intensity 포함, 종교 없음일 때는 값 생략 가능 */

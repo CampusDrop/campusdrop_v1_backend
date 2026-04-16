@@ -106,9 +106,27 @@ function validateCatalogAndBuildMatchProfile(data) {
     }
   }
 
+  const selfCareLabel = String(data.self_care_habit).trim();
+  if (!choiceLabelAllowed('self_care_habit', selfCareLabel)) {
+    return {
+      ok: false,
+      error: `self_care_habit 값이 시맨틱 카탈로그에 없습니다: ${selfCareLabel}`,
+    };
+  }
+  const religionAcceptanceLabel = String(data.religion_acceptance).trim();
+  if (!choiceLabelAllowed('religion_acceptance', religionAcceptanceLabel)) {
+    return {
+      ok: false,
+      error: `religion_acceptance 값이 시맨틱 카탈로그에 없습니다: ${religionAcceptanceLabel}`,
+    };
+  }
+
   const smokingCode = spec.choice_label_maps.smoking[smokingLabel];
   const tattooCode = spec.choice_label_maps.tattoo[tattooLabel];
   const religionCode = spec.choice_label_maps.religion_type[religionLabel];
+  const selfCareCode = spec.choice_label_maps.self_care_habit[selfCareLabel];
+  const religionAcceptanceCode =
+    spec.choice_label_maps.religion_acceptance[religionAcceptanceLabel];
 
   const matchProfile = {
     smoking: { code: smokingCode, label: smokingLabel },
@@ -130,6 +148,8 @@ function validateCatalogAndBuildMatchProfile(data) {
       ...resolvePreferenceLevel('pref_cc', String(data.pref_cc).trim()),
       label: String(data.pref_cc).trim(),
     },
+    self_care_habit: { code: selfCareCode, label: selfCareLabel },
+    religion_acceptance: { code: religionAcceptanceCode, label: religionAcceptanceLabel },
   };
 
   return {

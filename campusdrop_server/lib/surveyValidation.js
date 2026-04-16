@@ -3,6 +3,9 @@
  * 척도(scale): 정수 1~5. 문자열 옵션(string): 공백만 있는 문자열 불가.
  * availability: 만남 가능 일정 — 날짜(YYYY-MM-DD) + 1시간 단위 구간(HH:MM-HH:MM).
  * gender: 남성/여성 등 → DB·매칭용 `male` | `female` 정규화(`../lib/genderPolicy`).
+ *
+ * 프론트 와이어: `alcohol`·`skinship_limit`·`self_care_habit`·`pref_*`는 문자열 "1"~"5" 허용,
+ * `date_drinking`은 "마심"|"안 마심"|"상관없음"(및 레거시 한글) 등 — `config/surveySemantics.v1.json` 참고.
  */
 
 const { normalizeTraitGender } = require('./genderPolicy');
@@ -595,15 +598,16 @@ function validateSurveyPayload(surveyData) {
     /**
      * - alcohol, skinship_limit: 한글 선택지 또는 UI 척도 1~5(number / "1"~"5")
      * - date_drinking: 프론트 명세상 한글 string; 레거시·시드는 1~5 정수 허용
+     * - 프론트가 척도를 문자열 "1"~"5"로 보내는 경우 한글보다 먼저 정수로 해석한다.
      */
     if (key === 'alcohol' || key === 'skinship_limit' || key === 'date_drinking') {
-      if (isNonEmptyString(value)) {
-        data[key] = typeof value === 'string' ? value.trim() : value;
-        continue;
-      }
       const likert = coerceScaleInt(value);
       if (likert !== null) {
         data[key] = likert;
+        continue;
+      }
+      if (isNonEmptyString(value)) {
+        data[key] = typeof value === 'string' ? value.trim() : value;
         continue;
       }
       return {

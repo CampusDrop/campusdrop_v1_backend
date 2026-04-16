@@ -43,6 +43,26 @@ function resolvePreferenceLevel(field, label) {
   const block = spec.preference_policies[field];
   if (!block || !Array.isArray(block.levels)) return null;
   const t = label.trim();
+  if (/^\d+$/.test(t)) {
+    let idNum = Number(t);
+    if (field === 'pref_cc') {
+      if (!Number.isInteger(idNum) || idNum < 1 || idNum > 5) {
+        idNum = NaN;
+      } else if (idNum <= 2) {
+        idNum = 1;
+      } else if (idNum === 3) {
+        idNum = 3;
+      } else {
+        idNum = 2;
+      }
+    }
+    if (Number.isInteger(idNum)) {
+      const rowById = block.levels.find((r) => r.id === idNum);
+      if (rowById) {
+        return { level: rowById.id, tier: rowById.tier };
+      }
+    }
+  }
   for (const row of block.levels) {
     const labels = Array.isArray(row.labels) ? row.labels : [];
     if (labels.includes(t)) {
@@ -106,7 +126,13 @@ function validateCatalogAndBuildMatchProfile(data) {
     }
   }
 
-  const selfCareLabel = String(data.self_care_habit).trim();
+  let selfCareLabel = String(data.self_care_habit).trim();
+  const selfCareMap = spec.choice_label_maps.self_care_habit;
+  if (selfCareMap && typeof selfCareMap === 'object' && /^[1-5]$/.test(selfCareLabel)) {
+    const code = Number(selfCareLabel);
+    const hit = Object.keys(selfCareMap).find((k) => selfCareMap[k] === code);
+    if (hit) selfCareLabel = hit;
+  }
   if (!choiceLabelAllowed('self_care_habit', selfCareLabel)) {
     return {
       ok: false,

@@ -1258,6 +1258,11 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
 
 **쿼리:** `limit`(기본 100, 최대 500), `offset`(기본 0).
 
+각 유저에 `Trait.surveyData`에 저장된 만남 가능 시간을 함께 반환합니다. 설문이 없거나 필드가 없으면 `null`입니다.
+
+- **`availability`:** `{ "date": "YYYY-MM-DD", "time_slot": "HH:MM-HH:MM" }[]` (정규화 저장분, 전체 슬롯).
+- **`matchAvailability`:** 제출 시 클라이언트가 보낸 객체가 있으면 그대로(예: `availableSlots`). 없으면 `null`.
+
 **응답 `200`**
 
 ```json
@@ -1279,7 +1284,20 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
       "createdAt": "2026-04-01T00:00:00.000Z",
       "hasSurvey": true,
       "surveyUpdatedAt": "2026-04-10T08:00:00.000Z",
-      "gender": "male"
+      "gender": "male",
+      "availability": [
+        { "date": "2026-04-20", "time_slot": "11:00-12:00" },
+        { "date": "2026-04-20", "time_slot": "14:00-15:00" }
+      ],
+      "matchAvailability": {
+        "availableSlots": [
+          {
+            "date": "2026-04-20",
+            "hourStart": 11,
+            "hourEnd": 12
+          }
+        ]
+      }
     }
   ]
 }

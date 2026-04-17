@@ -30,6 +30,32 @@ function isUuid(s) {
 }
 
 /**
+ * `Trait.surveyData`에서 만남 가능 시간만 꺼내 목록 응답용으로 사용한다.
+ * @param {unknown} surveyData
+ * @returns {{ availability: unknown[] | null, matchAvailability: Record<string, unknown> | null }}
+ */
+function meetingAvailabilityFromSurveyData(surveyData) {
+  if (
+    surveyData === null ||
+    surveyData === undefined ||
+    typeof surveyData !== 'object' ||
+    Array.isArray(surveyData)
+  ) {
+    return { availability: null, matchAvailability: null };
+  }
+  const o = /** @type {Record<string, unknown>} */ (surveyData);
+  const av = o.availability;
+  const ma = o.matchAvailability;
+  return {
+    availability: Array.isArray(av) ? av : null,
+    matchAvailability:
+      ma !== undefined && ma !== null && typeof ma === 'object' && !Array.isArray(ma)
+        ? /** @type {Record<string, unknown>} */ (ma)
+        : null,
+  };
+}
+
+/**
  * @openapi
  * /api/admin/login:
  *   post:
@@ -138,7 +164,7 @@ router.use(adminAuthMiddleware);
  * /api/admin/users:
  *   get:
  *     tags: [Admin]
- *     summary: 모든 유저(Identity) 목록
+ *     summary: 모든 유저(Identity) 목록 (만남 가능 시간 `availability`·`matchAvailability` 포함)
  *     security:
  *       - AdminBearerAuth: []
  */
@@ -175,26 +201,33 @@ router.get('/users', async (req, res) => {
       }),
     ]);
 
-    const users = rows.map((row) => ({
-      id: row.id,
-      email: row.email,
-      /** `email`이 있으면 학교 이메일이 연결된 것으로 간주(증빙만 올리고 이메일 미연결 계정은 null) */
-      emailVerified: Boolean(row.email),
-      schoolImageVerified: Boolean(row.schoolProofVerifiedAt),
-      schoolProofVerifiedAt: row.schoolProofVerifiedAt,
-      studentId: row.studentId,
-      birthYear: row.birthYear,
-      kakaoLinked: Boolean(row.kakaoId && String(row.kakaoId).trim()),
-      blockedAt: row.blockedAt,
-      createdAt: row.createdAt,
-      hasSurvey:
-        row.trait &&
-        row.trait.surveyData !== null &&
-        row.trait.surveyData !== undefined &&
-        typeof row.trait.surveyData === 'object',
-      surveyUpdatedAt: row.trait?.updatedAt ?? null,
-      gender: row.trait?.gender ?? null,
-    }));
+    const users = rows.map((row) => {
+      const { availability, matchAvailability } = meetingAvailabilityFromSurveyData(
+        row.trait?.surveyData,
+      );
+      return {
+        id: row.id,
+        email: row.email,
+        /** `email`이 있으면 학교 이메일이 연결된 것으로 간주(증빙만 올리고 이메일 미연결 계정은 null) */
+        emailVerified: Boolean(row.email),
+        schoolImageVerified: Boolean(row.schoolProofVerifiedAt),
+        schoolProofVerifiedAt: row.schoolProofVerifiedAt,
+        studentId: row.studentId,
+        birthYear: row.birthYear,
+        kakaoLinked: Boolean(row.kakaoId && String(row.kakaoId).trim()),
+        blockedAt: row.blockedAt,
+        createdAt: row.createdAt,
+        hasSurvey:
+          row.trait &&
+          row.trait.surveyData !== null &&
+          row.trait.surveyData !== undefined &&
+          typeof row.trait.surveyData === 'object',
+        surveyUpdatedAt: row.trait?.updatedAt ?? null,
+        gender: row.trait?.gender ?? null,
+        availability,
+        matchAvailability,
+      };
+    });
 
     await writeAccessLog({
       actorType: 'admin',

@@ -93,6 +93,7 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/auth', require('./routes/schoolProof'));
 app.use('/api/kakao', require('./routes/kakao'));
 app.use('/api/stats', require('./routes/stats'));
+app.use('/api/landing-like', require('./routes/landingLike'));
 app.use('/api/survey', requireUserUuid, requireImageUuidAccessForSurveyApis, require('./routes/survey'));
 app.use('/api/match', requireUserUuid, requireImageUuidAccessForSurveyApis, require('./routes/match'));
 

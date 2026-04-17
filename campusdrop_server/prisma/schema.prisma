@@ -200,3 +200,12 @@ model AnalyticsSessionUserLink {
   @@index([userUuid])
   @@map("analytics_session_user_links")
 }
+
+/// 랜딩 화면 더블탭 좋아요 합계. 행 키는 고정(`default`) 한 줄만 사용합니다.
+model LandingLikeCounter {
+  key       String   @id @map("key")
+  likeCount Int      @default(0) @map("like_count")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("landing_like_counters")
+}

@@ -16,6 +16,7 @@ const swaggerDefinition = {
     },
     { name: 'Auth', description: '이메일 인증·세션·증빙·PIN 등' },
     { name: 'Stats', description: '공개 랜딩용 통계(인증 불필요)' },
+    { name: 'Landing', description: '랜딩 화면 공개 API(인증 불필요)' },
     {
       name: 'Analytics',
       description:
@@ -222,6 +223,26 @@ const swaggerDefinition = {
           },
         },
       },
+      SurveyCurrentResponse: {
+        type: 'object',
+        properties: {
+          userId: { type: 'string', format: 'uuid', description: 'Identity.id = Trait.id' },
+          hasSurvey: { type: 'boolean', description: '`Trait.surveyData`가 객체로 저장돼 있으면 true' },
+          surveyData: {
+            type: 'object',
+            nullable: true,
+            additionalProperties: true,
+            description: 'DB 저장본(검증·정규화 후). 없으면 null',
+          },
+          gender: { type: 'string', nullable: true, description: '`Trait.gender`' },
+          updatedAt: {
+            type: 'string',
+            format: 'date-time',
+            nullable: true,
+            description: '`Trait.updatedAt`',
+          },
+        },
+      },
       MatchRequestResponse: {
         type: 'object',
         properties: {
@@ -367,6 +388,20 @@ const swaggerDefinition = {
           description: { type: 'string' },
         },
       },
+      LandingLikeGetResponse: {
+        type: 'object',
+        required: ['likeCount'],
+        properties: {
+          likeCount: { type: 'integer', example: 1204 },
+        },
+      },
+      LandingLikeIncrementResponse: {
+        type: 'object',
+        required: ['likeCount'],
+        properties: {
+          likeCount: { type: 'integer', example: 1205, description: '`POST` 직후 전역 합계' },
+        },
+      },
       AnalyticsAcceptedResponse: {
         type: 'object',
         properties: {
@@ -510,6 +545,7 @@ const apis = [
   path.join(__dirname, '..', 'routes', 'match.js'),
   path.join(__dirname, '..', 'routes', 'kakao.js'),
   path.join(__dirname, '..', 'routes', 'analytics.js'),
+  path.join(__dirname, '..', 'routes', 'landingLike.js'),
 ];
 
 const swaggerOptions = {

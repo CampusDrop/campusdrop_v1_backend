@@ -6,9 +6,11 @@ Express 서버 진입점: `campusdrop_server/index.js`. 기본 포트는 환경 
 |------|------|
 | Base URL (로컬) | `http://localhost:{PORT}` |
 | OpenAPI JSON | `GET /openapi.json` |
-| Swagger UI | `GET /api-docs` |
+| Swagger UI | `GET /api-docs` (HTML UI, 브라우저용) |
+| 정적 파일 | `GET /assets/*` — `campusdrop_server/assets` (로그인 메일 로고 등; 프로덕션에서 캐시 `max-age` 적용) |
 | JSON 본문(일반 라우트) | `Content-Type: application/json` 권장 |
 | 분석 전용 바디 상한 | `/api/analytics/*` 만 `ANALYTICS_JSON_BODY_MAX_BYTES`(기본 **512KiB**) |
+| 엔드포인트 색인 | [HTTP 경로 일람](#http-경로-일람) |
 
 ### CORS
 
@@ -23,13 +25,15 @@ Express 서버 진입점: `campusdrop_server/index.js`. 기본 포트는 환경 
 3. [인증 `/api/auth`](#인증-apiauth)
 4. [앱 분석 `/api/analytics`](#앱-분석-apianalytics)
 5. [통계 `/api/stats`](#통계-apistats)
-6. [카카오 `/api/kakao`](#카카오-apikakao)
-7. [설문 `/api/survey`](#설문-apisurvey)
-8. [매칭 `/api/match`](#매칭-apimatch)
-9. [관리자 `/api/admin`](#관리자-apiadmin)
-10. [백그라운드 작업 (HTTP 아님)](#백그라운드-작업-http-아님)
-11. [환경 변수](#환경-변수)
-12. [변경 이력](#변경-이력)
+6. [랜딩 좋아요 `/api/landing-like`](#랜딩-좋아요-apilanding-like)
+7. [카카오 `/api/kakao`](#카카오-apikakao)
+8. [설문 `/api/survey`](#설문-apisurvey)
+9. [매칭 `/api/match`](#매칭-apimatch)
+10. [관리자 `/api/admin`](#관리자-apiadmin)
+11. [백그라운드 작업 (HTTP 아님)](#백그라운드-작업-http-아님)
+12. [환경 변수](#환경-변수)
+13. [HTTP 경로 일람](#http-경로-일람)
+14. [변경 이력](#변경-이력)
 
 ---
 
@@ -793,6 +797,40 @@ Express 서버 진입점: `campusdrop_server/index.js`. 기본 포트는 환경 
 
 ---
 
+## 랜딩 좋아요 `/api/landing-like`
+
+**요약:** 전역 좋아요 수만 `landing_like_counters` 한 줄(`key` = `default`)에 둡니다. **`POST`마다 +1**이며, 클라이언트·브라우저 식별은 하지 않습니다. 새로고침 후에도 같은 방식으로 호출하면 또 올라갑니다.
+
+**인증:** 없음.
+
+### GET `/api/landing-like`
+
+**응답 `200`**
+
+```json
+{
+  "likeCount": 1204
+}
+```
+
+---
+
+### POST `/api/landing-like`
+
+**요약:** 합계 **+1**. 본문 없음(`{}` 또는 빈 본문 가능).
+
+**응답 `200`**
+
+```json
+{
+  "likeCount": 1205
+}
+```
+
+**응답 `500`:** 서버 오류 시 `{ "error": "..." }`.
+
+---
+
 ## 카카오 `/api/kakao`
 
 ### POST `/api/kakao/webhook`
@@ -853,6 +891,30 @@ Express 서버 진입점: `campusdrop_server/index.js`. 기본 포트는 환경 
 ## 설문 `/api/survey`
 
 **인증:** `x-user-uuid` 필수. 이메일이 비어 있으면 `imageUuidAccessUntil` 유효 기간 내에만 허용(라우트 내부 `403` 메시지 참고).
+
+### GET `/api/survey/me`
+
+**요약:** 현재 헤더 UUID(`Identity.id`)에 연결된 **`Trait.surveyData`** 를 그대로 돌려줍니다. 설문을 한 번도 저장하지 않았으면 `hasSurvey: false`, `surveyData: null`입니다.
+
+**접근 조건:** `POST /api/survey/submit` 과 동일 — 학교 이메일(`@sju.ac.kr`)이 연결되어 있거나, `imageUuidAccessUntil` 이 아직 유효해야 합니다. 그렇지 않으면 아래와 같은 **`403`** (이미지 전용 세션 만료는 전역 미들웨어에서 `IMAGE_UUID_ACCESS_EXPIRED`).
+
+**응답 `200`**
+
+```json
+{
+  "userId": "550e8400-e29b-41d4-a716-446655440000",
+  "hasSurvey": true,
+  "surveyData": {
+    "surveyAnswers": {},
+    "gender": "male",
+    "availability": []
+  },
+  "gender": "male",
+  "updatedAt": "2026-04-10T08:00:00.000Z"
+}
+```
+
+(`surveyData`는 실제 DB에 들어 있는 설문 JSON입니다. `Trait` 행이 없으면 `hasSurvey` false, `surveyData`·`gender`·`updatedAt` 은 null.)
 
 ### POST `/api/survey/submit`
 
@@ -1649,10 +1711,14 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
 
 ## 환경 변수
 
+루트 `.env.example` 과 코드 기준. 생략 시 기본값은 구현을 따릅니다.
+
 | 변수 | 설명 |
 |------|------|
 | `PORT` | HTTP 포트 (기본 3000) |
 | `HOST` | 바인드 주소 (기본 `0.0.0.0`) |
+| `PUBLIC_API_URL` | 로그·이메일 등에 쓰는 공개 API 베이스 URL(선택). 비우면 서버 로그에 바인딩 URL 안내 |
+| `TRUST_PROXY` | `1`/`true`/`yes` 이면 `express` `trust proxy` 1 — 리버스 프록시 뒤 IP·분석 레이트리밋용 |
 | `DATABASE_URL` | PostgreSQL (Prisma) |
 | `REDIS_URL` | Redis (PIN·카카오 웹훅). 기본 `redis://127.0.0.1:6379` |
 | `MATCHING_SERVICE_URL` | Python 베이스 URL (`lib/resolveMatchingServiceUrl.js`) |
@@ -1662,8 +1728,95 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
 | `MATCHING_BATCH_TIMEOUT_MS` | 기본 **120000** |
 | `CORS_ORIGINS` | 쉼표 구분 추가 허용 Origin |
 | `ADMIN_CORS_ORIGINS` | 관리자 콘솔 등 추가 Origin |
-| `ADMIN_JWT_SECRET` / `ADMIN_PASSWORD` | 관리자 JWT |
-| `AUTH_REGISTRATION_JWT_SECRET` 등 | `complete-registration` 토큰 검증 |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 관리자 계정 시드·로그인 (`npm run db:seed` 등) |
+| `ADMIN_JWT_SECRET` / `ADMIN_JWT_EXPIRES_SEC` | 관리자 JWT 서명·만료(초, 기본 28800) |
+| `AUTH_REGISTRATION_JWT_SECRET` / `AUTH_REGISTRATION_JWT_EXPIRES_SEC` | 가입 완료 JWT (`complete-registration` 등) |
+| `AUTH_FIXED_VERIFICATION_CODE` | 설정 시 항상 해당 코드만 유효, 메일 생략(개발 전용) |
+| `EMAIL_TRANSPORT`·`SMTP_*` / `SES_*` | 인증 메일 발송 (`campusdrop_server/lib/mailer` 등) |
+| `EMAIL_LOGO_URL` | 메일 HTML 로고 URL(비우면 `PUBLIC_API_URL` + `/assets/logo.png` 등) |
+| `SCHOOL_PROOF_MAX_BYTES` | 학교 증빙 업로드 최대 크기(바이트, 기본 5MB) |
+| `ANALYTICS_JSON_BODY_MAX_BYTES` | `/api/analytics/*` JSON 본문 상한(기본 512KiB) |
+| `ANALYTICS_MAX_EVENTS_PER_REQUEST` 등 | 분석 API 한도·레이트리밋(`.env.example` 주석 참고) |
+
+---
+
+## HTTP 경로 일람
+
+`campusdrop_server/index.js` 및 `routes/*.js` 기준(미들웨어는 **굵게**). 명세 본문은 아래 각 절을 따릅니다.
+
+### 서버·문서
+
+| 메서드 | 경로 | 인증 | 비고 |
+|--------|------|------|------|
+| `GET` | `/` | 없음 | 헬스 |
+| `GET` | `/openapi.json` | 없음 | OpenAPI 3.0 JSON |
+| `GET` | `/api-docs` | 없음 | Swagger UI |
+| `GET` | `/assets/*` | 없음 | 정적 파일 |
+
+### `/api/analytics`
+
+| 메서드 | 경로 | 인증 | 비고 |
+|--------|------|------|------|
+| `POST` | `/api/analytics/events` | 없음 | 본문 상한 `ANALYTICS_JSON_BODY_MAX_BYTES` |
+| `POST` | `/api/analytics/heartbeat` | 없음 | 동일 |
+| `POST` | `/api/analytics/interaction` | 없음 | 동일 |
+| `POST` | `/api/analytics/batch` | 없음 | 동일 |
+
+### `/api/auth` (`routes/auth.js` + `authOnboarding.js` + `schoolProof.js`)
+
+| 메서드 | 경로 | 인증 | 비고 |
+|--------|------|------|------|
+| `POST` | `/api/auth/send-code` | 없음 | |
+| `POST` | `/api/auth/verify-code` | 없음 | |
+| `POST` | `/api/auth/logout` | 없음 | |
+| `GET` | `/api/auth/pin` | **`x-user-uuid`** | |
+| `GET` | `/api/auth/me` | **`x-user-uuid`** | |
+| `POST` | `/api/auth/complete-registration` | 없음 | `multipart/form-data` |
+| `POST` | `/api/auth/complete-anonymous-onboarding` | 없음 | `multipart/form-data` |
+| `POST` | `/api/auth/school-proof` | **`x-user-uuid`** | `multipart/form-data` |
+| `GET` | `/api/auth/school-proof/status` | **`x-user-uuid`** | |
+
+### 기타 공개 API
+
+| 메서드 | 경로 | 인증 | 비고 |
+|--------|------|------|------|
+| `POST` | `/api/kakao/webhook` | 없음 | 카카오 스킬 |
+| `GET` | `/api/stats/excitement-count` | 없음 | |
+| `GET` | `/api/landing-like` | 없음 | 전역 `likeCount` |
+| `POST` | `/api/landing-like` | 없음 | 합계 +1 |
+
+### `/api/survey` (`index.js`에서 **`requireUserUuid`** + **`requireImageUuidAccessForSurveyApis`**)
+
+| 메서드 | 경로 | 인증 | 비고 |
+|--------|------|------|------|
+| `GET` | `/api/survey/me` | **`x-user-uuid`** | 이미지 세션 만료 시 `403` 가능 |
+| `POST` | `/api/survey/submit` | **`x-user-uuid`** | 동일 |
+
+### `/api/match` (설문과 동일 미들웨어)
+
+| 메서드 | 경로 | 인증 | 비고 |
+|--------|------|------|------|
+| `GET` | `/api/match/test` | **`x-user-uuid`** | Python `calculate-match` 프록시 |
+| `POST` | `/api/match/request` | **`x-user-uuid`** | Python `batch-match` 동일 로직 |
+
+### `/api/admin` (로그인 제외 **`Authorization: Bearer`**)
+
+| 메서드 | 경로 | 인증 | 비고 |
+|--------|------|------|------|
+| `POST` | `/api/admin/login` | 없음 | |
+| `GET` | `/api/admin/users` | Bearer | |
+| `GET` | `/api/admin/users/:id` | Bearer | |
+| `DELETE` | `/api/admin/users/:id` | Bearer | |
+| `GET` | `/api/admin/surveys` | Bearer | |
+| `GET` | `/api/admin/matches` | Bearer | |
+| `GET` | `/api/admin/matches/unmatched` | Bearer | |
+| `DELETE` | `/api/admin/matches/:id` | Bearer | |
+| `POST` | `/api/admin/matches/batch-run` | Bearer | |
+| `POST` | `/api/admin/matches/force` | Bearer | |
+| `GET` | `/api/admin/school-proofs` | Bearer | |
+| `GET` | `/api/admin/school-proofs/:id/file` | Bearer | 이미지 바이너리 |
+| `POST` | `/api/admin/school-proofs/:id/approve` | Bearer | |
+| `POST` | `/api/admin/school-proofs/:id/reject` | Bearer | |
 
 ---
 
@@ -1671,6 +1824,7 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
 
 | 날짜 | 내용 |
 |------|------|
+| 2026-04-18 | 랜딩 좋아요: 전역 `POST /api/landing-like` +1·`GET` 조회만(`clientKey`/토글·`landing_like_client_toggles` 제거). [HTTP 경로 일람](#http-경로-일람)·상단 표·환경 변수 보강. |
 | 2026-04-17 | 전 엔드포인트를 구현(`routes/*.js`, `index.js`)과 정합되도록 통합. 요청·응답 예시 JSON 보강. CORS·`POST /api/match/request` 응답 필드(`periodStart`/`periodEnd`)·관리자·분석·온보딩 API 반영. |
 | 2026-04-16 | `privacy_policy_agreed` / `privacyPolicyAgreed` 도입. `verify-code`, `complete-registration`, `complete-anonymous-onboarding`, `GET /api/auth/me` 반영. |
 

@@ -9,8 +9,23 @@ const path = require('path');
 /** @type {any} */
 let _cache = null;
 
+const SEMANTICS_FILE = 'surveySemantics.v1.json';
+
+/**
+ * - Docker(`Dockerfile.server`): `config/`가 `/app/config`에 복사됨 → `lib/../config`.
+ * - 모노레포에서 `campusdrop_server` 기준 실행: 레포 루트 `config/` → `lib/../../config`.
+ */
 function semanticsPath() {
-  return path.join(__dirname, '..', '..', 'config', 'surveySemantics.v1.json');
+  const candidates = [
+    path.join(__dirname, '..', 'config', SEMANTICS_FILE),
+    path.join(__dirname, '..', '..', 'config', SEMANTICS_FILE),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      return p;
+    }
+  }
+  throw new Error(`survey semantics JSON not found. Tried:\n  ${candidates.join('\n  ')}`);
 }
 
 function loadSemantics() {

@@ -10,6 +10,8 @@ COPY campusdrop_server/prisma ./prisma
 RUN npm ci
 
 COPY campusdrop_server/ ./
+# 모노레포 루트 `config/` — 컨테이너에서는 `lib/../config`(surveySemanticsCatalog.js)로 참조
+COPY config/surveySemantics.v1.json ./config/surveySemantics.v1.json
 RUN npx prisma generate
 
 COPY entrypoint.server.sh ./entrypoint.sh

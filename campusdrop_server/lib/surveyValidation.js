@@ -4,8 +4,7 @@
  * availability: 만남 가능 일정 — 날짜(YYYY-MM-DD) + 1시간 단위 구간(HH:MM-HH:MM).
  * gender: 남성/여성 등 → DB·매칭용 `male` | `female` 정규화(`../lib/genderPolicy`).
  *
- * 프론트 와이어: `alcohol`·`skinship_limit`·`self_care_habit`·`pref_*`는 문자열 "1"~"5" 허용,
- * `date_drinking`은 "마심"|"안 마심"|"상관없음"(및 레거시 한글) 등 — `config/surveySemantics.v1.json` 참고.
+ * 허용 문자열·선호 정책: `config/surveySemantics.v1.json`, 카탈로그 적용: `surveySemanticsCatalog.js`.
  */
 
 const { normalizeTraitGender } = require('./genderPolicy');
@@ -13,70 +12,61 @@ const { validateCatalogAndBuildMatchProfile } = require('./surveySemanticsCatalo
 
 const MAX_AVAILABILITY_SLOTS = 100;
 
+/** 6단계 설문 UI(surveySteps id) 기준 */
 const ALL_KEYS = [
   'energy',
-  'weekend',
-  'pattern',
-  'trend',
-  'alcohol',
+  'sleep_habit',
+  'morning_night',
+  'cleanliness',
+  'spending_style',
+  'meal_style',
   'smoking',
-  'tattoo',
-  'contact',
-  'meeting',
-  'planning',
-  'affection',
-  'date_expense',
-  'friends',
-  'jealousy',
-  'skinship_speed',
-  'skinship_limit',
-  'date_drinking',
-  'politics',
+  'drinking_freq',
+  'exercise',
+  'caffeine',
+  'screen_time',
+  'social_battery',
+  'humor_importance',
+  'conflict_style',
+  'text_call_pref',
+  'reply_speed',
   'religion_type',
   'religion_intensity',
-  'marriage_view',
-  'meeting_seriousness',
-  'job_view',
-  'spending',
-  'conflict',
-  'empathy',
-  'honesty',
-  'trust',
+  'politics_importance',
+  'family_plan_view',
+  'meet_frequency',
+  'date_cost_split',
+  'commitment',
+  'public_affection',
+  'alone_time_need',
+  'campus_date',
+  'study_together',
+  'age_gap',
+  'feedback_opt_in',
   'gender',
-  'pref_cc',
-  'pref_smoking',
-  'pref_tattoo',
-  'pref_religion',
-  'self_care_habit',
   'availability',
 ];
 
 const ALL_KEYS_SET = new Set(ALL_KEYS);
 
-/** 문자열 선택지 */
 const STRING_KEYS = new Set([
-  'alcohol',
   'smoking',
-  'tattoo',
   'religion_type',
-  'skinship_limit',
-  'pref_cc',
-  'pref_smoking',
-  'pref_tattoo',
-  'pref_religion',
-  'self_care_habit',
+  'drinking_freq',
+  'conflict_style',
+  'text_call_pref',
+  'feedback_opt_in',
 ]);
 
-/** 척도(1~5 정수) — religion_intensity 포함, 종교 없음일 때는 값 생략 가능 */
-const SCALE_KEYS = new Set(
-  ALL_KEYS.filter((k) => !STRING_KEYS.has(k)),
-);
+const SCALE_KEYS = new Set(ALL_KEYS.filter((k) => !STRING_KEYS.has(k)));
 
 const SCALE_MIN = 1;
 const SCALE_MAX = 5;
 
 function isReligionNone(value) {
-  return typeof value === 'string' && value.trim() === '없음';
+  if (typeof value !== 'string') return false;
+  const t = value.trim();
+  return t === '없음' || t === '무교';
 }
 
 function isScaleValue(value) {
@@ -427,6 +417,21 @@ function coerceScaleInt(value) {
   return null;
 }
 
+/** @param {unknown} v */
+function normalizeFeedbackOptIn(v) {
+  if (typeof v === 'boolean') {
+    return v ? '예' : '아니오';
+  }
+  if (typeof v === 'number' && Number.isInteger(v)) {
+    if (v === 1) return '예';
+    if (v === 0) return '아니오';
+  }
+  if (typeof v === 'string') {
+    return v.trim();
+  }
+  return v;
+}
+
 /**
  * 프론트에서 `{ answers: { energy, ... } }` 처럼 감싸서 보내는 경우를 평탄화합니다.
  * `answers`와 본문에 같은 키가 있으면 `answers` 안의 값이 우선합니다.
@@ -498,6 +503,10 @@ function validateSurveyPayload(surveyData) {
   delete raw.matchProfile;
   delete raw.surveySchemaVersion;
 
+  if (Object.prototype.hasOwnProperty.call(raw, 'feedback_opt_in')) {
+    raw.feedback_opt_in = normalizeFeedbackOptIn(raw.feedback_opt_in);
+  }
+
   for (const key of Object.keys(raw)) {
     if (!ALL_KEYS_SET.has(key)) {
       return { ok: false, error: `허용되지 않은 필드가 있습니다: ${key}` };
@@ -522,10 +531,7 @@ function validateSurveyPayload(surveyData) {
 
   const religionNone = isReligionNone(religionType);
 
-  const hasIntensityKey = Object.prototype.hasOwnProperty.call(
-    raw,
-    'religion_intensity',
-  );
+  const hasIntensityKey = Object.prototype.hasOwnProperty.call(raw, 'religion_intensity');
   const intensityRaw = hasIntensityKey ? raw.religion_intensity : undefined;
 
   if (!religionNone) {
@@ -533,7 +539,7 @@ function validateSurveyPayload(surveyData) {
       return {
         ok: false,
         error:
-          "religion_type이 '없음'이 아닐 때는 religion_intensity(1~5 정수)가 필수입니다.",
+          "religion_type이 '없음'·'무교'가 아닐 때는 religion_intensity(1~5 정수)가 필수입니다.",
       };
     }
     const ri = coerceScaleInt(intensityRaw);
@@ -549,7 +555,7 @@ function validateSurveyPayload(surveyData) {
       return {
         ok: false,
         error:
-          "religion_type이 '없음'일 때 religion_intensity를 보낸 경우 1~5 정수여야 합니다.",
+          "religion_type이 '없음' 또는 '무교'일 때 religion_intensity를 보낸 경우 1~5 정수여야 합니다.",
       };
     }
   }
@@ -595,12 +601,7 @@ function validateSurveyPayload(surveyData) {
 
     const value = raw[key];
 
-    /**
-     * - alcohol, skinship_limit: 한글 선택지 또는 UI 척도 1~5(number / "1"~"5")
-     * - date_drinking: 프론트 명세상 한글 string; 레거시·시드는 1~5 정수 허용
-     * - 프론트가 척도를 문자열 "1"~"5"로 보내는 경우 한글보다 먼저 정수로 해석한다.
-     */
-    if (key === 'alcohol' || key === 'skinship_limit' || key === 'date_drinking') {
+    if (key === 'drinking_freq') {
       const likert = coerceScaleInt(value);
       if (likert !== null) {
         data[key] = likert;
@@ -612,7 +613,8 @@ function validateSurveyPayload(surveyData) {
       }
       return {
         ok: false,
-        error: `${key}는 비어 있지 않은 문자열(선택지 문구)이거나 1~5 척도(정수 또는 "1"~"5")여야 합니다.`,
+        error:
+          'drinking_freq는 비어 있지 않은 문자열(선택지 문구)이거나 1~5 척도(정수 또는 "1"~"5")여야 합니다.',
       };
     }
 
@@ -623,7 +625,7 @@ function validateSurveyPayload(surveyData) {
           error: `${key}는 비어 있지 않은 문자열이어야 합니다.`,
         };
       }
-      data[key] = typeof value === 'string' ? value.trim() : value;
+      data[key] = typeof value === 'string' ? value.trim() : String(value);
       continue;
     }
 

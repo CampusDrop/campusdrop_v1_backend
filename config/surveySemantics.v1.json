@@ -1,63 +1,47 @@
 {
-  "version": 1,
-  "documentation_ko": "Campusdrop 설문 시맨틱 v1. 프론트 카탈로그와 동기화할 때 이 파일을 기준으로 한다. 미등록 라벨은 서버 검증에서 400 처리한다.",
+  "version": 2,
+  "documentation_ko": "Campusdrop 설문 시맨틱 v2(파일명 v1 유지). 6단계 설문 UI의 surveySteps id와 동기화. 미등록 문자열 선택지는 서버 검증에서 400. 매칭 엔진(Python LifestyleUser)은 Node의 surveyToLifestyleUser에서 이 응답을 기존 축으로 투영한다.",
   "excluded_from_matching": [
     "participantMeta",
     "matchAvailability 원본(availability 변환 후 매칭은 availability만 사용)"
   ],
   "scales": {
     "continuous_matching_keys": [
-      { "key": "energy", "reverse": false, "weight": 1.0, "high_means_ko": "높을수록 해당 축의 긍정/강한 쪽(제품 카피와 일치)" },
-      { "key": "weekend", "reverse": false, "weight": 1.0, "high_means_ko": "주말 활동·외출 성향 강함" },
-      { "key": "pattern", "reverse": false, "weight": 1.0, "high_means_ko": "규칙적·아침형에 가까움" },
-      { "key": "trend", "reverse": false, "weight": 1.5, "high_means_ko": "트렌드 민감" },
-      { "key": "alcohol", "reverse": false, "weight": 1.5, "high_means_ko": "음주 빈도·허용 높음(문자열은 정수로 매핑)" },
-      { "key": "contact", "reverse": false, "weight": 2.0, "high_means_ko": "연락·소통 많음" },
-      { "key": "meeting", "reverse": false, "weight": 1.0, "high_means_ko": "만남 빈도 선호 높음" },
-      { "key": "planning", "reverse": false, "weight": 1.0, "high_means_ko": "계획적" },
-      { "key": "affection", "reverse": false, "weight": 1.0, "high_means_ko": "애정 표현 많음" },
-      { "key": "date_expense", "reverse": false, "weight": 1.5, "high_means_ko": "데이트 비용 지출 높음" },
-      { "key": "friends", "reverse": false, "weight": 2.0, "high_means_ko": "친구·사교 중시" },
-      { "key": "jealousy", "reverse": false, "weight": 1.0, "high_means_ko": "질투 민감" },
-      { "key": "skinship_speed", "reverse": false, "weight": 1.0, "high_means_ko": "스킨십 속도 빠름" },
-      { "key": "skinship_limit", "reverse": false, "weight": 1.5, "high_means_ko": "스킨십 한계 완화(문자열 매핑)" },
-      { "key": "date_drinking", "reverse": false, "weight": 1.0, "high_means_ko": "데이트 중 음주 허용·빈도 높음" },
-      { "key": "politics", "reverse": false, "weight": 1.25, "high_means_ko": "정치·사회 이슈 관심 높음" },
-      { "key": "marriage_view", "reverse": false, "weight": 1.0, "high_means_ko": "결혼·장기 관계 지향 강함" },
-      { "key": "meeting_seriousness", "reverse": false, "weight": 1.5, "high_means_ko": "만남 진지함 높음" },
-      { "key": "job_view", "reverse": false, "weight": 1.25, "high_means_ko": "커리어 중시" },
-      { "key": "spending", "reverse": false, "weight": 1.0, "high_means_ko": "소비 성향(축 정의는 제품 기준)" },
-      { "key": "conflict", "reverse": false, "weight": 2.0, "high_means_ko": "갈등 시 직접 대화·해결 지향" },
-      { "key": "empathy", "reverse": false, "weight": 1.5, "high_means_ko": "공감 높음" },
-      { "key": "honesty", "reverse": false, "weight": 1.5, "high_means_ko": "솔직함 중시" },
-      { "key": "trust", "reverse": false, "weight": 1.5, "high_means_ko": "신뢰 중시" },
+      { "key": "energy", "reverse": false, "weight": 1.0, "high_means_ko": "활력·에너지 높음" },
+      { "key": "sleep_habit", "reverse": false, "weight": 1.0, "high_means_ko": "수면 규칙적·충분" },
+      { "key": "morning_night", "reverse": false, "weight": 1.0, "high_means_ko": "아침형·규칙적 리듬에 가까움" },
+      { "key": "cleanliness", "reverse": false, "weight": 1.0, "high_means_ko": "정리·청결 중시" },
+      { "key": "spending_style", "reverse": false, "weight": 1.0, "high_means_ko": "지출·트렌드 민감(축은 제품 기준)" },
+      { "key": "meal_style", "reverse": false, "weight": 1.0, "high_means_ko": "식사·루틴 중시" },
+      { "key": "exercise", "reverse": false, "weight": 1.0, "high_means_ko": "운동 빈도·강도 높음" },
+      { "key": "caffeine", "reverse": false, "weight": 1.0, "high_means_ko": "카페인 섭취 많음" },
+      { "key": "screen_time", "reverse": false, "weight": 1.0, "high_means_ko": "스크린 시간 많음" },
+      { "key": "social_battery", "reverse": false, "weight": 1.5, "high_means_ko": "사교·외향 에너지 높음" },
+      { "key": "humor_importance", "reverse": false, "weight": 1.5, "high_means_ko": "유머·공감 표현 중시" },
+      { "key": "reply_speed", "reverse": false, "weight": 1.5, "high_means_ko": "답장·연락 빠름" },
+      { "key": "politics_importance", "reverse": false, "weight": 1.25, "high_means_ko": "정치·사회 이슈 중시" },
+      { "key": "family_plan_view", "reverse": false, "weight": 1.0, "high_means_ko": "가족·장기 계획 지향 강함" },
+      { "key": "meet_frequency", "reverse": false, "weight": 1.0, "high_means_ko": "만남 빈도 선호 높음" },
+      { "key": "date_cost_split", "reverse": false, "weight": 1.5, "high_means_ko": "데이트 비용 부담 높음/너그러움(축은 제품 기준)" },
+      { "key": "commitment", "reverse": false, "weight": 1.5, "high_means_ko": "관계 진지함·몰입 높음" },
+      { "key": "public_affection", "reverse": false, "weight": 1.0, "high_means_ko": "공개 스킨십·애정 표현 많음" },
+      { "key": "alone_time_need", "reverse": false, "weight": 1.0, "high_means_ko": "혼자만의 시간 필요 높음" },
+      { "key": "campus_date", "reverse": false, "weight": 1.0, "high_means_ko": "캠퍼스 데이트·교내 활동 선호" },
+      { "key": "study_together", "reverse": false, "weight": 1.25, "high_means_ko": "함께 공부·성장 동반 중시" },
+      { "key": "age_gap", "reverse": false, "weight": 1.0, "high_means_ko": "나이 차 허용 범위 넓음(축은 제품 기준)" },
       { "key": "religion_intensity", "reverse": false, "weight": 1.0, "high_means_ko": "종교 실천·중요도 높음", "when_religion_none_store_as": 3 }
     ],
     "religion_soft_weight": 1.0
   },
   "choice_label_maps": {
-    "alcohol": {
+    "drinking_freq": {
       "전혀 안 함": 1,
+      "전혀 안 마심": 1,
       "월 1회": 2,
-      "가끔": 3,
-      "자주": 5
-    },
-    "skinship_limit": {
-      "매우 천천히": 1,
-      "단계적으로": 3,
-      "상의 후": 3,
-      "빠르게": 5
-    },
-    "date_drinking": {
-      "전혀 안 함": 1,
-      "월 1회": 2,
+      "주 1~2회": 3,
       "가끔": 3,
       "자주": 5,
-      "안 함": 1,
-      "상관없음": 3,
-      "무관": 3,
-      "안 마심": 1,
-      "마심": 5
+      "거의 매일": 5
     },
     "smoking": {
       "비흡연": 0,
@@ -84,12 +68,25 @@
       "유교": "confucian",
       "기타": "other"
     },
-    "self_care_habit": {
-      "자유로운 생활 선호, 규칙적인 관리보다는 현재의 편안함과 여유를 즐김": 1,
-      "최소한의 관리, 건강을 위해 가벼운 산책이나 식단 조절 정도만 실천함": 2,
-      "상황에 따라 다름, 컨디션이 좋을 때는 집중 관리하고 바쁠 때는 쉬어감": 3,
-      "자기관리 철저, 주 3회 이상 꾸준한 운동과 규칙적인 생활 루틴을 유지함": 4,
-      "자기관리 중심, 운동과 식단이 일상의 최우선이며 완벽한 자기통제를 선호": 5
+    "conflict_style": {
+      "갈등은 피하고 기분이 풀리면 이야기해요": 1,
+      "먼저 진정한 뒤 차분히 이야기해요": 2,
+      "상대 흐름에 맞추는 편이에요": 3,
+      "시간을 두고 정리해서 말하는 편이에요": 4,
+      "바로 솔직하게 풀고 싶어요": 5
+    },
+    "text_call_pref": {
+      "문자가 더 편해요": 1,
+      "짧은 통화도 괜찮아요": 2,
+      "상황에 따라 달라요": 3,
+      "자주 연락하는 편이 좋아요": 4,
+      "긴 통화도 좋아요": 5
+    },
+    "feedback_opt_in": {
+      "예": 1,
+      "아니오": 0,
+      "동의": 1,
+      "비동의": 0
     }
   },
   "preference_policies": {

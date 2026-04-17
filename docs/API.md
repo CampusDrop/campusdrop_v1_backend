@@ -1,34 +1,113 @@
 # Campus Drop API 명세
 
-Express 기반 서버 (`index.js`). 기본 포트는 환경 변수 `PORT`이며, 미설정 시 **3000**입니다.
+Express 서버 진입점: `campusdrop_server/index.js`. 기본 포트는 환경 변수 `PORT`, 미설정 시 **3000**. 바인드 호스트는 `HOST`(기본 `0.0.0.0`).
 
 | 항목 | 값 |
-|------|-----|
+|------|------|
 | Base URL (로컬) | `http://localhost:{PORT}` |
-| 공통 헤더 | `Content-Type: application/json` (본문이 있는 경우) |
-| CORS | 전 도메인 허용 (`cors()` 기본) |
+| OpenAPI JSON | `GET /openapi.json` |
+| Swagger UI | `GET /api-docs` |
+| JSON 본문(일반 라우트) | `Content-Type: application/json` 권장 |
+| 분석 전용 바디 상한 | `/api/analytics/*` 만 `ANALYTICS_JSON_BODY_MAX_BYTES`(기본 **512KiB**) |
 
-### 세션 식별 (`Identity.id`)
+### CORS
 
-이메일 인증 성공 시 발급되는 **`uuid` 값은 DB `Identity` 테이블의 PK(UUID)** 와 동일합니다. 보호 API에서는 아래 헤더로 전달합니다.
+`index.js` 기준: 프로덕션에서는 `CORS_ORIGINS`·`ADMIN_CORS_ORIGINS`·고정 도메인(`campus-drop.com` 등)과 **로컬호스트**만 허용합니다. 그 외 Origin은 거절됩니다. `credentials: true`입니다.
+
+---
+
+## 목차
+
+1. [공통: 인증·오류](#공통-인증오류)
+2. [GET `/`](#get-)
+3. [인증 `/api/auth`](#인증-apiauth)
+4. [앱 분석 `/api/analytics`](#앱-분석-apianalytics)
+5. [통계 `/api/stats`](#통계-apistats)
+6. [카카오 `/api/kakao`](#카카오-apikakao)
+7. [설문 `/api/survey`](#설문-apisurvey)
+8. [매칭 `/api/match`](#매칭-apimatch)
+9. [관리자 `/api/admin`](#관리자-apiadmin)
+10. [백그라운드 작업 (HTTP 아님)](#백그라운드-작업-http-아님)
+11. [환경 변수](#환경-변수)
+12. [변경 이력](#변경-이력)
+
+---
+
+## 공통: 인증·오류
+
+### `Identity.id` 세션 (`x-user-uuid`)
+
+`POST /api/auth/verify-code` 등으로 받은 **`uuid`는 DB `identities.id`(UUID)** 와 동일합니다. 아래 API에서 헤더로 넘깁니다.
 
 | 헤더 | 값 | 필요한 경로 |
 |------|-----|----------------|
-| `x-user-uuid` | `POST /api/auth/verify-code` 응답의 `uuid` (UUID 문자열) | `/api/survey/*`, `/api/match/*`, `GET /api/auth/pin` |
+| `x-user-uuid` | 위 UUID 문자열 | `GET /api/auth/pin`, `GET /api/auth/me`, `POST /api/auth/school-proof`, `GET /api/auth/school-proof/status`, `/api/survey/*`, `/api/match/*` |
 
-헤더가 없거나, 해당 UUID의 `Identity`가 없으면 **`401`**:
+`x-user-uuid`가 없거나 UUID 형식이 아니거나, 해당 `Identity`가 없으면 **`401`**:
 
 ```json
-{ "error": "인증이 만료되었습니다. 다시 이메일 인증을 해주세요." }
+{
+  "error": "인증이 만료되었습니다. 다시 이메일 인증을 해주세요."
+}
+```
+
+차단 계정(`blockedAt` 설정)이면 **`403`**:
+
+```json
+{
+  "error": "이 계정은 이용이 제한되었습니다. 문의가 필요하면 운영팀에 연락해 주세요."
+}
+```
+
+### 관리자 JWT
+
+`POST /api/admin/login` 이후 **`Authorization: Bearer <JWT>`** (`/api/admin`의 로그인 제외 전 경로).
+
+인증 실패 **`401`** 예:
+
+```json
+{
+  "error": "관리자 인증이 필요합니다. Bearer 토큰을 보내 주세요."
+}
+```
+
+```json
+{
+  "error": "유효하지 않거나 만료된 관리자 토큰입니다."
+}
+```
+
+### 설문·매칭: 이미지 세션 만료
+
+`Identity.imageUuidAccessUntil`이 과거이면 **`403`** (`code` 포함):
+
+```json
+{
+  "error": "이미지 가입 세션 유효 기간이 지났습니다. 학교 이메일(@sju.ac.kr) 인증 후 설문·매칭 기능을 이용해 주세요.",
+  "code": "IMAGE_UUID_ACCESS_EXPIRED",
+  "accessExpiredAt": "2026-04-20T09:00:00.000Z"
+}
+```
+
+### 범용 오류 본문
+
+대부분의 `4xx`/`5xx`는 다음 형태입니다.
+
+```json
+{
+  "error": "사람이 읽을 수 있는 한국어 메시지"
+}
 ```
 
 ---
 
 ## GET `/`
 
-서버 동작 확인용.
+**요약:** 서버 동작 확인.
 
-**응답** `200` — `application/json`
+**인증:** 없음.
+
+**응답 `200`**
 
 ```json
 {
@@ -42,103 +121,675 @@ Express 기반 서버 (`index.js`). 기본 포트는 환경 변수 `PORT`이며,
 
 ## 인증 `/api/auth`
 
-원문 이메일은 DB에 저장되지 않습니다. `verify-code` 성공 시 `Identity`가 없으면 `emailHash`(bcrypt)와 빈 `Trait`로 생성됩니다. `Identity`에는 **개인정보처리방침 동의** 여부가 `privacy_policy_agreed`(API·JSON에서는 `privacyPolicyAgreed`) 불리언으로 저장됩니다.
+원문 이메일은 DB에 저장하지 않습니다. `verify-code` 성공 시 신규면 `emailHash`와 `Trait`를 생성합니다. `privacyPolicyAgreed`는 DB `privacy_policy_agreed`에 저장됩니다.
 
 ### 개인정보처리방침 동의 (`privacyPolicyAgreed`)
 
 | 엔드포인트 | 본문 형식 | 규칙 |
 |------------|-----------|------|
-| `POST /api/auth/verify-code` | JSON | **해당 이메일로 신규 `Identity`를 만들 때**, 또는 **`linkUuid`로 익명 계정에 이메일을 붙일 때**: 필드 **필수**, 값은 반드시 **`true`**. `false`·누락·잘못된 타입이면 `400`. **이미 가입된 이메일로 재인증만** 하는 경우에는 필드 없이 호출 가능(동의 필드는 검사하지 않음). |
-| `POST /api/auth/complete-registration` | `multipart/form-data` | 필드 **`privacyPolicyAgreed` 필수**, 허용 값: 불리언 `true` 또는 문자열 `true` / `1`(대소문자 무관). `false`면 `400`. 성공 시 DB에 `true` 저장. |
-| `POST /api/auth/complete-anonymous-onboarding` | `multipart/form-data` | 위와 동일. |
-| `GET /api/auth/me` | — | 응답에 **`privacyPolicyAgreed`**(boolean) 포함. 마이그레이션 이전에 만들어진 계정은 `false`일 수 있음. |
+| `POST /api/auth/verify-code` | JSON | 신규 `Identity` 생성 또는 `linkUuid`로 익명에 이메일 연결 시 **`privacyPolicyAgreed: true` 필수**. 기존 이메일로 **재인증만** 할 때는 생략 가능. |
+| `POST /api/auth/complete-registration` | `multipart/form-data` | **`privacyPolicyAgreed` 필수**, `true` / `"true"` / `"1"`(대소문자 무관). `false`면 `400`. |
+| `POST /api/auth/complete-anonymous-onboarding` | 위와 동일 | 위와 동일. |
+| `GET /api/auth/me` | — | 응답에 `privacyPolicyAgreed` 포함. |
+
+---
 
 ### POST `/api/auth/send-code`
 
-세종대(`@sju.ac.kr`) 이메일로 6자리 인증 코드를 발송합니다. (SMTP 설정 필요) 인증 코드는 서버 메모리에만 보관됩니다.
+**요약:** `@sju.ac.kr`로 6자리 인증 코드 발송(메모리 보관). `AUTH_FIXED_VERIFICATION_CODE`가 설정되면 메일은 생략되고 해당 코드가 사용됩니다.
 
-**요청 본문**
+**인증:** 없음.
 
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| `email` | string | 예 | `@sju.ac.kr`만 허용, 대소문자·공백은 서버에서 정규화 |
+**요청 `200` 예시**
 
-**응답**
+```json
+{
+  "email": "student@sju.ac.kr"
+}
+```
 
-| HTTP | 본문 |
-|------|------|
-| `200` | `{ "message": "인증 번호를 발송했습니다." }` |
-| `400` | `{ "error": string }` — email 누락/타입 오류, 비 sju 도메인 등 |
-| `500` | `{ "error": "인증 메일 발송에 실패했습니다. SMTP 설정을 확인해 주세요." }` — 발송 실패 시 메모리에 올려둔 코드는 제거됨 |
+**응답 `200`**
+
+```json
+{
+  "message": "인증 번호를 발송했습니다."
+}
+```
+
+**응답 `400` 예시**
+
+```json
+{
+  "error": "email이 필요합니다."
+}
+```
+
+```json
+{
+  "error": "세종대학교 이메일(@sju.ac.kr)만 인증할 수 있습니다."
+}
+```
+
+**응답 `500`**
+
+```json
+{
+  "error": "인증 메일 발송에 실패했습니다. 이메일(SES/SMTP) 환경 변수를 확인해 주세요."
+}
+```
 
 ---
 
 ### POST `/api/auth/verify-code`
 
-이메일과 코드를 검증하고, 성공 시 코드를 소비한 뒤 `Identity`를 찾거나 생성하고 세션 UUID를 반환합니다.
+**요약:** 이메일·코드 검증 후 `uuid` 반환. 신규 가입·`linkUuid` 연결 시 동의 필수. 설문은 **`POST /api/survey/submit`** 권장. `complete-registration` / `registrationToken` 은 **구 클라이언트**용.
 
-**요청 본문**
+**인증:** 없음.
 
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| `email` | string | 예 | `@sju.ac.kr` |
-| `code` | string | 예 | 6자리 인증 번호 |
-| `privacyPolicyAgreed` | boolean | 조건부 | 위 표 **「개인정보처리방침 동의」** 참고. |
-| `linkUuid` | string (UUID) | 아니오 | 익명 온보딩으로 만든 `Identity.id`에, 방금 인증한 이메일을 연결할 때. 이 경우에도 **`privacyPolicyAgreed: true` 필수**. |
-| `profile` | object | 아니오 | 신규 이메일(해당 주소로 `Identity`가 아직 없을 때)에만 적용. `studentId`, `birthYear`, `gender`(서버에서 `Trait.gender`용으로 정규화) 등. |
+**요청 — 신규 가입 예시**
 
-**응답**
+```json
+{
+  "email": "student@sju.ac.kr",
+  "code": "123456",
+  "privacyPolicyAgreed": true,
+  "profile": {
+    "studentId": "25123456",
+    "birthYear": "2003",
+    "gender": "여성"
+  }
+}
+```
 
-| HTTP | 본문 |
-|------|------|
-| `200` | `{ "verified": true, "uuid": string }` — `uuid`는 이후 `x-user-uuid`에 넣을 `Identity.id` |
-| `400` | `{ "error": string }` — email/code 누락, 도메인 오류, 만료(`인증 번호가 만료되었습니다...`), 미요청(`유효한 인증 요청이 없습니다...`), 불일치(`인증 번호가 올바르지 않습니다.`), `linkUuid` 형식 오류, 신규/`linkUuid` 시 동의 누락·`false`(`개인정보처리방침에 동의해야...`) 등 |
-| `500` | `{ "error": "인증 처리 중 오류가 발생했습니다." }` |
+**요청 — 기존 이메일 재인증(동의 생략 가능)**
+
+```json
+{
+  "email": "student@sju.ac.kr",
+  "code": "123456"
+}
+```
+
+**요청 — 익명 계정에 이메일 연결 (`linkUuid`)**
+
+```json
+{
+  "email": "student@sju.ac.kr",
+  "code": "123456",
+  "linkUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "privacyPolicyAgreed": true
+}
+```
+
+**응답 `200`**
+
+```json
+{
+  "verified": true,
+  "uuid": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+**응답 `400` 예시**
+
+```json
+{
+  "error": "인증 번호가 만료되었습니다. 다시 요청해 주세요."
+}
+```
+
+```json
+{
+  "error": "유효한 인증 요청이 없습니다. 인증 번호를 다시 요청해 주세요."
+}
+```
+
+```json
+{
+  "error": "인증 번호가 올바르지 않습니다."
+}
+```
+
+```json
+{
+  "error": "linkUuid는 유효한 UUID 형식이어야 합니다."
+}
+```
+
+```json
+{
+  "error": "개인정보처리방침에 동의해야 가입할 수 있습니다."
+}
+```
+
+```json
+{
+  "error": "개인정보처리방침에 동의해야 학교 이메일을 연결할 수 있습니다."
+}
+```
+
+```json
+{
+  "error": "연결할 세션(UUID)을 찾을 수 없습니다."
+}
+```
+
+```json
+{
+  "error": "이 세션에는 이미 이메일이 연결되어 있습니다. linkUuid 없이 인증해 주세요."
+}
+```
+
+```json
+{
+  "error": "해당 학교 이메일은 다른 계정에서 이미 사용 중입니다. 해당 계정으로 로그인해 주세요."
+}
+```
+
+**응답 `403` (`linkUuid` 대상이 차단됨)**
+
+```json
+{
+  "error": "이 계정은 이용이 제한되었습니다. 문의가 필요하면 운영팀에 연락해 주세요."
+}
+```
+
+**응답 `503` (DB 연결 실패 등)**
+
+```json
+{
+  "error": "데이터베이스에 연결할 수 없습니다. .env의 DATABASE_URL을 확인한 뒤 서버를 재시작해 주세요. 인증 메일 발송(send-code)은 DB를 쓰지 않아 정상일 수 있습니다."
+}
+```
+
+**응답 `500`**
+
+```json
+{
+  "error": "인증 처리 중 오류가 발생했습니다."
+}
+```
 
 ---
 
-### GET `/api/auth/me`
+### POST `/api/auth/logout`
 
-현재 세션(`x-user-uuid`)에 해당하는 `Identity`·`Trait` 요약.
+**요약:** 서버에 저장된 세션 토큰 없음. 클라이언트가 `x-user-uuid` 삭제용으로 호출 가능.
 
-**요청 헤더**
+**인증:** 없음.
 
-| 헤더 | 필수 |
-|------|------|
-| `x-user-uuid` | 예 |
+**요청 본문:** 없음.
 
-**응답** `200`
+**응답 `200`**
 
-| 필드 | 타입 | 설명 |
-|------|------|------|
-| `uuid` | string | `Identity.id` |
-| `email` | string \| null | 정규화된 `@sju.ac.kr` 또는 익명 계정이면 `null` |
-| `privacyPolicyAgreed` | boolean | DB `privacy_policy_agreed` |
-| `profile` | object | `studentId`, `birthYear`, `gender`(한글 라벨), `genderTrait`(`male`/`female`) 등 |
-| `participantMeta` | object | 프론트 설문 패키지 호환용(`profile` 중첩) |
-| `imageUuidAccessUntil` | string \| null | 이미지 전용 세션 만료 시각(ISO 8601), 없으면 `null` |
-
-**오류** `401` — 세션 헤더 오류(공통 메시지).
+```json
+{
+  "ok": true,
+  "message": "서버에 저장된 로그인 토큰은 없습니다. 클라이언트에서 x-user-uuid(또는 이를 둔 쿠키)를 삭제하면 로그아웃됩니다."
+}
+```
 
 ---
 
 ### GET `/api/auth/pin`
 
-카카오 챗봇 연동용 **4자리 PIN** 발급. Redis에 `PIN:{4자리}` → 현재 로그인 `Identity.id`, **TTL 180초(3분)**.
+**요약:** 카카오 챗봇 연동용 4자리 PIN (Redis TTL 기본 180초).
 
-**요청 헤더**
+**인증:** `x-user-uuid` 필수.
 
-| 헤더 | 필수 |
-|------|------|
-| `x-user-uuid` | 예 |
+**응답 `200`**
 
-**응답**
+```json
+{
+  "pin": "4829",
+  "expiresInSec": 180
+}
+```
 
-| HTTP | 본문 |
-|------|------|
-| `200` | `{ "pin": string, "expiresInSec": 180 }` — `pin`은 4자리 문자열(`0000`~`9999`) |
-| `401` | 세션 헤더 오류(위 공통 메시지) |
-| `503` | `{ "error": string }` — PIN 충돌 반복 실패 또는 Redis 연결 실패 등 |
+**응답 `404`**
+
+```json
+{
+  "error": "계정을 찾을 수 없습니다."
+}
+```
+
+**응답 `503` 예시**
+
+```json
+{
+  "error": "PIN 발급에 실패했습니다. 잠시 후 다시 시도해 주세요."
+}
+```
+
+```json
+{
+  "error": "PIN을 발급할 수 없습니다. Redis(REDIS_URL)와 데이터베이스 연결을 확인해 주세요."
+}
+```
+
+---
+
+### GET `/api/auth/me`
+
+**요약:** 현재 세션의 이메일·프로필 요약.
+
+**인증:** `x-user-uuid` 필수.
+
+**응답 `200`**
+
+```json
+{
+  "uuid": "550e8400-e29b-41d4-a716-446655440000",
+  "email": "student@sju.ac.kr",
+  "profile": {
+    "studentId": "25123456",
+    "birthYear": "2003",
+    "gender": "여성",
+    "genderTrait": "female"
+  },
+  "participantMeta": {
+    "profile": {
+      "studentId": "25123456",
+      "birthYear": "2003",
+      "gender": "여성",
+      "genderTrait": "female"
+    }
+  },
+  "privacyPolicyAgreed": true,
+  "imageUuidAccessUntil": null
+}
+```
+
+익명·이메일 미연결 계정이면 `email`은 `null`, `imageUuidAccessUntil`에 ISO 시각이 올 수 있습니다.
+
+---
+
+### POST `/api/auth/complete-registration`
+
+**요약:** **구 클라이언트** 가입 완료. `registrationToken` + `privacyPolicyAgreed` 필수. 설문 `survey`(선택, JSON **문자열** 또는 객체 파싱 가능) 또는 설문 생략 시 `profile`(선택). 이미지 `image`(선택). 신규 플로우는 `verify-code` 후 `POST /api/survey/submit` 사용.
+
+**인증:** 없음.
+
+**본문:** `multipart/form-data`
+
+| 필드 | 필수 | 설명 |
+|------|------|------|
+| `registrationToken` | 예 | 서버가 발급한 JWT 형태 가입 토큰 |
+| `privacyPolicyAgreed` | 예 | `true` / `"true"` / `"1"` |
+| `survey` | 아니오 | 설문 전체 JSON **문자열** (`validateSurveyPayload` 동일 규칙) |
+| `profile` | 아니오 | 설문 없을 때 `studentId`, `birthYear`, `gender` 등 JSON 문자열 |
+| `image` | 아니오 | 증빙 이미지 파일 (`image` 단일 필드) |
+
+**`survey`에 넣는 JSON 예시** (`Content-Type`은 multipart이므로, 필드 값으로 아래 JSON을 **이스케이프한 문자열**로 보냄)
+
+```json
+{
+  "energy": 2,
+  "weekend": 3,
+  "pattern": 1,
+  "trend": 2,
+  "alcohol": "가끔",
+  "smoking": "비흡연",
+  "tattoo": "없음",
+  "contact": 4,
+  "meeting": 4,
+  "planning": 1,
+  "affection": 4,
+  "date_expense": 3,
+  "friends": 4,
+  "jealousy": 2,
+  "skinship_speed": 2,
+  "skinship_limit": "단계적으로",
+  "date_drinking": 2,
+  "politics": 3,
+  "religion_type": "없음",
+  "marriage_view": 3,
+  "meeting_seriousness": 4,
+  "job_view": 4,
+  "spending": 3,
+  "conflict": 2,
+  "empathy": 5,
+  "honesty": 5,
+  "trust": 5,
+  "gender": "남성",
+  "pref_cc": "비슷하면 좋음",
+  "pref_smoking": "비흡연",
+  "pref_tattoo": "선호",
+  "pref_religion": "비슷하면 좋음",
+  "self_care_habit": "상황에 따라 다름, 컨디션이 좋을 때는 집중 관리하고 바쁠 때는 쉬어감",
+  "availability": [
+    { "date": "2026-04-20", "time_slot": "11:00-12:00" }
+  ]
+}
+```
+
+**응답 `201`**
+
+```json
+{
+  "message": "가입이 완료되었습니다.",
+  "uuid": "550e8400-e29b-41d4-a716-446655440000",
+  "pin": "0042",
+  "expiresInSec": 180
+}
+```
+
+`pin` / `expiresInSec`는 Redis 실패 시 `null`일 수 있습니다.
+
+**응답 `409`**
+
+```json
+{
+  "error": "이미 가입된 이메일입니다. 로그인(verify-code)으로 세션을 받아 주세요."
+}
+```
+
+**응답 `503` (토큰 검증 설정 없음)**
+
+```json
+{
+  "error": "가입 토큰 검증을 할 수 없습니다. AUTH_REGISTRATION_JWT_SECRET(16자 이상) 또는 ADMIN_JWT_SECRET·ADMIN_PASSWORD를 설정해 주세요."
+}
+```
+
+**응답 `401` (가입 토큰 무효)**
+
+```json
+{
+  "error": "유효하지 않거나 만료된 가입 토큰입니다. 이메일 인증을 다시 진행해 주세요."
+}
+```
+
+---
+
+### POST `/api/auth/complete-anonymous-onboarding`
+
+**요약:** 이메일 없이 **이미지 증빙 필수** + 선택 설문 또는 `profile`. 성공 시 `uuid` = `x-user-uuid`, `imageUuidAccessUntil` 부여.
+
+**인증:** 없음.
+
+**본문:** `multipart/form-data`
+
+| 필드 | 필수 | 설명 |
+|------|------|------|
+| `image` | 예 | 증빙 이미지 단일 파일 |
+| `privacyPolicyAgreed` | 예 | `complete-registration` 과 동일 |
+| `survey` | 아니오 | 설문 JSON 문자열(규칙 동일). 생략 시 `profile` 권장 |
+| `profile` | 아니오 | 설문 없을 때 JSON 문자열 |
+
+**응답 `201`**
+
+```json
+{
+  "message": "제출이 저장되었습니다. 관리자 검토 후 증빙이 승인되면 이미지 인증이 완료됩니다.",
+  "uuid": "660e8400-e29b-41d4-a716-446655440001",
+  "pin": "9912",
+  "expiresInSec": 180,
+  "imageUuidAccessUntil": "2026-04-27T14:59:59.999Z",
+  "submission": {
+    "id": "770e8400-e29b-41d4-a716-446655440002",
+    "status": "pending"
+  }
+}
+```
+
+**응답 `400` (이미지 누락)**
+
+```json
+{
+  "error": "multipart 필드 image(단일 파일)가 필요합니다."
+}
+```
+
+---
+
+### POST `/api/auth/school-proof`
+
+**요약:** 로그인 사용자의 학교 증빙 **추가** 제출(`pending`). 최초 익명 1차 제출은 `complete-anonymous-onboarding` 사용.
+
+**인증:** `x-user-uuid` 필수.
+
+**본문:** `multipart/form-data`, 필드 `image`(파일) 필수.
+
+**응답 `201`**
+
+```json
+{
+  "message": "제출이 저장되었습니다. 관리자 검토 후 승인되면 이미지 인증이 완료됩니다.",
+  "submission": {
+    "id": "880e8400-e29b-41d4-a716-446655440003",
+    "status": "pending",
+    "createdAt": "2026-04-17T12:00:00.000Z"
+  }
+}
+```
+
+---
+
+### GET `/api/auth/school-proof/status`
+
+**요약:** 이메일 연결 여부·이미지 인증(관리자 승인) 여부·최근 제출 요약.
+
+**인증:** `x-user-uuid` 필수.
+
+**응답 `200`**
+
+```json
+{
+  "emailVerified": true,
+  "schoolImageVerified": false,
+  "schoolProofVerifiedAt": null,
+  "latestSubmission": {
+    "id": "880e8400-e29b-41d4-a716-446655440003",
+    "status": "pending",
+    "createdAt": "2026-04-17T12:00:00.000Z"
+  }
+}
+```
+
+`latestSubmission`이 없으면 `null`입니다.
+
+---
+
+## 앱 분석 `/api/analytics`
+
+인증 **불필요**. 선택 헤더 `x-user-uuid`(형식이 올바른 UUID일 때만 연결에 사용).
+
+제한(기본값, 환경 변수로 변경 가능):
+
+- JSON 본문 최대 **512KiB** (`/api/analytics`만).
+- `events` 최대 **200**건/요청, `interactions` **100**건, `batch.items` **50**건.
+- IP·세션 창 단위 레이트 리밋 및 상호작용 일일 한도(기본 **8000**/세션/UTC일).
+
+### POST `/api/analytics/events`
+
+**요청 예시**
+
+```json
+{
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "app": "campusdrop-web",
+  "release": "1.0.0",
+  "client_ts": "2026-04-17T12:00:00.000Z",
+  "events": [
+    {
+      "name": "page_view",
+      "ts": "2026-04-17T12:00:01.000Z",
+      "props": {
+        "path": "/survey",
+        "ok": true
+      },
+      "event_id": "660e8400-e29b-41d4-a716-446655440001"
+    }
+  ]
+}
+```
+
+**응답 `202`**
+
+```json
+{
+  "accepted": 1,
+  "dropped": 0
+}
+```
+
+**응답 `400`**
+
+```json
+{
+  "error": "session_id는 UUID 형식이어야 합니다."
+}
+```
+
+**응답 `429`**
+
+```json
+{
+  "error": "요청 한도를 초과했습니다. 잠시 후 다시 시도해 주세요."
+}
+```
+
+---
+
+### POST `/api/analytics/heartbeat`
+
+**요청 예시**
+
+```json
+{
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "client_ts": "2026-04-17T12:05:00.000Z",
+  "last_meaningful_activity_at": "2026-04-17T12:04:30.000Z",
+  "visibility": "visible",
+  "context": {
+    "route": "/match",
+    "idle_probe": 1
+  }
+}
+```
+
+**응답 `202`**
+
+```json
+{
+  "ok": true
+}
+```
+
+**응답 `400`**
+
+```json
+{
+  "error": "last_meaningful_activity_at이 유효한 ISO8601이어야 합니다."
+}
+```
+
+---
+
+### POST `/api/analytics/interaction`
+
+**요청 예시**
+
+```json
+{
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "interactions": [
+    {
+      "type": "dead_click",
+      "ts": "2026-04-17T12:06:00.000Z",
+      "x_norm": 0.42,
+      "y_norm": 0.18,
+      "nearest_region": "header_logo",
+      "view": "landing_home"
+    }
+  ]
+}
+```
+
+**응답 `202`**
+
+```json
+{
+  "accepted": 1,
+  "dropped": 0
+}
+```
+
+**응답 `429` (일일 상호작용 한도)**
+
+```json
+{
+  "error": "세션당 일일 상호작용 수집 한도를 초과했습니다."
+}
+```
+
+---
+
+### POST `/api/analytics/batch`
+
+**요약:** `event` / `heartbeat` / `interaction` 혼합. **모든 항목 동일 `session_id`**.
+
+**요청 예시**
+
+```json
+{
+  "items": [
+    {
+      "kind": "event",
+      "payload": {
+        "session_id": "550e8400-e29b-41d4-a716-446655440000",
+        "app": "campusdrop-web",
+        "events": [
+          {
+            "name": "click_cta",
+            "ts": "2026-04-17T12:07:00.000Z"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "heartbeat",
+      "payload": {
+        "session_id": "550e8400-e29b-41d4-a716-446655440000",
+        "last_meaningful_activity_at": "2026-04-17T12:07:10.000Z"
+      }
+    }
+  ]
+}
+```
+
+**응답 `202`**
+
+```json
+{
+  "results": [
+    { "kind": "event", "accepted": 1, "dropped": 0 },
+    { "kind": "heartbeat", "ok": true }
+  ],
+  "droppedItems": 0
+}
+```
+
+항목 처리 실패 시 해당 원소에 `"error": "..."` 가 포함될 수 있습니다.
+
+---
+
+## 통계 `/api/stats`
+
+### GET `/api/stats/excitement-count`
+
+**요약:** `Trait.survey_data IS NOT NULL` 인 행 수.
+
+**응답 `200`**
+
+```json
+{
+  "excitementCount": 128,
+  "description": "설문을 한 번이라도 저장한 사용자 수(Trait.survey_data IS NOT NULL)"
+}
+```
 
 ---
 
@@ -146,169 +797,863 @@ Express 기반 서버 (`index.js`). 기본 포트는 환경 변수 `PORT`이며,
 
 ### POST `/api/kakao/webhook`
 
-카카오 i 오픈빌더 스킬 서버가 호출하는 웹훅. 본문에서 발화를 읽어 **4자리 연속 숫자**를 PIN으로 사용하고, Redis에서 `Identity` UUID를 조회한 뒤 해당 `Identity.kakaoId`를 갱신합니다.
+**요약:** 오픈빌더 스킬. HTTP는 **항상 `200`**, 본문은 카카오 스킬 JSON.
 
-**인증 헤더** — 없음 (카카오 서버에서 호출).
+**인증:** 없음.
 
-**요청 본문 (스킬 페이로드 요약)**
+**요청 예시 (카카오 스킬 페이로드 일부)**
 
-| 경로 | 설명 |
-|------|------|
-| `userRequest.utterance` | 사용자 발화 문자열 |
-| `userRequest.user.id` | 카카오 사용자 ID (문열) |
+```json
+{
+  "userRequest": {
+    "utterance": "내 PIN은 4829 야",
+    "user": {
+      "id": "kakao-channel-user-12345"
+    }
+  }
+}
+```
 
-PIN은 `utterance`에서 공백 제거 후 **첫 `\d{4}`** 와 일치하는 4자리 숫자입니다.
-
-**응답** — HTTP는 항상 **`200`**. 본문은 카카오 스킬 응답 **v2.0** 형태:
+**응답 예시 (연동 성공)**
 
 ```json
 {
   "version": "2.0",
   "template": {
-    "outputs": [{ "simpleText": { "text": "…" } }]
+    "outputs": [
+      {
+        "simpleText": {
+          "text": "챗봇과 계정이 연동되었습니다."
+        }
+      }
+    ]
   }
 }
 ```
 
-성공 시 `text` 예: `챗봇과 계정이 연동되었습니다.`  
-PIN 없음/오류/Redis 오류 등도 동일 JSON 형태로 `text`만 달라집니다.
+**응답 예시 (PIN 없음)**
+
+```json
+{
+  "version": "2.0",
+  "template": {
+    "outputs": [
+      {
+        "simpleText": {
+          "text": "4자리 PIN 번호를 입력해 주세요."
+        }
+      }
+    ]
+  }
+}
+```
 
 ---
 
 ## 설문 `/api/survey`
 
-모든 경로에 **`x-user-uuid`** 필요.
+**인증:** `x-user-uuid` 필수. 이메일이 비어 있으면 `imageUuidAccessUntil` 유효 기간 내에만 허용(라우트 내부 `403` 메시지 참고).
 
 ### POST `/api/survey/submit`
 
-로그인된 `Identity`에 연결된 **`Trait.surveyData`** 를 갱신합니다. 본문에 **이메일 필드는 없습니다.**
+**요청 루트:** `surveyData` 또는 `survey` 중 하나에 객체 (`surveyData ?? survey`).
 
-**요청 본문**
+**접근 거부 `403` (이메일도 없고 이미지 세션도 무효)**
 
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| `surveyData` 또는 `survey` | object | 예 | 동일 의미. `surveyData ?? survey` |
+```json
+{
+  "error": "설문은 학교 이메일(@sju.ac.kr) 인증을 완료한 뒤 제출하거나, 이미지 가입 세션 유효 기간(`imageUuidAccessUntil`) 내에 제출해 주세요."
+}
+```
 
-**설문 객체 (`surveyData`) 규칙 요약**
+**요청 예시 — 레거시(한 객체 + `availability`)**
 
-- 허용 키만 사용 (아래 라이프스타일 키 + `availability` 외 키 불가).
-- **척도(1~5 정수)** 및 **문자열 선택지** 구분은 서버 `lib/surveyValidation.js`와 동일.
-- 문자열 필드: `alcohol`, `smoking`, `tattoo`, `religion_type`, `skinship_limit`, `date_drinking`(문자열인 경우), `pref_cc`, `pref_smoking`, `pref_tattoo`, `pref_religion` — 공백만 있는 문자열 불가이며, **값은 저장소 루트 `config/surveySemantics.v1.json`에 등록된 카탈로그 문구만 허용**된다. 미등록 문구는 `400`으로 거절되며 조용히 기본값으로 바뀌지 않는다.
-- 검증 성공 시 서버가 **`surveySchemaVersion`**(현재 `1`)과 **`matchProfile`**(흡연·타투 코드, 선호 단계 `level`/`tier` 등 매칭용 표준 표현)을 `surveyData`에 함께 저장한다. 클라이언트가 이 필드를내도 제출 시 무시되고 서버가 다시 계산한다.
-- 나머지 설문 키는 기본적으로 1~5 정수 (`religion_type`이 `'없음'`이 아닐 때 `religion_intensity` 필수 등 상세 규칙은 검증 로직 참고).
-- **`availability`** (필수): 만남 가능 일정 배열. 원소는 `{ "date": "YYYY-MM-DD", "time_slot": "11:00-12:00" }` 형태. `time_slot`은 **정확히 60분**인 구간만 허용(예: `23:00-00:00` 자정 넘김 가능). 최소 1개, 최대 100개. 같은 `date`+`time_slot` 중복은 저장 시 하나로 합쳐지고, 날짜·시간순으로 정렬되어 `Trait.surveyData`에 저장된다. **배치·실시간 매칭**에서는 동일 `date`+`time_slot` 키가 최소 1개 겹치는 쌍만 짝 후보가 된다(한쪽만 슬롯이 있거나 겹침이 없으면 제외). 레거시로 양쪽 모두 슬롯이 비어 있으면 시간축 제약을 적용하지 않는다.
+```json
+{
+  "surveyData": {
+    "energy": 2,
+    "weekend": 3,
+    "pattern": 1,
+    "trend": 2,
+    "alcohol": "가끔",
+    "smoking": "비흡연",
+    "tattoo": "없음",
+    "contact": 4,
+    "meeting": 4,
+    "planning": 1,
+    "affection": 4,
+    "date_expense": 3,
+    "friends": 4,
+    "jealousy": 2,
+    "skinship_speed": 2,
+    "skinship_limit": "단계적으로",
+    "date_drinking": 2,
+    "politics": 3,
+    "religion_type": "없음",
+    "marriage_view": 3,
+    "meeting_seriousness": 4,
+    "job_view": 4,
+    "spending": 3,
+    "conflict": 2,
+    "empathy": 5,
+    "honesty": 5,
+    "trust": 5,
+    "gender": "남성",
+    "pref_cc": "비슷하면 좋음",
+    "pref_smoking": "비흡연",
+    "pref_tattoo": "선호",
+    "pref_religion": "비슷하면 좋음",
+    "self_care_habit": "상황에 따라 다름, 컨디션이 좋을 때는 집중 관리하고 바쁠 때는 쉬어감",
+    "availability": [
+      { "date": "2026-04-20", "time_slot": "11:00-12:00" }
+    ]
+  }
+}
+```
 
-**선호 단계·하드/소프트(요약, PR·운영 문서용)**
+**요청 예시 — 프론트 패키지 (`surveyAnswers` + `matchAvailability`)**
 
-| 키 | 단계 예시 | 하드(매칭 불가) | 소프트(점수 감점) |
-|----|-----------|----------------|-------------------|
-| `pref_smoking` | 1 `비흡연만` … 5 `흡연만` | 1: 상대 흡연 코드 ≥1 / 5: 상대 흡연 코드 <2 | 2: 비흡연 선호 + 상대 흡연 시 페널티(스펙 `penalty_points`) |
-| `pref_tattoo` | 1 `없음만` … 5 `있음만` | 1: 상대 타투 코드 ≥1 / 5: 상대 타투 코드 <2 | 2: 선호·비슷하면 좋음 + 상대 타투 코드 ≥1 |
-| `pref_religion` | 1 동일 종교 … 5 무교만, 6 종교 있음만 | 1·5·6은 스펙의 하드 정의에 따름 | 2·3·4는 하드 없음(종교 소프트는 기존 `religion_soft` 유지) |
-| `pref_cc` | 1 `매우 잦게`·`최소한으로` / 2 `비슷하면 좋음` 등 / 3 `상관없음` | 1: `pref_cc`와 상대 `cc` 불일치 | 2: 불일치 시 페널티 |
+```json
+{
+  "surveyData": {
+    "surveyAnswers": {
+      "energy": 2,
+      "weekend": 3,
+      "pattern": 1,
+      "trend": 2,
+      "alcohol": "가끔",
+      "smoking": "비흡연",
+      "tattoo": "없음",
+      "contact": 4,
+      "meeting": 4,
+      "planning": 1,
+      "affection": 4,
+      "date_expense": 3,
+      "friends": 4,
+      "jealousy": 2,
+      "skinship_speed": 2,
+      "skinship_limit": "단계적으로",
+      "date_drinking": 2,
+      "politics": 3,
+      "religion_type": "없음",
+      "marriage_view": 3,
+      "meeting_seriousness": 4,
+      "job_view": 4,
+      "spending": 3,
+      "conflict": 2,
+      "empathy": 5,
+      "honesty": 5,
+      "trust": 5,
+      "gender": "남성",
+      "pref_cc": "비슷하면 좋음",
+      "pref_smoking": "비흡연",
+      "pref_tattoo": "선호",
+      "pref_religion": "비슷하면 좋음",
+      "self_care_habit": "상황에 따라 다름, 컨디션이 좋을 때는 집중 관리하고 바쁠 때는 쉬어감"
+    },
+    "matchAvailability": {
+      "availableSlots": [
+        { "date": "2026-04-20", "hourStart": 11, "hourEnd": 12 }
+      ]
+    },
+    "participantMeta": {
+      "profile": {
+        "studentId": "25123456",
+        "birthYear": "2003",
+        "gender": "남성"
+      }
+    }
+  }
+}
+```
 
-전체 정의·가중치·라벨 목록은 **`config/surveySemantics.v1.json`** 이 단일 진실 소스이며, Python 매칭 서비스도 동일 파일을 읽는다.
+**원시 HTTP 요청 예시 (요청줄 + 헤더 + JSON 본문)** — 아래는 프론트 패키지 제출을 **한 덩어리**로 보낼 때의 형식입니다. `Host`는 배포 환경에 맞게 바꿉니다.
 
-**라이프스타일 키 목록 (32개)**
+`self_care_habit` 등 문자열 필드는 **`config/surveySemantics.v1.json`에 등록된 문구**만 통과합니다. 예시에서는 등록 문구로 넣었습니다(`"보통"`만 단독으로내면 `400`이 날 수 있음).
 
-`energy`, `weekend`, `pattern`, `trend`, `alcohol`, `smoking`, `tattoo`, `contact`, `meeting`, `planning`, `affection`, `date_expense`, `friends`, `jealousy`, `skinship_speed`, `skinship_limit`, `date_drinking`, `politics`, `religion_type`, `religion_intensity`, `marriage_view`, `meeting_seriousness`, `job_view`, `spending`, `conflict`, `empathy`, `honesty`, `trust`, **`gender`**(남성/여성, 이성 매칭용), `pref_cc`, `pref_smoking`, `pref_tattoo`, `pref_religion`
+```http
+POST /api/survey/submit HTTP/1.1
+Host: api.example.com
+Content-Type: application/json
+x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
 
-**응답**
+{
+  "surveyData": {
+    "surveyAnswers": {
+      "energy": 3,
+      "weekend": 4,
+      "pattern": 2,
+      "trend": 3,
+      "alcohol": "가끔",
+      "smoking": "비흡연",
+      "tattoo": "없음",
+      "contact": 3,
+      "meeting": 4,
+      "planning": 2,
+      "affection": 3,
+      "date_expense": 2,
+      "friends": 3,
+      "jealousy": 2,
+      "skinship_speed": 3,
+      "skinship_limit": "2",
+      "date_drinking": "상관없음",
+      "politics": 3,
+      "religion_type": "없음",
+      "marriage_view": 3,
+      "meeting_seriousness": 4,
+      "job_view": 3,
+      "spending": 2,
+      "conflict": 3,
+      "empathy": 4,
+      "honesty": 5,
+      "trust": 4,
+      "gender": "여성",
+      "pref_cc": "상관없음",
+      "pref_smoking": "비흡연만",
+      "pref_tattoo": "없음만",
+      "pref_religion": "상관없음",
+      "self_care_habit": "최소한의 관리, 건강을 위해 가벼운 산책이나 식단 조절 정도만 실천함"
+    },
+    "matchAvailability": {
+      "availableSlots": [
+        { "date": "2026-04-20", "hourStart": 11, "hourEnd": 12 }
+      ]
+    },
+    "participantMeta": {
+      "profile": {
+        "studentId": "2020123456",
+        "birthYear": "2002",
+        "gender": "여성"
+      },
+      "verificationMethod": "email"
+    }
+  }
+}
+```
 
-| HTTP | 본문 |
-|------|------|
-| `200` | `{ "message", "userId", "pin", "expiresInSec" }` — `userId`는 `Trait.id`(=`Identity.id`). **`pin`**: 카카오 챗봇 연동용 4자리 번호(=`GET /api/auth/pin`과 동일 규칙·Redis TTL). 발급 실패 시 `pin`·`expiresInSec`는 `null`이며 `GET /api/auth/pin`으로 재발급하면 됩니다. |
-| `400` | `{ "error": string }` — payload 누락, 검증 실패 메시지 |
-| `401` | 세션 헤더 오류 |
-| `404` | `{ "error": "사용자를 찾을 수 없습니다." }` |
-| `500` | `{ "error": "설문 저장 중 오류가 발생했습니다." }` |
+`x-user-uuid`는 `verify-code` 등으로 받은 **`Identity.id`** 와 같아야 합니다. 루트에 `survey` 키를 써도 동작은 동일합니다(`surveyData ?? survey`).
+
+문자열 선택지·척도·하드/소프트 규칙의 단일 진실 소스: 루트 **`config/surveySemantics.v1.json`**, 검증 구현: **`campusdrop_server/lib/surveyValidation.js`**. 성공 시 서버가 `surveySchemaVersion`, `matchProfile` 등을 덮어써 저장합니다.
+
+**응답 `200`**
+
+```json
+{
+  "message": "설문 결과가 저장되었습니다.",
+  "userId": "550e8400-e29b-41d4-a716-446655440000",
+  "pin": "1024",
+  "expiresInSec": 180
+}
+```
+
+**응답 `400` (본문 누락)**
+
+```json
+{
+  "error": "surveyData 또는 survey 본문이 필요합니다. (프론트 설문 패키지: surveyAnswers·matchAvailability·participantMeta 등 포함 가능)"
+}
+```
+
+**응답 `404`**
+
+```json
+{
+  "error": "사용자를 찾을 수 없습니다."
+}
+```
 
 ---
 
 ## 매칭 `/api/match`
 
-모든 경로에 **`x-user-uuid`** 필요.
+**인증:** `x-user-uuid` 필수. 이미지 세션 만료 규칙은 설문과 동일.
 
 ### GET `/api/match/test`
 
-고정 더미 5명의 설문을 Python `POST /calculate-match`에 **순환 5쌍**(0–1, 1–2, …, 4–0)으로 각각 위임한 뒤, 결과를 한 번에 JSON으로 반환합니다.
+**요약:** 더미 5명 순환 쌍으로 Python `POST /calculate-match` 호출 결과를 묶어 반환.
 
-**요청** — 본문 없음.
+**응답 `200` (구조 예시 — `comparisons[].match`는 Python 응답 전체)**
 
-**성공** `200`
+```json
+{
+  "description": "더미 5명 순환 매칭(인접 쌍 5회). Python POST /calculate-match 응답을 pair별로 포함합니다.",
+  "pythonUrl": "http://127.0.0.1:8000/calculate-match",
+  "inputUsers": [
+    { "id": "user0@sju.ac.kr", "email": null, "gender": "male" }
+  ],
+  "comparisons": [
+    {
+      "user_A": { "id": "user0@sju.ac.kr", "email": null, "gender": "male" },
+      "user_B": { "id": "user1@sju.ac.kr", "email": null, "gender": "female" },
+      "match": {
+        "final_score": 68.2,
+        "match_status": "ok",
+        "group_a_score": 75.0,
+        "group_b_penalty": 6.8,
+        "match_report": {
+          "summary_text": "두 사용자의 응답이 전반적으로 잘 맞습니다.",
+          "reasons_numbered_ko": ["1) 라이프스타일 패턴이 유사합니다."]
+        }
+      }
+    }
+  ]
+}
+```
 
-| 필드 | 타입 | 설명 |
-|------|------|------|
-| `description` | string | 응답 의미 설명 |
-| `pythonUrl` | string | 실제로 호출한 Python URL |
-| `inputUsers` | array | `{ id, gender }[]` |
-| `comparisons` | array | 각 원소: `user_A`, `user_B` — `{ id, gender }`, `match` — Python `CalculateMatchResponse` 본문 |
+`match` 객체의 필드명·`match_report` 내부는 **`campusdrop_matching/app/schemas.py` 의 `CalculateMatchResponse`** 및 실제 `match_report` 생성 로직과 일치합니다(위 값은 예시).
 
-Python 요청 본문에는 더미 설문에서 추출한 `availability_a` / `availability_b` 배열과, 구버전 호환용 `hard_filter_policy: "fail"`, `penalty_per_hard_violation: 30` 필드가 포함됩니다(후자는 Python에서 무시될 수 있음).
+**응답 `502` (Python HTTP 오류)**
 
-**오류** `401` — 세션 헤더 오류.
+```json
+{
+  "error": "매칭 서비스가 오류 상태를 반환했습니다.",
+  "pythonStatus": 500,
+  "pythonUrl": "http://127.0.0.1:8000/calculate-match",
+  "pythonBody": {},
+  "failedPair": {
+    "user_A_id": "user0@sju.ac.kr",
+    "user_B_id": "user1@sju.ac.kr"
+  }
+}
+```
 
-**오류** `502`
+**응답 `502` (연결 실패, `hint` 선택)**
 
-| 경우 | 본문 예시 |
-|------|-----------|
-| Python이 2xx 외 상태 | `error`, `pythonStatus`, `pythonUrl`, `pythonBody`, `failedPair` |
-| 네트워크/연결 실패 | `error`, `pythonUrl`, `detail`, `pythonStatus`, `pythonBody`, 필요 시 `hint` (`ECONNREFUSED` 등) |
-
-**오류** `500` — 예상치 못한 서버 예외.
+```json
+{
+  "error": "Python 매칭 서비스에 연결할 수 없습니다.",
+  "pythonUrl": "http://127.0.0.1:8000/calculate-match",
+  "detail": "connect ECONNREFUSED 127.0.0.1:8000",
+  "pythonStatus": null,
+  "pythonBody": null,
+  "hint": "호스트에서 Python을 모든 인터페이스에 바인딩하세요. 예: uvicorn app.main:app --host 0.0.0.0 --port 8000 (기본 127.0.0.1만이면 컨테이너·LAN IP 접속이 ECONNREFUSED 됩니다.)"
+}
+```
 
 ---
 
 ### POST `/api/match/request`
 
-인증된 유저(`x-user-uuid` = `Identity.id`)의 `Trait.surveyData`를 기준으로, 같은 주기에 설문이 있는 **이성(남성·여성)** 유저 풀을 모아 Python **`POST /batch-match`**(전역 그리디, 주간 배치와 동일)로 짝을 구한 뒤, 그 결과에서 **본인이 포함된 쌍**을 반환합니다. **만남 가능 시간**(`availability` 또는 `matchAvailability`→변환분)이 겹치지 않는 쌍은 후보에서 제외됩니다. 본인 `Trait.gender`가 남/여로 없으면 `400`입니다.
+**요약:** 동일 주기 풀에 대해 Python `batch-match`와 동일한 전역 매칭 후, 본인이 속한 쌍을 찾아 DB `matchings`에 저장하고 응답.
 
-**요청** — 본문 없어도 됨 (`{}` 가능). `Content-Type: application/json` 권장.
+**요청 본문:** 생략 가능. `{}` 허용.
 
-**응답**
+```json
+{}
+```
 
-| HTTP | 본문 |
-|------|------|
-| `200` | `{ "partnerLabel": string, "score": number, "report": object }` — `partnerLabel`은 상대 성별 라벨(`남성`/`여성`, 비어 있으면 `"상대"`), `report`는 DB에 저장되는 슬림 요약(`score`·`reasons`)이다. Python `compute_match` 전체 응답의 `match_report`에는 `semantics`(예: `survey_schema_version`, `soft_penalties`, `soft_penalty_total`)가 포함되며, DB에는 `lib/slimMatchReport.js` 적용 후 일부 필드만 남을 수 있으니 어드민·분석용 원문이 필요하면 배치/실시간 저장 직전 스냅샷을 별도 보관하는 것을 권장한다. |
-| `400` | `{ "error": "설문을 먼저 제출해 주세요." }` — 본인 `surveyData` 없음, 또는 성별 미기입(이성 매칭 불가) |
-| `401` | 세션 헤더 오류 |
-| `404` | 후보 없음 — `매칭할 다른 사용자가 없습니다.`, 이성 조건 불충족, 과거 매칭 이력만 남은 경우 등 |
-| `500` | `{ "error": "매칭 후보 조회 중 오류가 발생했습니다." }` 등 |
-| `502` | Python 오류 또는 `유효한 매칭 결과를 얻지 못했습니다...` (모든 후보 호출이 비정상이거나 점수 없음) |
+**응답 `200` (`report`는 `slimMatchReportForDb` 적용 후 형태)**
+
+```json
+{
+  "partnerLabel": "여성",
+  "partnerEmail": "partner@sju.ac.kr",
+  "score": 72.5,
+  "report": {
+    "score": 72.5,
+    "reasons": [
+      "라이프스타일 패턴이 비슷합니다.",
+      "만남 가능 시간이 겹칩니다."
+    ]
+  },
+  "periodStart": "2026-04-13T00:00:00.000Z",
+  "periodEnd": "2026-04-20T00:00:00.000Z"
+}
+```
+
+`partnerEmail`은 상대 `Identity.email`이 없으면 `null`입니다. `report`는 Python `match_report`가 없거나 슬림화 결과가 없으면 `null`일 수 있습니다.
+
+**응답 `400`**
+
+```json
+{
+  "error": "설문을 먼저 제출해 주세요."
+}
+```
+
+```json
+{
+  "error": "이성 매칭을 위해 설문에 남성/여성 성별이 필요합니다. 설문을 다시 제출해 주세요."
+}
+```
+
+**응답 `404` 예시**
+
+```json
+{
+  "error": "매칭할 다른 사용자가 없습니다."
+}
+```
+
+```json
+{
+  "error": "이성(남성·여성) 조건에 맞는 매칭 후보가 없습니다."
+}
+```
+
+```json
+{
+  "error": "전역 매칭에서 짝이 되지 않았습니다. (인원·하드 필터·과거 매칭 제약 등으로 이번 주기에 배정되지 않았을 수 있습니다.)"
+}
+```
+
+```json
+{
+  "error": "매칭 점수 50점 이상인 상대가 없습니다."
+}
+```
+
+(마지막 문구의 임계값은 `lib/matchPolicy.js` 의 `MIN_MATCH_SCORE`와 동일.)
+
+**응답 `502` (Python 연결 실패)** — `GET /api/match/test` 의 네트워크 오류 예시와 유사한 JSON.
+
+---
+
+## 관리자 `/api/admin`
+
+### POST `/api/admin/login`
+
+**인증:** 없음.
+
+**요청**
+
+```json
+{
+  "email": "admin@sju.ac.kr",
+  "password": "your-admin-password"
+}
+```
+
+**응답 `200`**
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "tokenType": "Bearer",
+  "expiresInSec": 28800
+}
+```
+
+**응답 `401`**
+
+```json
+{
+  "error": "아이디 또는 비밀번호가 올바르지 않습니다."
+}
+```
+
+**응답 `503` 예시**
+
+```json
+{
+  "error": "등록된 관리자 계정이 없습니다. `.env`에 ADMIN_EMAIL·ADMIN_PASSWORD를 두고 `npm run db:seed`를 실행해 주세요."
+}
+```
+
+---
+
+이하 **`Authorization: Bearer <token>`** 필수.
+
+### GET `/api/admin/users`
+
+**쿼리:** `limit`(기본 100, 최대 500), `offset`(기본 0).
+
+**응답 `200`**
+
+```json
+{
+  "total": 1200,
+  "limit": 100,
+  "offset": 0,
+  "users": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "email": "student@sju.ac.kr",
+      "emailVerified": true,
+      "schoolImageVerified": false,
+      "schoolProofVerifiedAt": null,
+      "studentId": "25123456",
+      "birthYear": "2003",
+      "kakaoLinked": false,
+      "blockedAt": null,
+      "createdAt": "2026-04-01T00:00:00.000Z",
+      "hasSurvey": true,
+      "surveyUpdatedAt": "2026-04-10T08:00:00.000Z",
+      "gender": "male"
+    }
+  ]
+}
+```
+
+---
+
+### GET `/api/admin/users/:id`
+
+**응답 `200`**
+
+```json
+{
+  "user": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "email": "student@sju.ac.kr",
+    "emailVerified": true,
+    "schoolImageVerified": true,
+    "schoolProofVerifiedAt": "2026-04-05T10:00:00.000Z",
+    "studentId": "25123456",
+    "birthYear": "2003",
+    "kakaoLinked": true,
+    "blockedAt": null,
+    "createdAt": "2026-04-01T00:00:00.000Z"
+  },
+  "schoolProofSubmissions": [
+    {
+      "id": "880e8400-e29b-41d4-a716-446655440003",
+      "status": "approved",
+      "mimeType": "image/jpeg",
+      "fileSize": 245678,
+      "createdAt": "2026-04-02T09:00:00.000Z",
+      "reviewedAt": "2026-04-05T10:00:00.000Z"
+    }
+  ],
+  "trait": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "gender": "male",
+    "surveyData": {},
+    "updatedAt": "2026-04-10T08:00:00.000Z"
+  }
+}
+```
+
+(`surveyData`는 실제 저장된 설문 JSON 객체입니다.)
+
+---
+
+### DELETE `/api/admin/users/:id`
+
+**본문:** JSON. `action`: `"delete"`(기본) 또는 `"block"`.
+
+**차단 요청**
+
+```json
+{
+  "action": "block"
+}
+```
+
+**응답 `200` (차단)**
+
+```json
+{
+  "message": "사용자가 차단되었습니다.",
+  "action": "block",
+  "user": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "blockedAt": "2026-04-17T12:00:00.000Z"
+  }
+}
+```
+
+**삭제 응답 `200`**
+
+```json
+{
+  "message": "사용자가 삭제되었습니다.",
+  "action": "delete",
+  "id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+---
+
+### GET `/api/admin/surveys`
+
+**쿼리:** `limit`(기본 100, 최대 500), `offset`.
+
+**응답 `200`**
+
+```json
+{
+  "total": 800,
+  "limit": 100,
+  "offset": 0,
+  "surveys": [
+    {
+      "userId": "550e8400-e29b-41d4-a716-446655440000",
+      "gender": "male",
+      "surveyData": {},
+      "updatedAt": "2026-04-10T08:00:00.000Z",
+      "identity": {
+        "blockedAt": null,
+        "createdAt": "2026-04-01T00:00:00.000Z",
+        "kakaoId": "kakao-123"
+      }
+    }
+  ]
+}
+```
+
+---
+
+### GET `/api/admin/matches`
+
+**쿼리:** `limit`(기본 200, 최대 1000), `offset`, `includeAll`(`1`/`true`/`yes` 이면 주기 필터 없음).
+
+**응답 `200` (현재 주기 필터 시)**
+
+```json
+{
+  "total": 3,
+  "limit": 200,
+  "offset": 0,
+  "includeAll": false,
+  "periodStart": "2026-04-13T00:00:00.000Z",
+  "periodEnd": "2026-04-20T00:00:00.000Z",
+  "matches": [
+    {
+      "id": "990e8400-e29b-41d4-a716-446655440004",
+      "userAId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "userBId": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+      "userAEmail": "a@sju.ac.kr",
+      "userBEmail": "b@sju.ac.kr",
+      "score": 80.5,
+      "matchedAt": "2026-04-14T18:00:05.000Z",
+      "periodStart": "2026-04-13T00:00:00.000Z",
+      "matchReport": {
+        "score": 80.5,
+        "reasons": ["요약 이유 1", "요약 이유 2"]
+      }
+    }
+  ]
+}
+```
+
+---
+
+### GET `/api/admin/matches/unmatched`
+
+**응답 `200`**
+
+```json
+{
+  "periodStart": "2026-04-13T00:00:00.000Z",
+  "periodEnd": "2026-04-20T00:00:00.000Z",
+  "eligibleCount": 42,
+  "matchedInPeriodCount": 20,
+  "unmatchedCount": 2,
+  "users": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "email": "solo@sju.ac.kr",
+      "kakaoLinked": false,
+      "createdAt": "2026-04-02T00:00:00.000Z",
+      "gender": "male",
+      "surveyUpdatedAt": "2026-04-09T12:00:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+### DELETE `/api/admin/matches/:id`
+
+**응답 `200`**
+
+```json
+{
+  "message": "매칭이 삭제되었습니다.",
+  "deleted": {
+    "id": "990e8400-e29b-41d4-a716-446655440004",
+    "userAId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "userBId": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+  }
+}
+```
+
+---
+
+### POST `/api/admin/matches/batch-run`
+
+**본문:** 없음.
+
+**응답 `200` (성공)**
+
+```json
+{
+  "skipped": false,
+  "userCount": 40,
+  "eligibleSurveyCount": 55,
+  "pairCount": 18
+}
+```
+
+**응답 `200` (스킵 — 설문 유저 2명 미만)**
+
+```json
+{
+  "skipped": true,
+  "reason": "not_enough_users",
+  "count": 1
+}
+```
+
+**응답 `200` (스킵 — 남/여 이진 성별 부족)**
+
+```json
+{
+  "skipped": true,
+  "reason": "not_enough_binary_gender_users",
+  "count": 1,
+  "eligibleSurveyCount": 5
+}
+```
+
+**응답 `502`**
+
+```json
+{
+  "error": "배치 매칭 실행에 실패했습니다. 매칭 서비스 URL·로그를 확인해 주세요.",
+  "detail": "BATCH_MATCH_HTTP_500"
+}
+```
+
+---
+
+### POST `/api/admin/matches/force`
+
+**요약:** 운영자 지정 이성 1건 `matchings` 생성.
+
+**요청 예시**
+
+```json
+{
+  "userAId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "userBId": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+  "score": 70,
+  "genderA": "male",
+  "genderB": "female"
+}
+```
+
+(`genderA`/`genderB`는 Trait에 성별이 없을 때만 필요할 수 있습니다. `user_a_id` 등 스네이크 케이스 별칭도 허용.)
+
+**응답 `201`**
+
+```json
+{
+  "message": "강제 매칭이 등록되었습니다.",
+  "match": {
+    "id": "aa0e8400-e29b-41d4-a716-446655440005",
+    "userAId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "userBId": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+    "score": 70,
+    "matchedAt": "2026-04-17T12:30:00.000Z",
+    "genderA": "male",
+    "genderB": "female"
+  }
+}
+```
+
+---
+
+### GET `/api/admin/school-proofs`
+
+**쿼리:** `status` = `pending` \| `approved` \| `rejected` \| `all`(기본 `pending`), `limit`(기본 50, 최대 200), `offset`.
+
+**응답 `200`**
+
+```json
+{
+  "total": 4,
+  "limit": 50,
+  "offset": 0,
+  "status": "pending",
+  "submissions": [
+    {
+      "id": "880e8400-e29b-41d4-a716-446655440003",
+      "identityId": "550e8400-e29b-41d4-a716-446655440000",
+      "userEmail": "student@sju.ac.kr",
+      "status": "pending",
+      "mimeType": "image/jpeg",
+      "fileSize": 245678,
+      "createdAt": "2026-04-17T09:00:00.000Z",
+      "reviewedAt": null,
+      "identitySchoolProofVerifiedAt": null
+    }
+  ]
+}
+```
+
+---
+
+### GET `/api/admin/school-proofs/:id/file`
+
+**응답:** **JSON이 아님** — `Content-Type`은 저장된 `mimeType`(기본 `application/octet-stream`), 바디는 이미지 바이너리 스트림.
+
+---
+
+### POST `/api/admin/school-proofs/:id/approve`
+
+**응답 `200`**
+
+```json
+{
+  "message": "이미지 인증이 승인되었습니다.",
+  "submissionId": "880e8400-e29b-41d4-a716-446655440003",
+  "identityId": "550e8400-e29b-41d4-a716-446655440000",
+  "schoolProofVerifiedAt": "2026-04-17T13:00:00.000Z"
+}
+```
+
+---
+
+### POST `/api/admin/school-proofs/:id/reject`
+
+**응답 `200`**
+
+```json
+{
+  "message": "제출이 거절 처리되었습니다.",
+  "submissionId": "880e8400-e29b-41d4-a716-446655440003"
+}
+```
 
 ---
 
 ## 백그라운드 작업 (HTTP 아님)
 
-서버 기동 시 **`node-cron`** 으로 등록됩니다.
-
 | 항목 | 값 |
-|------|-----|
-| 스케줄 | 매주 **월요일 18:00** (`0 18 * * 1`) |
-| 타임존 | **`Asia/Seoul`** |
-| 동작 | `lib/weeklyBatchMatch.js` — `Trait`에 설문이 있는 유저를 모아(각 유저에 `availability` 슬롯 배열 포함) Python **`POST {origin}{MATCHING_BATCH_PATH}`** (기본 `/batch-match`)에 일괄 전송 → 응답 쌍을 DB **`matchings`** 테이블에 저장 → `kakaoId`가 있는 유저에 알림톡 **Mock** 호출 (`lib/kakaoAlimtalk.js`) |
+|------|------|
+| 스케줄 | 매주 **월요일 18:00** (`0 18 * * 1`), 타임존 **`Asia/Seoul`** |
+| 동작 | `lib/weeklyBatchMatch.js` — Python `POST {origin}{MATCHING_BATCH_PATH}`(기본 `/batch-match`) → `matchings` 저장 → 카카오 알림톡 Mock |
 
 ---
 
-## 환경 변수 (`.env` 등)
+## 환경 변수
 
 | 변수 | 설명 |
 |------|------|
 | `PORT` | HTTP 포트 (기본 3000) |
+| `HOST` | 바인드 주소 (기본 `0.0.0.0`) |
 | `DATABASE_URL` | PostgreSQL (Prisma) |
-| `REDIS_URL` | Redis 연결 URL (기본 `redis://127.0.0.1:6379`) — PIN·카카오 웹훅에 사용 |
-| `MATCHING_SERVICE_URL` | Python 베이스 URL. 비우면 Docker/LAN 등 (`lib/resolveMatchingServiceUrl.js`) |
-| `MATCHING_CALCULATE_PATH` | 베이스만 있을 때 `/calculate-match` 대신 쓸 경로 (기본 `/calculate-match`) |
-| `MATCHING_SERVICE_TIMEOUT_MS` | 단일 매칭 axios 타임아웃(ms). 미설정 시 **5000** |
-| `MATCHING_BATCH_PATH` | 배치 매칭 경로 (기본 `/batch-match`). 배치 URL은 **항상 `MATCHING_SERVICE_URL`의 origin + 이 경로** |
-| `MATCHING_BATCH_TIMEOUT_MS` | 배치 axios 타임아웃(ms). 미설정 시 **120000** |
+| `REDIS_URL` | Redis (PIN·카카오 웹훅). 기본 `redis://127.0.0.1:6379` |
+| `MATCHING_SERVICE_URL` | Python 베이스 URL (`lib/resolveMatchingServiceUrl.js`) |
+| `MATCHING_CALCULATE_PATH` | 기본 `/calculate-match` |
+| `MATCHING_SERVICE_TIMEOUT_MS` | 단일 매칭 타임아웃(ms), 기본 **5000** |
+| `MATCHING_BATCH_PATH` | 기본 `/batch-match` |
+| `MATCHING_BATCH_TIMEOUT_MS` | 기본 **120000** |
+| `CORS_ORIGINS` | 쉼표 구분 추가 허용 Origin |
+| `ADMIN_CORS_ORIGINS` | 관리자 콘솔 등 추가 Origin |
+| `ADMIN_JWT_SECRET` / `ADMIN_PASSWORD` | 관리자 JWT |
+| `AUTH_REGISTRATION_JWT_SECRET` 등 | `complete-registration` 토큰 검증 |
 
 ---
 
-## 버전 및 변경
-
-명세는 저장소의 `routes/*.js`, `index.js`, `lib/*.js` 구현과 일치하도록 유지합니다. 엔드포인트 추가·변경 시 본 문서를 함께 수정하는 것을 권장합니다.
+## 변경 이력
 
 | 날짜 | 내용 |
 |------|------|
-| 2026-04-16 | **개인정보처리방침 동의**: DB `identities.privacy_policy_agreed` 추가. `POST /api/auth/verify-code`(신규 가입·`linkUuid` 연결), `POST /api/auth/complete-registration`, `POST /api/auth/complete-anonymous-onboarding`에서 동의 수집·검증. `GET /api/auth/me` 응답에 `privacyPolicyAgreed` 포함. 마이그레이션: `campusdrop_server/prisma/migrations/20260416140000_add_privacy_policy_agreed`. |
+| 2026-04-17 | 전 엔드포인트를 구현(`routes/*.js`, `index.js`)과 정합되도록 통합. 요청·응답 예시 JSON 보강. CORS·`POST /api/match/request` 응답 필드(`periodStart`/`periodEnd`)·관리자·분석·온보딩 API 반영. |
+| 2026-04-16 | `privacy_policy_agreed` / `privacyPolicyAgreed` 도입. `verify-code`, `complete-registration`, `complete-anonymous-onboarding`, `GET /api/auth/me` 반영. |
+
+명세와 구현이 어긋나면 **코드가 우선**이며, 변경 시 본 문서를 함께 갱신합니다.

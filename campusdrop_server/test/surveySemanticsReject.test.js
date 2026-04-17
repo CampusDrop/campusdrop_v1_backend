@@ -4,38 +4,34 @@ const { validateSurveyPayload } = require('../lib/surveyValidation');
 
 const MINIMAL = {
   energy: 3,
-  weekend: 3,
-  pattern: 3,
-  trend: 3,
-  alcohol: '가끔',
+  sleep_habit: 3,
+  morning_night: 3,
+  cleanliness: 3,
+  spending_style: 3,
+  meal_style: 3,
   smoking: '비흡연',
-  tattoo: '없음',
-  contact: 3,
-  meeting: 3,
-  planning: 3,
-  affection: 3,
-  date_expense: 3,
-  friends: 3,
-  jealousy: 3,
-  skinship_speed: 3,
-  skinship_limit: '단계적으로',
-  date_drinking: 2,
-  politics: 3,
+  drinking_freq: '가끔',
+  exercise: 3,
+  caffeine: 3,
+  screen_time: 3,
+  social_battery: 3,
+  humor_importance: 3,
+  conflict_style: '상대 흐름에 맞추는 편이에요',
+  text_call_pref: '상황에 따라 달라요',
+  reply_speed: 3,
   religion_type: '없음',
-  marriage_view: 3,
-  meeting_seriousness: 3,
-  job_view: 3,
-  spending: 3,
-  conflict: 3,
-  empathy: 3,
-  honesty: 3,
-  trust: 3,
+  politics_importance: 3,
+  family_plan_view: 3,
+  meet_frequency: 3,
+  date_cost_split: 3,
+  commitment: 3,
+  public_affection: 3,
+  alone_time_need: 3,
+  campus_date: 3,
+  study_together: 3,
+  age_gap: 3,
+  feedback_opt_in: '예',
   gender: '남성',
-  pref_cc: '상관없음',
-  pref_smoking: '상관없음',
-  pref_tattoo: '상관없음',
-  pref_religion: '상관없음',
-  self_care_habit: '상황에 따라 다름, 컨디션이 좋을 때는 집중 관리하고 바쁠 때는 쉬어감',
   availability: [{ date: '2026-04-20', time_slot: '11:00-12:00' }],
 };
 
@@ -45,14 +41,14 @@ test('unknown smoking label → 400', () => {
   assert.ok(String(r.error).includes('smoking'));
 });
 
-test('unknown pref_smoking label → 400', () => {
-  const r = validateSurveyPayload({ ...MINIMAL, pref_smoking: '전혀모름' });
+test('unknown drinking_freq label → 400', () => {
+  const r = validateSurveyPayload({ ...MINIMAL, drinking_freq: '알 수 없는 음주빈도' });
   assert.equal(r.ok, false);
-  assert.ok(String(r.error).includes('pref_smoking'));
+  assert.ok(String(r.error).includes('drinking_freq'));
 });
 
-test('unknown self_care_habit label → 400', () => {
-  const r = validateSurveyPayload({ ...MINIMAL, self_care_habit: '알 수 없는 값' });
+test('unknown conflict_style label → 400', () => {
+  const r = validateSurveyPayload({ ...MINIMAL, conflict_style: '알 수 없는 값' });
   assert.equal(r.ok, false);
-  assert.ok(String(r.error).includes('self_care_habit'));
+  assert.ok(String(r.error).includes('conflict_style'));
 });

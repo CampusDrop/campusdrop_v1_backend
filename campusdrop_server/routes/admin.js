@@ -18,7 +18,7 @@ const {
 } = require('../lib/matchPolicy');
 const { loadEligibleTraits } = require('../lib/weeklyBatchMatch');
 const { areOppositeTraitGenders, normalizeTraitGender } = require('../lib/genderPolicy');
-const { absoluteSchoolProofPath } = require('../lib/schoolProofMulter');
+const { resolveSchoolProofAbsolutePath } = require('../lib/schoolProofMulter');
 
 const router = express.Router();
 
@@ -1009,14 +1009,19 @@ router.get('/school-proofs/:id/file', async (req, res) => {
       return res.status(404).json({ error: '제출을 찾을 수 없습니다.' });
     }
 
-    let abs;
-    try {
-      abs = absoluteSchoolProofPath(row.storedPath);
-    } catch (_) {
-      return res.status(500).json({ error: '파일 경로가 올바르지 않습니다.' });
-    }
-    if (!fs.existsSync(abs)) {
-      return res.status(404).json({ error: '파일이 디스크에 없습니다.' });
+    const abs = resolveSchoolProofAbsolutePath(row);
+    if (!abs) {
+      console.warn('admin school-proof file missing', {
+        submissionId: row.id,
+        storedPath: row.storedPath,
+      });
+      return res.status(404).json({
+        error: '파일이 디스크에 없습니다.',
+        submissionId: row.id,
+        storedPath: row.storedPath,
+        hint:
+          '컨테이너 재배포 시 /app/uploads 가 비영구면 파일이 유실됩니다. docker-compose server 볼륨(server_uploads:/app/uploads) 적용 후 재업로드가 필요할 수 있습니다.',
+      });
     }
 
     await writeAccessLog({

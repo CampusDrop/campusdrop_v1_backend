@@ -1698,8 +1698,19 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
 
 **응답:** **JSON이 아님** — `Content-Type`은 저장된 `mimeType`(기본 `application/octet-stream`), 바디는 이미지 바이너리 스트림.
 
-**응답 `404` (`{"error":"파일이 디스크에 없습니다."}`)**  
-DB `school_proof_submissions.storedPath`는 있는데 서버 디스크에 파일이 없을 때입니다. Docker로 띄울 때 **`/app/uploads`를 영구 볼륨에 마운트하지 않으면** 이미지 재빌드·컨테이너 재생성 시 업로드가 통째로 사라지고, 이 API만 404가 납니다. `docker-compose.yml`의 `server` 서비스 `volumes: server_uploads:/app/uploads` 를 적용한 뒤 **이미 유실된 과거 파일은 복구되지 않습니다**(백업·재제출 필요).
+**응답 `404` (파일 없음)**  
+서버는 DB의 `storedPath`를 먼저 쓰고, 없으면 같은 제출 UUID로 `uploads/school-proof/<id>.jpg|.jpeg|.png|.webp` 를 순서대로 찾습니다. 그래도 없으면 예시처럼 JSON으로 이유를 돌려줍니다.
+
+```json
+{
+  "error": "파일이 디스크에 없습니다.",
+  "submissionId": "67f0e7af-2ccf-4d67-bea4-627c223658de",
+  "storedPath": "uploads/school-proof/67f0e7af-2ccf-4d67-bea4-627c223658de.jpg",
+  "hint": "컨테이너 재배포 시 /app/uploads 가 비영구면 파일이 유실됩니다. docker-compose server 볼륨(server_uploads:/app/uploads) 적용 후 재업로드가 필요할 수 있습니다."
+}
+```
+
+Docker로 띄울 때 **`/app/uploads`를 영구 볼륨에 마운트하지 않으면** 재빌드·재생성 시 업로드가 사라집니다. `docker-compose.yml`의 `server` 서비스 `volumes: server_uploads:/app/uploads` 를 적용하세요. **이미 유실된 과거 파일은 복구되지 않습니다**(백업·재제출).
 
 ---
 

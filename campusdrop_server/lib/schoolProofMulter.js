@@ -48,6 +48,35 @@ function absoluteSchoolProofPath(storedPath) {
   return abs;
 }
 
+const PROOF_FILE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
+
+/**
+ * DB `storedPath` 기준 경로를 먼저 쓰고, 파일이 없으면 `uploads/school-proof/<submissionId>.(jpg|jpeg|png|webp)` 를 순서대로 시도합니다.
+ * (경로 불일치·마이그레이션 등 소규모 복구용. 디스크가 비어 있으면 null.)
+ * @param {{ id: string, storedPath: string | null }} row
+ * @returns {string | null}
+ */
+function resolveSchoolProofAbsolutePath(row) {
+  const sp = row.storedPath;
+  if (sp) {
+    try {
+      const primary = absoluteSchoolProofPath(sp);
+      if (fs.existsSync(primary)) return primary;
+    } catch (_) {
+      /* invalid storedPath — try fallbacks */
+    }
+  }
+  const dir = path.join(SERVER_ROOT, 'uploads', 'school-proof');
+  if (!fs.existsSync(dir)) return null;
+  const sid = String(row.id || '').trim();
+  if (!sid) return null;
+  for (const ext of PROOF_FILE_EXTENSIONS) {
+    const p = path.join(dir, sid + ext);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
 function createSchoolProofUploader() {
   ensureUploadDir();
   const storage = multer.diskStorage({
@@ -87,5 +116,6 @@ function createSchoolProofUploader() {
 module.exports = {
   createSchoolProofUploader,
   absoluteSchoolProofPath,
+  resolveSchoolProofAbsolutePath,
   schoolProofMaxBytes,
 };

@@ -438,7 +438,67 @@ function validateAndNormalizeSurveyAnswers(nested) {
     if (extra.length > 0) {
       return { ok: false, error: `surveyAnswers.${ph}에 허용되지 않은 필드: ${extra.join(', ')}` };
     }
+
+    /** `religion === NONE`일 때 `faith_depth` 생략 허용 — 루프에서 종교보다 앞에 오는 필드라 선검증한다. */
+    /** @type {string | null} */
+    let phase4ReligionNorm = null;
+    if (ph === 'phase4_beliefs_and_values') {
+      if (!Object.prototype.hasOwnProperty.call(block, 'religion')) {
+        return {
+          ok: false,
+          error: 'surveyAnswers.phase4_beliefs_and_values에 필수 항목이 누락되었습니다: religion',
+        };
+      }
+      const rawRel = block.religion;
+      if (rawRel === undefined || rawRel === null) {
+        return {
+          ok: false,
+          error: 'surveyAnswers.phase4_beliefs_and_values.religion 값이 필요합니다.',
+        };
+      }
+      if (!Object.prototype.hasOwnProperty.call(enumSpec, 'religion')) {
+        return { ok: false, error: '시맨틱에 religion enum 정의가 없습니다.' };
+      }
+      const allowedRel = new Set(/** @type {string[]} */ (enumSpec.religion));
+      const relStr = typeof rawRel === 'string' ? rawRel.trim() : '';
+      if (!allowedRel.has(relStr)) {
+        return {
+          ok: false,
+          error: `surveyAnswers.phase4_beliefs_and_values.religion는 다음 중 하나여야 합니다: ${[...allowedRel].join(', ')}`,
+        };
+      }
+      block.religion = relStr;
+      phase4ReligionNorm = relStr;
+    }
+
     for (const field of expected) {
+      if (ph === 'phase4_beliefs_and_values' && field === 'religion') {
+        continue;
+      }
+      if (ph === 'phase4_beliefs_and_values' && field === 'faith_depth') {
+        const hasFd = Object.prototype.hasOwnProperty.call(block, field);
+        const v = hasFd ? block[field] : undefined;
+        if (phase4ReligionNorm === 'NONE' && (!hasFd || v === null)) {
+          delete block.faith_depth;
+          continue;
+        }
+        if (!hasFd) {
+          return { ok: false, error: `surveyAnswers.${ph}에 필수 항목이 누락되었습니다: ${field}` };
+        }
+        if (v === undefined || v === null) {
+          return { ok: false, error: `surveyAnswers.${ph}.${field} 값이 필요합니다.` };
+        }
+        if (!intKeys.has(field)) {
+          return { ok: false, error: `시맨틱에 정의되지 않은 필드입니다: ${field}` };
+        }
+        const n = coerceScaleInt(v);
+        if (n === null) {
+          return { ok: false, error: `surveyAnswers.${ph}.${field}는 1~5 사이의 정수여야 합니다.` };
+        }
+        block[field] = n;
+        continue;
+      }
+
       if (!Object.prototype.hasOwnProperty.call(block, field)) {
         return { ok: false, error: `surveyAnswers.${ph}에 필수 항목이 누락되었습니다: ${field}` };
       }
@@ -485,7 +545,13 @@ function validateAndNormalizeSurveyAnswers(nested) {
   const flatKeys = Object.keys(flat);
   const expectedFlat = specFlatSurveyKeys();
   const expSet = new Set(expectedFlat);
-  const missing = expectedFlat.filter((k) => !flatKeys.includes(k));
+  const religionFlat = flat.religion;
+  const religionStr =
+    typeof religionFlat === 'string' ? religionFlat.trim() : String(religionFlat ?? '').trim();
+  const missing = expectedFlat.filter(
+    (k) =>
+      !flatKeys.includes(k) && !(k === 'faith_depth' && religionStr === 'NONE'),
+  );
   if (missing.length) {
     return { ok: false, error: `설문 응답이 불완전합니다(누락): ${missing.join(', ')}` };
   }

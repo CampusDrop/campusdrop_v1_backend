@@ -94,3 +94,24 @@ test('minimal valid payload → ok + nested surveyAnswers', () => {
   assert.equal(r.data.surveyAnswers.phase3_opposite_sex_and_intimacy.drinking_on_date, 'ANY');
   assert.equal(r.data.matchProfile.smoking.label, 'NON_SMOKER');
 });
+
+test('religion NONE → faith_depth 생략 가능', () => {
+  const p = minimalSurvey();
+  const p4 = { ...p.surveyAnswers.phase4_beliefs_and_values };
+  delete p4.faith_depth;
+  p.surveyAnswers.phase4_beliefs_and_values = p4;
+  const r = validateSurveyPayload(p);
+  assert.equal(r.ok, true);
+  assert.ok(r.data && r.data.surveyAnswers);
+  assert.equal('faith_depth' in r.data.surveyAnswers.phase4_beliefs_and_values, false);
+});
+
+test('religion NONE이 아닐 때 faith_depth 필수', () => {
+  const p = minimalSurvey();
+  const p4 = { ...p.surveyAnswers.phase4_beliefs_and_values, religion: 'BUDDHIST' };
+  delete p4.faith_depth;
+  p.surveyAnswers.phase4_beliefs_and_values = p4;
+  const r = validateSurveyPayload(p);
+  assert.equal(r.ok, false);
+  assert.ok(String(r.error).includes('faith_depth'));
+});

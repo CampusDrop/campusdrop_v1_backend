@@ -1,73 +1,41 @@
 /**
- * 설문 키 및 타입 정의.
- * 척도(scale): 정수 1~5. 문자열 옵션(string): 공백만 있는 문자열 불가.
- * availability: 만남 가능 일정 — 날짜(YYYY-MM-DD) + 1시간 단위 구간(HH:MM-HH:MM).
- * gender: 남성/여성 등 → DB·매칭용 `male` | `female` 정규화(`../lib/genderPolicy`).
- *
- * 허용 문자열·선호 정책: `config/surveySemantics.v1.json`, 카탈로그 적용: `surveySemanticsCatalog.js`.
+ * 설문 검증 v3: `surveyAnswers`는 phase별 중첩 객체, 척도 1~5, Enum은 영문 대문자 스네이크.
+ * 시맨틱: `config/surveySemantics.v1.json`, matchProfile: `surveySemanticsCatalog.js`.
  */
 
 const { normalizeTraitGender } = require('./genderPolicy');
-const { validateCatalogAndBuildMatchProfile } = require('./surveySemanticsCatalog');
+const { loadSemantics, validateCatalogAndBuildMatchProfile } = require('./surveySemanticsCatalog');
 
 const MAX_AVAILABILITY_SLOTS = 100;
 
-/** 6단계 설문 UI(surveySteps id) 기준 */
-const ALL_KEYS = [
-  'energy',
-  'sleep_habit',
-  'morning_night',
-  'cleanliness',
-  'spending_style',
-  'meal_style',
-  'smoking',
-  'drinking_freq',
-  'exercise',
-  'caffeine',
-  'screen_time',
-  'social_battery',
-  'humor_importance',
-  'conflict_style',
-  'text_call_pref',
-  'reply_speed',
-  'religion_type',
-  'religion_intensity',
-  'politics_importance',
-  'family_plan_view',
-  'meet_frequency',
-  'date_cost_split',
-  'commitment',
-  'public_affection',
-  'alone_time_need',
-  'campus_date',
-  'study_together',
-  'age_gap',
-  'feedback_opt_in',
+const ROOT_KEYS = new Set([
+  'surveyAnswers',
+  'answers',
+  'matchAvailability',
+  'participantMeta',
+  'profile',
   'gender',
   'availability',
-];
-
-const ALL_KEYS_SET = new Set(ALL_KEYS);
-
-const STRING_KEYS = new Set([
-  'smoking',
-  'religion_type',
-  'drinking_freq',
-  'conflict_style',
-  'text_call_pref',
-  'feedback_opt_in',
 ]);
 
-const SCALE_KEYS = new Set(ALL_KEYS.filter((k) => !STRING_KEYS.has(k)));
+function specFlatSurveyKeys() {
+  const s = loadSemantics();
+  const ints = Array.isArray(s.integer_scale_keys) ? s.integer_scale_keys : [];
+  const enums = s.string_enum_keys && typeof s.string_enum_keys === 'object' ? Object.keys(s.string_enum_keys) : [];
+  return [...ints, ...enums];
+}
+
+const ALL_KEYS = specFlatSurveyKeys();
+const ALL_KEYS_SET = new Set(ALL_KEYS);
+
+const s0 = loadSemantics();
+const STRING_KEYS = new Set(
+  s0.string_enum_keys && typeof s0.string_enum_keys === 'object' ? Object.keys(s0.string_enum_keys) : [],
+);
+const SCALE_KEYS = new Set(Array.isArray(s0.integer_scale_keys) ? s0.integer_scale_keys : []);
 
 const SCALE_MIN = 1;
 const SCALE_MAX = 5;
-
-function isReligionNone(value) {
-  if (typeof value !== 'string') return false;
-  const t = value.trim();
-  return t === '없음' || t === '무교';
-}
 
 function isScaleValue(value) {
   return (
@@ -198,16 +166,39 @@ function validateAvailabilityField(raw) {
 }
 
 /**
- * `surveyAnswers` / `answers` / `matchAvailability` / `participantMeta` 를 처리해
- * ALL_KEYS 검증용 코어 객체를 만듭니다.
+ * @param {Record<string, unknown> | null} primary
+ * @param {Record<string, unknown> | null} secondary
+ */
+function mergePhaseSurveyObjects(primary, secondary) {
+  const spec = loadSemantics();
+  const phases = spec.survey_phases;
+  if (!Array.isArray(phases)) {
+    return {};
+  }
+  /** @type {Record<string, Record<string, unknown>>} */
+  const out = {};
+  for (const ph of phases) {
+    const o = {};
+    const pa = primary && typeof primary === 'object' && !Array.isArray(primary) ? primary[ph] : undefined;
+    const pb = secondary && typeof secondary === 'object' && !Array.isArray(secondary) ? secondary[ph] : undefined;
+    if (pa && typeof pa === 'object' && !Array.isArray(pa)) {
+      Object.assign(o, pa);
+    }
+    if (pb && typeof pb === 'object' && !Array.isArray(pb)) {
+      Object.assign(o, pb);
+    }
+    out[ph] = o;
+  }
+  return out;
+}
+
+/**
  * @param {Record<string, unknown>} surveyData
- * @returns {{ ok: true, core: Record<string, unknown>, matchAvailability: unknown, participantMeta: unknown } | { ok: false, error: string }}
+ * @returns {{ ok: true, mergedPhases: Record<string, Record<string, unknown>>, matchAvailability: unknown, participantMeta: unknown, gender: unknown, availability: unknown } | { ok: false, error: string }}
  */
 function splitClientSurveyPackage(surveyData) {
   const input = /** @type {Record<string, unknown>} */ ({ ...surveyData });
-  const rootProfile = Object.prototype.hasOwnProperty.call(input, 'profile')
-    ? input.profile
-    : undefined;
+  const rootProfile = Object.prototype.hasOwnProperty.call(input, 'profile') ? input.profile : undefined;
   const matchAvailability = Object.prototype.hasOwnProperty.call(input, 'matchAvailability')
     ? input.matchAvailability
     : undefined;
@@ -216,11 +207,24 @@ function splitClientSurveyPackage(surveyData) {
     : undefined;
   const surveyAnswers = input.surveyAnswers;
   const answers = input.answers;
+  const gender = Object.prototype.hasOwnProperty.call(input, 'gender') ? input.gender : undefined;
+  const availability = Object.prototype.hasOwnProperty.call(input, 'availability') ? input.availability : undefined;
+
   delete input.matchAvailability;
   delete input.participantMeta;
   delete input.profile;
   delete input.surveyAnswers;
   delete input.answers;
+  delete input.gender;
+  delete input.availability;
+
+  const extra = Object.keys(input);
+  if (extra.length > 0) {
+    return {
+      ok: false,
+      error: `허용되지 않은 필드가 있습니다: ${extra.join(', ')}`,
+    };
+  }
 
   if (
     rootProfile !== undefined &&
@@ -245,40 +249,22 @@ function splitClientSurveyPackage(surveyData) {
     };
   }
 
-  const core = { ...input };
-  if (
-    surveyAnswers !== undefined &&
-    surveyAnswers !== null &&
-    typeof surveyAnswers === 'object' &&
-    !Array.isArray(surveyAnswers)
-  ) {
-    Object.assign(core, /** @type {Record<string, unknown>} */ (surveyAnswers));
-  }
-  if (answers !== undefined && answers !== null && typeof answers === 'object' && !Array.isArray(answers)) {
-    Object.assign(core, /** @type {Record<string, unknown>} */ (answers));
+  const sa =
+    surveyAnswers !== undefined && surveyAnswers !== null && typeof surveyAnswers === 'object' && !Array.isArray(surveyAnswers)
+      ? /** @type {Record<string, unknown>} */ (surveyAnswers)
+      : null;
+  const an =
+    answers !== undefined && answers !== null && typeof answers === 'object' && !Array.isArray(answers)
+      ? /** @type {Record<string, unknown>} */ (answers)
+      : null;
+
+  if (!sa && !an) {
+    return { ok: false, error: 'surveyAnswers 또는 answers(phase 중첩 객체)가 필요합니다.' };
   }
 
-  if (
-    participantMeta !== null &&
-    participantMeta !== undefined &&
-    typeof participantMeta === 'object' &&
-    !Array.isArray(participantMeta)
-  ) {
-    const pro = /** @type {Record<string, unknown>} */ (participantMeta).profile;
-    if (pro && typeof pro === 'object' && !Array.isArray(pro) && core.gender == null && pro.gender != null) {
-      core.gender = pro.gender;
-    }
-  }
+  const mergedPhases = mergePhaseSurveyObjects(sa, an);
 
-  const extra = Object.keys(core).filter((k) => !ALL_KEYS_SET.has(k));
-  if (extra.length > 0) {
-    return {
-      ok: false,
-      error: `허용되지 않은 필드가 있습니다: ${extra.join(', ')}`,
-    };
-  }
-
-  return { ok: true, core, matchAvailability, participantMeta };
+  return { ok: true, mergedPhases, matchAvailability, participantMeta, gender, availability };
 }
 
 /**
@@ -417,24 +403,102 @@ function coerceScaleInt(value) {
   return null;
 }
 
-/** @param {unknown} v */
-function normalizeFeedbackOptIn(v) {
-  if (typeof v === 'boolean') {
-    return v ? '예' : '아니오';
+/**
+ * @param {Record<string, Record<string, unknown>>} nested
+ * @returns {{ ok: true, nested: Record<string, Record<string, unknown>>, flat: Record<string, unknown> } | { ok: false, error: string }}
+ */
+function validateAndNormalizeSurveyAnswers(nested) {
+  const spec = loadSemantics();
+  const phases = spec.survey_phases;
+  const phaseFields = spec.phase_fields;
+  const intKeys = new Set(Array.isArray(spec.integer_scale_keys) ? spec.integer_scale_keys : []);
+  const enumSpec = spec.string_enum_keys && typeof spec.string_enum_keys === 'object' ? spec.string_enum_keys : {};
+
+  if (!nested || typeof nested !== 'object' || Array.isArray(nested)) {
+    return { ok: false, error: 'surveyAnswers는 JSON 객체여야 합니다.' };
   }
-  if (typeof v === 'number' && Number.isInteger(v)) {
-    if (v === 1) return '예';
-    if (v === 0) return '아니오';
+
+  if (!Array.isArray(phases) || !phaseFields || typeof phaseFields !== 'object') {
+    return { ok: false, error: '설문 시맨틱(survey_phases / phase_fields)이 올바르지 않습니다.' };
   }
-  if (typeof v === 'string') {
-    return v.trim();
+
+  for (const ph of phases) {
+    if (!Object.prototype.hasOwnProperty.call(nested, ph)) {
+      return { ok: false, error: `surveyAnswers에 단계 키가 누락되었습니다: ${ph}` };
+    }
+    const block = nested[ph];
+    if (block === null || typeof block !== 'object' || Array.isArray(block)) {
+      return { ok: false, error: `surveyAnswers.${ph}는 객체여야 합니다.` };
+    }
+    const expected = phaseFields[ph];
+    if (!Array.isArray(expected)) {
+      return { ok: false, error: `시맨틱에 ${ph} 필드 정의가 없습니다.` };
+    }
+    const extra = Object.keys(block).filter((k) => !expected.includes(k));
+    if (extra.length > 0) {
+      return { ok: false, error: `surveyAnswers.${ph}에 허용되지 않은 필드: ${extra.join(', ')}` };
+    }
+    for (const field of expected) {
+      if (!Object.prototype.hasOwnProperty.call(block, field)) {
+        return { ok: false, error: `surveyAnswers.${ph}에 필수 항목이 누락되었습니다: ${field}` };
+      }
+      const v = block[field];
+      if (v === undefined || v === null) {
+        return { ok: false, error: `surveyAnswers.${ph}.${field} 값이 필요합니다.` };
+      }
+      if (intKeys.has(field)) {
+        const n = coerceScaleInt(v);
+        if (n === null) {
+          return { ok: false, error: `surveyAnswers.${ph}.${field}는 1~5 사이의 정수여야 합니다.` };
+        }
+        block[field] = n;
+      } else if (Object.prototype.hasOwnProperty.call(enumSpec, field)) {
+        const allowed = new Set(/** @type {string[]} */ (enumSpec[field]));
+        const s = typeof v === 'string' ? v.trim() : '';
+        if (!allowed.has(s)) {
+          return {
+            ok: false,
+            error: `surveyAnswers.${ph}.${field}는 다음 중 하나여야 합니다: ${[...allowed].join(', ')}`,
+          };
+        }
+        block[field] = s;
+      } else {
+        return { ok: false, error: `시맨틱에 정의되지 않은 필드입니다: ${field}` };
+      }
+    }
   }
-  return v;
+
+  const unknownPhase = Object.keys(nested).filter((k) => !phases.includes(k));
+  if (unknownPhase.length > 0) {
+    return { ok: false, error: `허용되지 않은 설문 단계 키: ${unknownPhase.join(', ')}` };
+  }
+
+  /** @type {Record<string, unknown>} */
+  const flat = {};
+  for (const ph of phases) {
+    const block = /** @type {Record<string, unknown>} */ (nested[ph]);
+    for (const k of Object.keys(block)) {
+      flat[k] = block[k];
+    }
+  }
+
+  const flatKeys = Object.keys(flat);
+  const expectedFlat = specFlatSurveyKeys();
+  const expSet = new Set(expectedFlat);
+  const missing = expectedFlat.filter((k) => !flatKeys.includes(k));
+  if (missing.length) {
+    return { ok: false, error: `설문 응답이 불완전합니다(누락): ${missing.join(', ')}` };
+  }
+  const stray = flatKeys.filter((k) => !expSet.has(k));
+  if (stray.length) {
+    return { ok: false, error: `내부 검증 오류: 예상 밖 키 ${stray.join(', ')}` };
+  }
+
+  return { ok: true, nested: /** @type {Record<string, Record<string, unknown>>} */ (nested), flat };
 }
 
 /**
- * 프론트에서 `{ answers: { energy, ... } }` 처럼 감싸서 보내는 경우를 평탄화합니다.
- * `answers`와 본문에 같은 키가 있으면 `answers` 안의 값이 우선합니다.
+ * `answers`만 중첩으로 온 경우 `surveyAnswers`로 흡수한다.
  * @param {Record<string, unknown>} surveyData
  * @returns {{ ok: true, raw: Record<string, unknown> } | { ok: false, error: string }}
  */
@@ -448,14 +512,21 @@ function unwrapSurveyPayload(surveyData) {
     !Array.isArray(inner)
   ) {
     const { answers: _a, ...rest } = raw;
-    const extra = Object.keys(rest).filter((k) => !ALL_KEYS_SET.has(k));
+    const extra = Object.keys(rest).filter((k) => !ROOT_KEYS.has(k));
     if (extra.length > 0) {
       return {
         ok: false,
         error: `허용되지 않은 필드가 있습니다: ${extra.join(', ')}`,
       };
     }
-    raw = { ...rest, .../** @type {Record<string, unknown>} */ (inner) };
+    const existing = rest.surveyAnswers;
+    const merged = mergePhaseSurveyObjects(
+      existing && typeof existing === 'object' && !Array.isArray(existing)
+        ? /** @type {Record<string, unknown>} */ (existing)
+        : {},
+      /** @type {Record<string, unknown>} */ (inner),
+    );
+    raw = { ...rest, surveyAnswers: merged };
   }
   return { ok: true, raw };
 }
@@ -474,9 +545,59 @@ function validateSurveyPayload(surveyData) {
     return { ok: false, error: split.error };
   }
 
-  let raw = { ...split.core };
+  const unwrapped = unwrapSurveyPayload({
+    surveyAnswers: split.mergedPhases,
+    matchAvailability: split.matchAvailability,
+    participantMeta: split.participantMeta,
+    gender: split.gender,
+    availability: split.availability,
+  });
+  if (!unwrapped.ok) {
+    return { ok: false, error: unwrapped.error };
+  }
+
+  let { raw } = unwrapped;
   const { matchAvailability, participantMeta } = split;
 
+  const nestedCopy = JSON.parse(JSON.stringify(raw.surveyAnswers));
+  const norm = validateAndNormalizeSurveyAnswers(
+    /** @type {Record<string, Record<string, unknown>>} */ (nestedCopy),
+  );
+  if (!norm.ok) {
+    return { ok: false, error: norm.error };
+  }
+
+  /** @type {Record<string, unknown>} */
+  const working = { ...raw };
+  delete working.matchProfile;
+  delete working.surveySchemaVersion;
+
+  let gender = working.gender;
+  if (
+    (gender === undefined || gender === null) &&
+    participantMeta !== null &&
+    participantMeta !== undefined &&
+    typeof participantMeta === 'object' &&
+    !Array.isArray(participantMeta)
+  ) {
+    const pro = /** @type {Record<string, unknown>} */ (participantMeta).profile;
+    if (pro && typeof pro === 'object' && !Array.isArray(pro) && pro.gender != null) {
+      gender = pro.gender;
+    }
+  }
+
+  if (gender === undefined || gender === null) {
+    return { ok: false, error: 'gender(또는 participantMeta.profile.gender)가 필요합니다.' };
+  }
+  const g = normalizeTraitGender(gender);
+  if (g === null) {
+    return {
+      ok: false,
+      error: 'gender는 남성(male·남성·남 등) 또는 여성(female·여성·여 등)으로 입력해 주세요.',
+    };
+  }
+
+  let availabilityRaw = working.availability;
   if (
     matchAvailability !== undefined &&
     matchAvailability !== null &&
@@ -487,157 +608,31 @@ function validateSurveyPayload(surveyData) {
     if (!conv.ok) {
       return { ok: false, error: conv.error };
     }
-    raw.availability = conv.slots;
-  } else if (!Object.prototype.hasOwnProperty.call(raw, 'availability')) {
+    availabilityRaw = conv.slots;
+  } else if (availabilityRaw === undefined || availabilityRaw === null) {
     return {
       ok: false,
       error: 'matchAvailability 또는 availability(레거시 배열)가 필요합니다.',
     };
   }
 
-  const unwrapped = unwrapSurveyPayload(raw);
-  if (!unwrapped.ok) {
-    return { ok: false, error: unwrapped.error };
-  }
-  raw = unwrapped.raw;
-  delete raw.matchProfile;
-  delete raw.surveySchemaVersion;
-
-  if (Object.prototype.hasOwnProperty.call(raw, 'feedback_opt_in')) {
-    raw.feedback_opt_in = normalizeFeedbackOptIn(raw.feedback_opt_in);
-  }
-
-  for (const key of Object.keys(raw)) {
-    if (!ALL_KEYS_SET.has(key)) {
-      return { ok: false, error: `허용되지 않은 필드가 있습니다: ${key}` };
-    }
-  }
-
-  for (const key of ALL_KEYS) {
-    if (key === 'religion_intensity') continue;
-    if (!Object.prototype.hasOwnProperty.call(raw, key)) {
-      return { ok: false, error: `필수 항목이 누락되었습니다: ${key}` };
-    }
-    const v = raw[key];
-    if (v === undefined || v === null) {
-      return { ok: false, error: `필수 항목이 누락되었습니다: ${key}` };
-    }
-  }
-
-  const religionType = raw.religion_type;
-  if (!isNonEmptyString(religionType)) {
-    return { ok: false, error: 'religion_type은 비어 있지 않은 문자열이어야 합니다.' };
-  }
-
-  const religionNone = isReligionNone(religionType);
-
-  const hasIntensityKey = Object.prototype.hasOwnProperty.call(raw, 'religion_intensity');
-  const intensityRaw = hasIntensityKey ? raw.religion_intensity : undefined;
-
-  if (!religionNone) {
-    if (!hasIntensityKey || intensityRaw === undefined || intensityRaw === null) {
-      return {
-        ok: false,
-        error:
-          "religion_type이 '없음'·'무교'가 아닐 때는 religion_intensity(1~5 정수)가 필수입니다.",
-      };
-    }
-    const ri = coerceScaleInt(intensityRaw);
-    if (ri === null) {
-      return {
-        ok: false,
-        error: 'religion_intensity는 1~5 사이의 정수여야 합니다.',
-      };
-    }
-  } else if (hasIntensityKey && intensityRaw !== undefined && intensityRaw !== null) {
-    const ri = coerceScaleInt(intensityRaw);
-    if (ri === null) {
-      return {
-        ok: false,
-        error:
-          "religion_type이 '없음' 또는 '무교'일 때 religion_intensity를 보낸 경우 1~5 정수여야 합니다.",
-      };
-    }
-  }
-
-  const availabilityResult = validateAvailabilityField(raw.availability);
+  const availabilityResult = validateAvailabilityField(availabilityRaw);
   if (!availabilityResult.ok) {
     return { ok: false, error: availabilityResult.error };
   }
 
-  /** @type {Record<string, unknown>} */
-  const data = {};
-
-  for (const key of ALL_KEYS) {
-    if (key === 'availability') {
-      data.availability = availabilityResult.data;
-      continue;
-    }
-    if (key === 'religion_intensity') {
-      if (religionNone) {
-        data[key] =
-          hasIntensityKey && intensityRaw !== undefined && intensityRaw !== null
-            ? coerceScaleInt(intensityRaw)
-            : null;
-      } else {
-        data[key] = coerceScaleInt(intensityRaw);
-      }
-      continue;
-    }
-
-    if (key === 'gender') {
-      const value = raw[key];
-      const g = normalizeTraitGender(value);
-      if (g === null) {
-        return {
-          ok: false,
-          error:
-            'gender는 남성(male·남성·남 등) 또는 여성(female·여성·여 등)으로 입력해 주세요.',
-        };
-      }
-      data[key] = g;
-      continue;
-    }
-
-    const value = raw[key];
-
-    if (key === 'drinking_freq') {
-      const likert = coerceScaleInt(value);
-      if (likert !== null) {
-        data[key] = likert;
-        continue;
-      }
-      if (isNonEmptyString(value)) {
-        data[key] = typeof value === 'string' ? value.trim() : value;
-        continue;
-      }
-      return {
-        ok: false,
-        error:
-          'drinking_freq는 비어 있지 않은 문자열(선택지 문구)이거나 1~5 척도(정수 또는 "1"~"5")여야 합니다.',
-      };
-    }
-
-    if (STRING_KEYS.has(key)) {
-      if (!isNonEmptyString(value)) {
-        return {
-          ok: false,
-          error: `${key}는 비어 있지 않은 문자열이어야 합니다.`,
-        };
-      }
-      data[key] = typeof value === 'string' ? value.trim() : String(value);
-      continue;
-    }
-
-    const n = coerceScaleInt(value);
-    if (n === null) {
-      return {
-        ok: false,
-        error: `${key}는 ${SCALE_MIN}~${SCALE_MAX} 사이의 정수여야 합니다.`,
-      };
-    }
-    data[key] = n;
+  const sem = validateCatalogAndBuildMatchProfile(norm.flat);
+  if (!sem.ok) {
+    return { ok: false, error: sem.error };
   }
+
+  /** @type {Record<string, unknown>} */
+  const data = {
+    surveyAnswers: norm.nested,
+    gender: g,
+    availability: availabilityResult.data,
+    ...sem.patch,
+  };
 
   if (
     matchAvailability !== undefined &&
@@ -653,12 +648,6 @@ function validateSurveyPayload(surveyData) {
     data.participantMeta = pmStored;
   }
 
-  const sem = validateCatalogAndBuildMatchProfile(data);
-  if (!sem.ok) {
-    return { ok: false, error: sem.error };
-  }
-  Object.assign(data, sem.patch);
-
   return { ok: true, data };
 }
 
@@ -670,10 +659,13 @@ module.exports = {
   normalizeParticipantMetaForStorage,
   identityProfileColumnsFromSurveyData,
   validateAvailabilityField,
+  mergePhaseSurveyObjects,
+  validateAndNormalizeSurveyAnswers,
   ALL_KEYS,
   SCALE_KEYS,
   STRING_KEYS,
   SCALE_MIN,
   SCALE_MAX,
   MAX_AVAILABILITY_SLOTS,
+  ROOT_KEYS,
 };

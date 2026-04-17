@@ -2,53 +2,95 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { validateSurveyPayload } = require('../lib/surveyValidation');
 
-const MINIMAL = {
-  energy: 3,
-  sleep_habit: 3,
-  morning_night: 3,
-  cleanliness: 3,
-  spending_style: 3,
-  meal_style: 3,
-  smoking: '비흡연',
-  drinking_freq: '가끔',
-  exercise: 3,
-  caffeine: 3,
-  screen_time: 3,
-  social_battery: 3,
-  humor_importance: 3,
-  conflict_style: '상대 흐름에 맞추는 편이에요',
-  text_call_pref: '상황에 따라 달라요',
-  reply_speed: 3,
-  religion_type: '없음',
-  politics_importance: 3,
-  family_plan_view: 3,
-  meet_frequency: 3,
-  date_cost_split: 3,
-  commitment: 3,
-  public_affection: 3,
-  alone_time_need: 3,
-  campus_date: 3,
-  study_together: 3,
-  age_gap: 3,
-  feedback_opt_in: '예',
-  gender: '남성',
-  availability: [{ date: '2026-04-20', time_slot: '11:00-12:00' }],
-};
+function minimalSurvey(phase1Overrides = {}, phase3Overrides = {}) {
+  return {
+    surveyAnswers: {
+      phase1_lifestyle: {
+        meeting_tension: 3,
+        weekend_activity: 3,
+        lifestyle_pattern: 3,
+        fashion_interest: 3,
+        hobby_type: 3,
+        drinking_preference: 3,
+        smoking_status: 'NON_SMOKER',
+        tattoo_status: 'NO_TATTOO',
+        ...phase1Overrides,
+      },
+      phase2_relationship_views: {
+        contact_frequency: 3,
+        meeting_frequency: 3,
+        date_planning: 3,
+        verbal_affection: 3,
+        dating_cost: 3,
+      },
+      phase3_opposite_sex_and_intimacy: {
+        opposite_sex_friends: 3,
+        jealousy_level: 3,
+        intimacy_speed: 3,
+        intimacy_openness: 3,
+        drinking_on_date: 'ANY',
+        ...phase3Overrides,
+      },
+      phase4_beliefs_and_values: {
+        political_view: 3,
+        faith_depth: 3,
+        marriage_view: 3,
+        relationship_seriousness: 3,
+        work_value: 3,
+        spending_habit: 3,
+        religion: 'NONE',
+      },
+      phase5_emotion_and_conflict: {
+        conflict_resolution: 3,
+        empathy_level: 3,
+        expressing_discomfort: 3,
+        reliance_level: 3,
+        self_management: 3,
+      },
+      phase6_partner_preferences: {
+        campus_couple_openness: 3,
+        partner_smoking_tolerance: 3,
+        partner_tattoo_tolerance: 3,
+        partner_religion_tolerance: 3,
+      },
+    },
+    gender: '남성',
+    availability: [{ date: '2026-04-20', time_slot: '11:00-12:00' }],
+  };
+}
 
-test('unknown smoking label → 400', () => {
-  const r = validateSurveyPayload({ ...MINIMAL, smoking: '알 수 없는 흡연값' });
+test('invalid smoking_status enum → 400', () => {
+  const r = validateSurveyPayload(minimalSurvey({ smoking_status: 'LIGHT_SMOKER' }));
   assert.equal(r.ok, false);
-  assert.ok(String(r.error).includes('smoking'));
+  assert.ok(String(r.error).includes('smoking_status'));
 });
 
-test('unknown drinking_freq label → 400', () => {
-  const r = validateSurveyPayload({ ...MINIMAL, drinking_freq: '알 수 없는 음주빈도' });
+test('invalid drinking_on_date enum → 400', () => {
+  const r = validateSurveyPayload(minimalSurvey({}, { drinking_on_date: 'SOMETIMES' }));
   assert.equal(r.ok, false);
-  assert.ok(String(r.error).includes('drinking_freq'));
+  assert.ok(String(r.error).includes('drinking_on_date'));
 });
 
-test('unknown conflict_style label → 400', () => {
-  const r = validateSurveyPayload({ ...MINIMAL, conflict_style: '알 수 없는 값' });
+test('invalid religion enum → 400', () => {
+  const r = validateSurveyPayload(
+    (() => {
+      const p = minimalSurvey();
+      p.surveyAnswers.phase4_beliefs_and_values = {
+        ...p.surveyAnswers.phase4_beliefs_and_values,
+        religion: 'MUSLIM',
+      };
+      return p;
+    })(),
+  );
   assert.equal(r.ok, false);
-  assert.ok(String(r.error).includes('conflict_style'));
+  assert.ok(String(r.error).includes('religion'));
+});
+
+test('minimal valid payload → ok + nested surveyAnswers', () => {
+  const r = validateSurveyPayload(minimalSurvey());
+  assert.equal(r.ok, true);
+  assert.ok(r.data && r.data.surveyAnswers && r.data.surveyAnswers.phase1_lifestyle);
+  assert.equal(r.data.surveyAnswers.phase1_lifestyle.smoking_status, 'NON_SMOKER');
+  assert.equal(r.data.surveyAnswers.phase3_opposite_sex_and_intimacy.drinking_on_date, 'ANY');
+  assert.equal(r.data.matchProfile.smoking.label, 'NON_SMOKER');
 });

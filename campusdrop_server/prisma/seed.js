@@ -25,142 +25,241 @@ const SAMPLE_AVAILABILITY = [
   { date: '2026-04-21', time_slot: '10:00-11:00' },
 ];
 
-/** 설문 — 유저 1·2: 거의 동일한 성향(아침형·정리·외향적 쪽으로 맞춤) */
-const surveySimilarPair = () => ({
-  energy: 2,
-  sleep_habit: 3,
-  morning_night: 1,
-  cleanliness: 1,
-  spending_style: 2,
-  meal_style: 3,
-  smoking: '비흡연',
-  drinking_freq: '가끔',
-  exercise: 3,
-  caffeine: 3,
-  screen_time: 3,
-  social_battery: 4,
-  humor_importance: 5,
-  conflict_style: '바로 솔직하게 풀고 싶어요',
-  text_call_pref: '상황에 따라 달라요',
-  reply_speed: 5,
-  religion_type: '없음',
-  religion_intensity: null,
-  politics_importance: 3,
-  family_plan_view: 3,
-  meet_frequency: 4,
-  date_cost_split: 3,
-  commitment: 4,
-  public_affection: 4,
-  alone_time_need: 2,
-  campus_date: 3,
-  study_together: 4,
-  age_gap: 3,
-  feedback_opt_in: '예',
-  availability: SAMPLE_AVAILABILITY,
-  gender: 'male',
-});
+const P1 = {
+  meeting_tension: 3,
+  weekend_activity: 3,
+  lifestyle_pattern: 3,
+  fashion_interest: 3,
+  hobby_type: 3,
+  drinking_preference: 3,
+  smoking_status: 'NON_SMOKER',
+  tattoo_status: 'NO_TATTOO',
+};
+const P2 = {
+  contact_frequency: 3,
+  meeting_frequency: 3,
+  date_planning: 3,
+  verbal_affection: 3,
+  dating_cost: 3,
+};
+const P3 = {
+  opposite_sex_friends: 3,
+  jealousy_level: 3,
+  intimacy_speed: 3,
+  intimacy_openness: 3,
+  drinking_on_date: 'ANY',
+};
+const P4 = {
+  political_view: 3,
+  faith_depth: 3,
+  marriage_view: 3,
+  relationship_seriousness: 3,
+  work_value: 3,
+  spending_habit: 3,
+  religion: 'NONE',
+};
+const P5 = {
+  conflict_resolution: 3,
+  empathy_level: 3,
+  expressing_discomfort: 3,
+  reliance_level: 3,
+  self_management: 3,
+};
+const P6 = {
+  campus_couple_openness: 3,
+  partner_smoking_tolerance: 3,
+  partner_tattoo_tolerance: 3,
+  partner_religion_tolerance: 3,
+};
 
-const surveyHardFilterA = () => ({
-  energy: 5,
-  sleep_habit: 2,
-  morning_night: 5,
-  cleanliness: 5,
-  spending_style: 5,
-  meal_style: 4,
-  smoking: '흡연',
-  drinking_freq: '자주',
-  exercise: 5,
-  caffeine: 4,
-  screen_time: 5,
-  social_battery: 5,
-  humor_importance: 2,
-  conflict_style: '갈등은 피하고 기분이 풀리면 이야기해요',
-  text_call_pref: '긴 통화도 좋아요',
-  reply_speed: 3,
-  religion_type: '기독교',
-  religion_intensity: 5,
-  politics_importance: 5,
-  family_plan_view: 5,
-  meet_frequency: 5,
-  date_cost_split: 5,
-  commitment: 5,
-  public_affection: 5,
-  alone_time_need: 5,
-  campus_date: 5,
-  study_together: 5,
-  age_gap: 5,
-  feedback_opt_in: '예',
-  availability: SAMPLE_AVAILABILITY,
-  gender: 'male',
-});
+/**
+ * @param {object} o
+ * @param {Partial<typeof P1>} [o.phase1]
+ * @param {Partial<typeof P2>} [o.phase2]
+ * @param {Partial<typeof P3>} [o.phase3]
+ * @param {Partial<typeof P4>} [o.phase4]
+ * @param {Partial<typeof P5>} [o.phase5]
+ * @param {Partial<typeof P6>} [o.phase6]
+ * @param {string} [o.gender]
+ */
+function surveyV3(o = {}) {
+  return {
+    surveyAnswers: {
+      phase1_lifestyle: { ...P1, ...(o.phase1 || {}) },
+      phase2_relationship_views: { ...P2, ...(o.phase2 || {}) },
+      phase3_opposite_sex_and_intimacy: { ...P3, ...(o.phase3 || {}) },
+      phase4_beliefs_and_values: { ...P4, ...(o.phase4 || {}) },
+      phase5_emotion_and_conflict: { ...P5, ...(o.phase5 || {}) },
+      phase6_partner_preferences: { ...P6, ...(o.phase6 || {}) },
+    },
+    gender: o.gender ?? 'male',
+    availability: o.availability ?? SAMPLE_AVAILABILITY,
+  };
+}
 
-const surveyHardFilterB = () => ({
-  energy: 1,
-  sleep_habit: 4,
-  morning_night: 1,
-  cleanliness: 1,
-  spending_style: 1,
-  meal_style: 2,
-  smoking: '비흡연',
-  drinking_freq: '전혀 안 함',
-  exercise: 1,
-  caffeine: 1,
-  screen_time: 1,
-  social_battery: 1,
-  humor_importance: 5,
-  conflict_style: '바로 솔직하게 풀고 싶어요',
-  text_call_pref: '문자가 더 편해요',
-  reply_speed: 5,
-  religion_type: '없음',
-  religion_intensity: null,
-  politics_importance: 1,
-  family_plan_view: 1,
-  meet_frequency: 1,
-  date_cost_split: 1,
-  commitment: 1,
-  public_affection: 1,
-  alone_time_need: 1,
-  campus_date: 1,
-  study_together: 1,
-  age_gap: 1,
-  feedback_opt_in: '아니오',
-  availability: SAMPLE_AVAILABILITY,
-  gender: 'female',
-});
+/** 설문 — 유저 1·2: 거의 동일한 성향(연락·만남·몰입 쪽으로 맞춤) */
+const surveySimilarPair = () =>
+  surveyV3({
+    phase1: { meeting_tension: 2, lifestyle_pattern: 1, drinking_preference: 3 },
+    phase2: { contact_frequency: 4, meeting_frequency: 4, verbal_affection: 4, dating_cost: 3 },
+    phase3: { jealousy_level: 2, intimacy_speed: 4, intimacy_openness: 4 },
+    phase4: { relationship_seriousness: 4, work_value: 4, religion: 'NONE' },
+    phase5: { empathy_level: 5, conflict_resolution: 5 },
+    phase6: { campus_couple_openness: 3 },
+  });
 
-const surveyRandomMix = () => ({
-  energy: 4,
-  sleep_habit: 2,
-  morning_night: 3,
-  cleanliness: 4,
-  spending_style: 5,
-  meal_style: 3,
-  smoking: '전자담배만',
-  drinking_freq: '월 1회',
-  exercise: 3,
-  caffeine: 4,
-  screen_time: 3,
-  social_battery: 3,
-  humor_importance: 3,
-  conflict_style: '상대 흐름에 맞추는 편이에요',
-  text_call_pref: '짧은 통화도 괜찮아요',
-  reply_speed: 4,
-  religion_type: '불교',
-  religion_intensity: 3,
-  politics_importance: 2,
-  family_plan_view: 4,
-  meet_frequency: 2,
-  date_cost_split: 4,
-  commitment: 2,
-  public_affection: 2,
-  alone_time_need: 4,
-  campus_date: 1,
-  study_together: 2,
-  age_gap: 3,
-  feedback_opt_in: '예',
-  availability: SAMPLE_AVAILABILITY,
-  gender: 'male',
-});
+const surveyHardFilterA = () =>
+  surveyV3({
+    gender: 'male',
+    phase1: {
+      meeting_tension: 5,
+      weekend_activity: 5,
+      lifestyle_pattern: 5,
+      fashion_interest: 5,
+      hobby_type: 4,
+      drinking_preference: 5,
+      smoking_status: 'SMOKER',
+      tattoo_status: 'NO_TATTOO',
+    },
+    phase2: {
+      contact_frequency: 5,
+      meeting_frequency: 5,
+      date_planning: 5,
+      verbal_affection: 5,
+      dating_cost: 5,
+    },
+    phase3: {
+      opposite_sex_friends: 5,
+      jealousy_level: 5,
+      intimacy_speed: 5,
+      intimacy_openness: 5,
+      drinking_on_date: 'DRINK',
+    },
+    phase4: {
+      political_view: 5,
+      faith_depth: 5,
+      marriage_view: 5,
+      relationship_seriousness: 5,
+      work_value: 5,
+      spending_habit: 5,
+      religion: 'PROTESTANT',
+    },
+    phase5: {
+      conflict_resolution: 1,
+      empathy_level: 2,
+      expressing_discomfort: 3,
+      reliance_level: 3,
+      self_management: 5,
+    },
+    phase6: {
+      campus_couple_openness: 5,
+      partner_smoking_tolerance: 1,
+      partner_tattoo_tolerance: 3,
+      partner_religion_tolerance: 3,
+    },
+  });
+
+const surveyHardFilterB = () =>
+  surveyV3({
+    gender: 'female',
+    phase1: {
+      meeting_tension: 1,
+      weekend_activity: 1,
+      lifestyle_pattern: 1,
+      fashion_interest: 1,
+      hobby_type: 2,
+      drinking_preference: 1,
+      smoking_status: 'NON_SMOKER',
+      tattoo_status: 'NO_TATTOO',
+    },
+    phase2: {
+      contact_frequency: 1,
+      meeting_frequency: 1,
+      date_planning: 1,
+      verbal_affection: 1,
+      dating_cost: 1,
+    },
+    phase3: {
+      opposite_sex_friends: 1,
+      jealousy_level: 1,
+      intimacy_speed: 1,
+      intimacy_openness: 1,
+      drinking_on_date: 'NO_DRINK',
+    },
+    phase4: {
+      political_view: 1,
+      faith_depth: 3,
+      marriage_view: 1,
+      relationship_seriousness: 1,
+      work_value: 1,
+      spending_habit: 1,
+      religion: 'NONE',
+    },
+    phase5: {
+      conflict_resolution: 5,
+      empathy_level: 5,
+      expressing_discomfort: 5,
+      reliance_level: 5,
+      self_management: 1,
+    },
+    phase6: {
+      campus_couple_openness: 1,
+      partner_smoking_tolerance: 3,
+      partner_tattoo_tolerance: 3,
+      partner_religion_tolerance: 3,
+    },
+  });
+
+const surveyRandomMix = () =>
+  surveyV3({
+    gender: 'male',
+    phase1: {
+      meeting_tension: 4,
+      weekend_activity: 3,
+      lifestyle_pattern: 3,
+      fashion_interest: 5,
+      hobby_type: 3,
+      drinking_preference: 2,
+      smoking_status: 'SMOKER',
+      tattoo_status: 'NO_TATTOO',
+    },
+    phase2: {
+      contact_frequency: 3,
+      meeting_frequency: 2,
+      date_planning: 4,
+      verbal_affection: 2,
+      dating_cost: 4,
+    },
+    phase3: {
+      opposite_sex_friends: 3,
+      jealousy_level: 4,
+      intimacy_speed: 2,
+      intimacy_openness: 2,
+      drinking_on_date: 'ANY',
+    },
+    phase4: {
+      political_view: 2,
+      faith_depth: 3,
+      marriage_view: 4,
+      relationship_seriousness: 2,
+      work_value: 2,
+      spending_habit: 5,
+      religion: 'BUDDHIST',
+    },
+    phase5: {
+      conflict_resolution: 3,
+      empathy_level: 3,
+      expressing_discomfort: 4,
+      reliance_level: 4,
+      self_management: 3,
+    },
+    phase6: {
+      campus_couple_openness: 1,
+      partner_smoking_tolerance: 3,
+      partner_tattoo_tolerance: 3,
+      partner_religion_tolerance: 3,
+    },
+  });
 
 /** `plainEmailForHash` → 정규화 후 `Identity.email`·`emailHash`에 반영. */
 const SEED_IDENTITIES = [
@@ -174,12 +273,17 @@ const SEED_IDENTITIES = [
     id: '00000000-0000-4000-8000-000000000002',
     plainEmailForHash: '2@sju.ac.kr',
     gender: 'female',
-    surveyData: validatedSurvey({
-      ...surveySimilarPair(),
-      public_affection: 3,
-      commitment: 4,
-      gender: 'female',
-    }),
+    surveyData: validatedSurvey(
+      surveyV3({
+        gender: 'female',
+        phase1: { meeting_tension: 2, lifestyle_pattern: 1, drinking_preference: 3 },
+        phase2: { contact_frequency: 4, meeting_frequency: 4, verbal_affection: 3, dating_cost: 3 },
+        phase3: { jealousy_level: 2, intimacy_speed: 4, intimacy_openness: 4 },
+        phase4: { relationship_seriousness: 4, work_value: 4, religion: 'NONE' },
+        phase5: { empathy_level: 5, conflict_resolution: 5 },
+        phase6: { campus_couple_openness: 3 },
+      }),
+    ),
   },
   {
     id: '00000000-0000-4000-8000-000000000003',

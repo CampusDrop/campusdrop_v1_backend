@@ -1,7 +1,6 @@
 /**
- * 설문 시맨틱 v1 파일(`surveySemantics.v1.json`) — 단일 진실 소스.
- * 제출 검증(허용 라벨) + `matchProfile` 생성(매칭 표준 표현).
- * 신규 설문 UI에는 tattoo·파트너 선호(pref_*) 문항이 없을 수 있어, 기본값으로 시맨틱 neutral을 채운 뒤 검증한다.
+ * 설문 시맨틱(`surveySemantics.v1.json`) — 단일 진실 소스.
+ * v3: 중첩 surveyAnswers를 평탄화한 뒤 matchProfile(surveySchemaVersion)을 부착한다.
  */
 
 const fs = require('fs');
@@ -23,9 +22,8 @@ function loadSemantics() {
 }
 
 /**
- * @param {string} field
+ * @param {'smoking'|'tattoo'|'religion_type'} field
  * @param {string} label
- * @returns {boolean}
  */
 function choiceLabelAllowed(field, label) {
   const spec = loadSemantics();
@@ -36,6 +34,23 @@ function choiceLabelAllowed(field, label) {
 
 /**
  * @param {'pref_smoking'|'pref_tattoo'|'pref_religion'|'pref_cc'} field
+ * @param {number} likert 1~5 (pref_religion은 1~6 허용)
+ * @returns {{ level: number, tier: string } | null}
+ */
+function resolvePreferenceLevelFromLikert(field, likert) {
+  const spec = loadSemantics();
+  const block = spec.preference_policies[field];
+  if (!block || !Array.isArray(block.levels)) return null;
+  const idNum = Math.round(Number(likert));
+  if (!Number.isInteger(idNum)) return null;
+  const row = block.levels.find((r) => r.id === idNum);
+  if (!row) return null;
+  return { level: row.id, tier: row.tier };
+}
+
+/**
+ * 레거시: 문자열 라벨로 선호 단계 해석(구 설문).
+ * @param {'pref_smoking'|'pref_tattoo'|'pref_religion'|'pref_cc'} field
  * @param {string} label
  * @returns {{ level: number, tier: string } | null}
  */
@@ -43,7 +58,7 @@ function resolvePreferenceLevel(field, label) {
   const spec = loadSemantics();
   const block = spec.preference_policies[field];
   if (!block || !Array.isArray(block.levels)) return null;
-  const t = label.trim();
+  const t = String(label).trim();
   if (/^\d+$/.test(t)) {
     let idNum = Number(t);
     if (field === 'pref_cc') {
@@ -73,105 +88,66 @@ function resolvePreferenceLevel(field, label) {
   return null;
 }
 
-/** @param {Record<string, unknown>} data */
-function withCatalogDefaults(data) {
-  return {
-    tattoo: '없음',
-    pref_smoking: '상관없음',
-    pref_tattoo: '상관없음',
-    pref_religion: '상관없음',
-    pref_cc: '상관없음',
-    ...data,
-  };
-}
-
 /**
- * @param {Record<string, unknown>} data `validateSurveyPayload` 성공 직전 동일 키
+ * v3 평탄 설문 필드(모든 phase 키)로 matchProfile 생성.
+ * @param {Record<string, unknown>} flatSurveyAnswers
  * @returns {{ ok: true, patch: { surveySchemaVersion: number, matchProfile: object } } | { ok: false, error: string }}
  */
-function validateCatalogAndBuildMatchProfile(data) {
+function validateCatalogAndBuildMatchProfile(flatSurveyAnswers) {
   const spec = loadSemantics();
-  const merged = withCatalogDefaults(data);
+  const merged = { ...flatSurveyAnswers };
 
-  const smokingLabel = String(merged.smoking).trim();
+  const smokingLabel = String(merged.smoking_status).trim();
   if (!choiceLabelAllowed('smoking', smokingLabel)) {
-    return { ok: false, error: `smoking 값이 시맨틱 카탈로그에 없습니다: ${smokingLabel}` };
+    return { ok: false, error: `smoking_status 값이 시맨틱에 없습니다: ${smokingLabel}` };
   }
-  const tattooLabel = String(merged.tattoo).trim();
+  const tattooLabel = String(merged.tattoo_status).trim();
   if (!choiceLabelAllowed('tattoo', tattooLabel)) {
-    return { ok: false, error: `tattoo 값이 시맨틱 카탈로그에 없습니다: ${tattooLabel}` };
+    return { ok: false, error: `tattoo_status 값이 시맨틱에 없습니다: ${tattooLabel}` };
   }
-  const religionLabel = String(merged.religion_type).trim();
-  if (!choiceLabelAllowed('religion_type', religionLabel)) {
-    return { ok: false, error: `religion_type 값이 시맨틱 카탈로그에 없습니다: ${religionLabel}` };
-  }
-
-  const df = merged.drinking_freq;
-  if (typeof df === 'string') {
-    const dfs = df.trim();
-    if (!choiceLabelAllowed('drinking_freq', dfs)) {
-      return { ok: false, error: `drinking_freq(문자열) 값이 시맨틱 카탈로그에 없습니다: ${dfs}` };
-    }
-  }
-
-  const cs = merged.conflict_style;
-  if (typeof cs === 'string') {
-    const css = cs.trim();
-    if (!choiceLabelAllowed('conflict_style', css)) {
-      return { ok: false, error: `conflict_style 값이 시맨틱 카탈로그에 없습니다: ${css}` };
-    }
-  }
-
-  const tcp = merged.text_call_pref;
-  if (typeof tcp === 'string') {
-    const tcps = tcp.trim();
-    if (!choiceLabelAllowed('text_call_pref', tcps)) {
-      return { ok: false, error: `text_call_pref 값이 시맨틱 카탈로그에 없습니다: ${tcps}` };
-    }
-  }
-
-  const fo = merged.feedback_opt_in;
-  if (typeof fo === 'string') {
-    const fos = fo.trim();
-    if (!choiceLabelAllowed('feedback_opt_in', fos)) {
-      return { ok: false, error: `feedback_opt_in 값이 시맨틱 카탈로그에 없습니다: ${fos}` };
-    }
+  const religionEnum = String(merged.religion).trim();
+  if (!choiceLabelAllowed('religion_type', religionEnum)) {
+    return { ok: false, error: `religion 값이 시맨틱에 없습니다: ${religionEnum}` };
   }
 
   const prefFields = /** @type {const} */ (['pref_smoking', 'pref_tattoo', 'pref_religion', 'pref_cc']);
+  const likertKeys = {
+    pref_smoking: 'partner_smoking_tolerance',
+    pref_tattoo: 'partner_tattoo_tolerance',
+    pref_religion: 'partner_religion_tolerance',
+    pref_cc: null,
+  };
+
+  /** @type {Record<string, { level: number, tier: string, label: string }>} */
+  const prefBlocks = {};
+
   for (const key of prefFields) {
-    const raw = merged[key];
-    const s = typeof raw === 'string' ? raw.trim() : '';
-    const hit = resolvePreferenceLevel(key, s);
-    if (!hit) {
-      return { ok: false, error: `${key} 값이 시맨틱 선호 단계에 매핑되지 않습니다: ${s}` };
+    const sourceKey = likertKeys[key];
+    if (!sourceKey) {
+      prefBlocks[key] = { level: 3, tier: 'neutral', label: 'any' };
+      continue;
     }
+    const raw = merged[sourceKey];
+    const n = typeof raw === 'number' ? raw : Number(raw);
+    const hit = resolvePreferenceLevelFromLikert(key, n);
+    if (!hit) {
+      return { ok: false, error: `${sourceKey}가 선호 정책 단계에 매핑되지 않습니다: ${raw}` };
+    }
+    prefBlocks[key] = { ...hit, label: String(Math.round(n)) };
   }
 
   const smokingCode = spec.choice_label_maps.smoking[smokingLabel];
   const tattooCode = spec.choice_label_maps.tattoo[tattooLabel];
-  const religionCode = spec.choice_label_maps.religion_type[religionLabel];
+  const religionCode = spec.choice_label_maps.religion_type[religionEnum];
 
   const matchProfile = {
     smoking: { code: smokingCode, label: smokingLabel },
     tattoo: { code: tattooCode, label: tattooLabel },
-    religion: { code: religionCode, label: religionLabel },
-    pref_smoking: {
-      ...resolvePreferenceLevel('pref_smoking', String(merged.pref_smoking).trim()),
-      label: String(merged.pref_smoking).trim(),
-    },
-    pref_tattoo: {
-      ...resolvePreferenceLevel('pref_tattoo', String(merged.pref_tattoo).trim()),
-      label: String(merged.pref_tattoo).trim(),
-    },
-    pref_religion: {
-      ...resolvePreferenceLevel('pref_religion', String(merged.pref_religion).trim()),
-      label: String(merged.pref_religion).trim(),
-    },
-    pref_cc: {
-      ...resolvePreferenceLevel('pref_cc', String(merged.pref_cc).trim()),
-      label: String(merged.pref_cc).trim(),
-    },
+    religion: { code: religionCode, label: religionEnum },
+    pref_smoking: prefBlocks.pref_smoking,
+    pref_tattoo: prefBlocks.pref_tattoo,
+    pref_religion: prefBlocks.pref_religion,
+    pref_cc: prefBlocks.pref_cc,
   };
 
   return {
@@ -189,4 +165,5 @@ module.exports = {
   validateCatalogAndBuildMatchProfile,
   choiceLabelAllowed,
   resolvePreferenceLevel,
+  resolvePreferenceLevelFromLikert,
 };

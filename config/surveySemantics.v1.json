@@ -1,103 +1,130 @@
 {
-  "version": 2,
-  "documentation_ko": "Campusdrop 설문 시맨틱 v2(파일명 v1 유지). 6단계 설문 UI의 surveySteps id와 동기화. 미등록 문자열 선택지는 서버 검증에서 400. 매칭 엔진(Python LifestyleUser)은 Node의 surveyToLifestyleUser에서 이 응답을 기존 축으로 투영한다.",
-  "excluded_from_matching": [
-    "participantMeta",
-    "matchAvailability 원본(availability 변환 후 매칭은 availability만 사용)"
+  "version": 3,
+  "documentation_ko": "Campusdrop 설문 시맨틱 v3. 6단계 중첩 surveyAnswers(영문 Enum + 1~5 정수). 매칭 엔진은 Node가 부착하는 matchProfile과 surveyToLifestyleUser 투영을 사용한다.",
+  "survey_phases": [
+    "phase1_lifestyle",
+    "phase2_relationship_views",
+    "phase3_opposite_sex_and_intimacy",
+    "phase4_beliefs_and_values",
+    "phase5_emotion_and_conflict",
+    "phase6_partner_preferences"
   ],
-  "scales": {
-    "continuous_matching_keys": [
-      { "key": "energy", "reverse": false, "weight": 1.0, "high_means_ko": "활력·에너지 높음" },
-      { "key": "sleep_habit", "reverse": false, "weight": 1.0, "high_means_ko": "수면 규칙적·충분" },
-      { "key": "morning_night", "reverse": false, "weight": 1.0, "high_means_ko": "아침형·규칙적 리듬에 가까움" },
-      { "key": "cleanliness", "reverse": false, "weight": 1.0, "high_means_ko": "정리·청결 중시" },
-      { "key": "spending_style", "reverse": false, "weight": 1.0, "high_means_ko": "지출·트렌드 민감(축은 제품 기준)" },
-      { "key": "meal_style", "reverse": false, "weight": 1.0, "high_means_ko": "식사·루틴 중시" },
-      { "key": "exercise", "reverse": false, "weight": 1.0, "high_means_ko": "운동 빈도·강도 높음" },
-      { "key": "caffeine", "reverse": false, "weight": 1.0, "high_means_ko": "카페인 섭취 많음" },
-      { "key": "screen_time", "reverse": false, "weight": 1.0, "high_means_ko": "스크린 시간 많음" },
-      { "key": "social_battery", "reverse": false, "weight": 1.5, "high_means_ko": "사교·외향 에너지 높음" },
-      { "key": "humor_importance", "reverse": false, "weight": 1.5, "high_means_ko": "유머·공감 표현 중시" },
-      { "key": "reply_speed", "reverse": false, "weight": 1.5, "high_means_ko": "답장·연락 빠름" },
-      { "key": "politics_importance", "reverse": false, "weight": 1.25, "high_means_ko": "정치·사회 이슈 중시" },
-      { "key": "family_plan_view", "reverse": false, "weight": 1.0, "high_means_ko": "가족·장기 계획 지향 강함" },
-      { "key": "meet_frequency", "reverse": false, "weight": 1.0, "high_means_ko": "만남 빈도 선호 높음" },
-      { "key": "date_cost_split", "reverse": false, "weight": 1.5, "high_means_ko": "데이트 비용 부담 높음/너그러움(축은 제품 기준)" },
-      { "key": "commitment", "reverse": false, "weight": 1.5, "high_means_ko": "관계 진지함·몰입 높음" },
-      { "key": "public_affection", "reverse": false, "weight": 1.0, "high_means_ko": "공개 스킨십·애정 표현 많음" },
-      { "key": "alone_time_need", "reverse": false, "weight": 1.0, "high_means_ko": "혼자만의 시간 필요 높음" },
-      { "key": "campus_date", "reverse": false, "weight": 1.0, "high_means_ko": "캠퍼스 데이트·교내 활동 선호" },
-      { "key": "study_together", "reverse": false, "weight": 1.25, "high_means_ko": "함께 공부·성장 동반 중시" },
-      { "key": "age_gap", "reverse": false, "weight": 1.0, "high_means_ko": "나이 차 허용 범위 넓음(축은 제품 기준)" },
-      { "key": "religion_intensity", "reverse": false, "weight": 1.0, "high_means_ko": "종교 실천·중요도 높음", "when_religion_none_store_as": 3 }
+  "phase_fields": {
+    "phase1_lifestyle": [
+      "meeting_tension",
+      "weekend_activity",
+      "lifestyle_pattern",
+      "fashion_interest",
+      "hobby_type",
+      "drinking_preference",
+      "smoking_status",
+      "tattoo_status"
     ],
+    "phase2_relationship_views": [
+      "contact_frequency",
+      "meeting_frequency",
+      "date_planning",
+      "verbal_affection",
+      "dating_cost"
+    ],
+    "phase3_opposite_sex_and_intimacy": [
+      "opposite_sex_friends",
+      "jealousy_level",
+      "intimacy_speed",
+      "intimacy_openness",
+      "drinking_on_date"
+    ],
+    "phase4_beliefs_and_values": [
+      "political_view",
+      "faith_depth",
+      "marriage_view",
+      "relationship_seriousness",
+      "work_value",
+      "spending_habit",
+      "religion"
+    ],
+    "phase5_emotion_and_conflict": [
+      "conflict_resolution",
+      "empathy_level",
+      "expressing_discomfort",
+      "reliance_level",
+      "self_management"
+    ],
+    "phase6_partner_preferences": [
+      "campus_couple_openness",
+      "partner_smoking_tolerance",
+      "partner_tattoo_tolerance",
+      "partner_religion_tolerance"
+    ]
+  },
+  "integer_scale_keys": [
+    "meeting_tension",
+    "weekend_activity",
+    "lifestyle_pattern",
+    "fashion_interest",
+    "hobby_type",
+    "drinking_preference",
+    "contact_frequency",
+    "meeting_frequency",
+    "date_planning",
+    "verbal_affection",
+    "dating_cost",
+    "opposite_sex_friends",
+    "jealousy_level",
+    "intimacy_speed",
+    "intimacy_openness",
+    "political_view",
+    "faith_depth",
+    "marriage_view",
+    "relationship_seriousness",
+    "work_value",
+    "spending_habit",
+    "conflict_resolution",
+    "empathy_level",
+    "expressing_discomfort",
+    "reliance_level",
+    "self_management",
+    "campus_couple_openness",
+    "partner_smoking_tolerance",
+    "partner_tattoo_tolerance",
+    "partner_religion_tolerance"
+  ],
+  "string_enum_keys": {
+    "smoking_status": ["SMOKER", "NON_SMOKER"],
+    "tattoo_status": ["HAS_TATTOO", "NO_TATTOO"],
+    "drinking_on_date": ["DRINK", "NO_DRINK", "ANY"],
+    "religion": ["NONE", "PROTESTANT", "CATHOLIC", "BUDDHIST", "OTHER"]
+  },
+  "scales": {
+    "continuous_matching_keys": [],
     "religion_soft_weight": 1.0
   },
   "choice_label_maps": {
-    "drinking_freq": {
-      "전혀 안 함": 1,
-      "전혀 안 마심": 1,
-      "월 1회": 2,
-      "주 1~2회": 3,
-      "가끔": 3,
-      "자주": 5,
-      "거의 매일": 5
-    },
     "smoking": {
-      "비흡연": 0,
-      "비흡연자": 0,
-      "안함": 0,
-      "전자담배만": 1,
-      "가끔": 1,
-      "흡연": 2,
-      "흡연자": 2
+      "NON_SMOKER": 0,
+      "SMOKER": 2
     },
     "tattoo": {
-      "없음": 0,
-      "무": 0,
-      "작은 것만": 1,
-      "있음": 2
+      "NO_TATTOO": 0,
+      "HAS_TATTOO": 2
     },
     "religion_type": {
-      "없음": "none",
-      "무교": "none",
-      "기독교": "christianity",
-      "불교": "buddhism",
-      "천주교": "catholicism",
-      "이슬람": "islam",
-      "유교": "confucian",
-      "기타": "other"
-    },
-    "conflict_style": {
-      "갈등은 피하고 기분이 풀리면 이야기해요": 1,
-      "먼저 진정한 뒤 차분히 이야기해요": 2,
-      "상대 흐름에 맞추는 편이에요": 3,
-      "시간을 두고 정리해서 말하는 편이에요": 4,
-      "바로 솔직하게 풀고 싶어요": 5
-    },
-    "text_call_pref": {
-      "문자가 더 편해요": 1,
-      "짧은 통화도 괜찮아요": 2,
-      "상황에 따라 달라요": 3,
-      "자주 연락하는 편이 좋아요": 4,
-      "긴 통화도 좋아요": 5
-    },
-    "feedback_opt_in": {
-      "예": 1,
-      "아니오": 0,
-      "동의": 1,
-      "비동의": 0
+      "NONE": "none",
+      "PROTESTANT": "protestant",
+      "CATHOLIC": "catholic",
+      "BUDDHIST": "buddhist",
+      "OTHER": "other"
     }
   },
   "preference_policies": {
     "pref_smoking": {
-      "description_ko": "1=절대 비흡연(하드), 2=비흡연 선호(흡연·간헐 시 소프트 페널티), 3=중립, 4=흡연 선호(비흡연 시 소프트), 5=흡연만(비흡연 파트너 하드)",
+      "description_ko": "partner_smoking_tolerance 1~5 → pref_smoking 단계",
       "levels": [
-        { "id": 1, "tier": "hard_absolutely_non_smoker", "labels": ["비흡연만", "절대 비흡연", "비흡연_만", "비흡연자만"] },
-        { "id": 2, "tier": "soft_prefer_non_smoker", "labels": ["비흡연"], "soft_penalty_if_partner_smoking_code_gte": 1, "penalty_points": 12 },
-        { "id": 3, "tier": "neutral", "labels": ["상관없음", "무관"] },
-        { "id": 4, "tier": "soft_prefer_smoker", "labels": [], "soft_penalty_if_partner_smoking_code_eq": 0, "penalty_points": 8 },
-        { "id": 5, "tier": "hard_smoker_only", "labels": ["흡연만", "흡연자만"] }
+        { "id": 1, "tier": "hard_absolutely_non_smoker" },
+        { "id": 2, "tier": "soft_prefer_non_smoker", "soft_penalty_if_partner_smoking_code_gte": 1, "penalty_points": 12 },
+        { "id": 3, "tier": "neutral" },
+        { "id": 4, "tier": "soft_prefer_smoker", "soft_penalty_if_partner_smoking_code_eq": 0, "penalty_points": 8 },
+        { "id": 5, "tier": "hard_smoker_only" }
       ],
       "hard_rules": {
         "level_1_violation_if_smoking_code_gte": 1,
@@ -106,11 +133,11 @@
     },
     "pref_tattoo": {
       "levels": [
-        { "id": 1, "tier": "hard_no_tattoo_partner", "labels": ["없음만", "타투 없음만", "문신 없음만"] },
-        { "id": 2, "tier": "soft_prefer_no_tattoo", "labels": ["선호", "비슷하면 좋음"], "soft_penalty_if_partner_tattoo_code_gte": 1, "penalty_points": 10 },
-        { "id": 3, "tier": "neutral", "labels": ["상관없음", "무관"] },
-        { "id": 4, "tier": "soft_prefer_tattoo", "labels": [], "soft_penalty_if_partner_tattoo_code_eq": 0, "penalty_points": 6 },
-        { "id": 5, "tier": "hard_tattoo_only_partner", "labels": ["있음만", "타투 있음만"] }
+        { "id": 1, "tier": "hard_no_tattoo_partner" },
+        { "id": 2, "tier": "soft_prefer_no_tattoo", "soft_penalty_if_partner_tattoo_code_gte": 1, "penalty_points": 10 },
+        { "id": 3, "tier": "neutral" },
+        { "id": 4, "tier": "soft_prefer_tattoo", "soft_penalty_if_partner_tattoo_code_eq": 0, "penalty_points": 6 },
+        { "id": 5, "tier": "hard_tattoo_only_partner" }
       ],
       "hard_rules": {
         "level_1_violation_if_tattoo_code_gte": 1,
@@ -119,19 +146,19 @@
     },
     "pref_religion": {
       "levels": [
-        { "id": 1, "tier": "hard_same_religion", "labels": ["같은 종교만", "동일 종교만", "종교 같아야"] },
-        { "id": 2, "tier": "soft_prefer_similar", "labels": ["비슷하면 좋음", "선호"], "note": "라벨 문자열 비교 소프트는 religion_soft와 별도로 미세 페널티만(옵션)" },
-        { "id": 3, "tier": "neutral", "labels": ["상관없음", "무관"] },
-        { "id": 4, "tier": "soft_prefer_none_religion", "labels": [] },
-        { "id": 5, "tier": "hard_none_religion_partner", "labels": ["무교만", "종교없음만", "비종교만", "무교 만"] },
-        { "id": 6, "tier": "hard_religious_partner", "labels": ["종교 있음만", "종교있음만"] }
+        { "id": 1, "tier": "hard_same_religion" },
+        { "id": 2, "tier": "soft_prefer_similar" },
+        { "id": 3, "tier": "neutral" },
+        { "id": 4, "tier": "soft_prefer_none_religion" },
+        { "id": 5, "tier": "hard_none_religion_partner" },
+        { "id": 6, "tier": "hard_religious_partner" }
       ]
     },
     "pref_cc": {
       "levels": [
-        { "id": 1, "tier": "hard_exact_cc", "labels": ["매우 잦게", "최소한으로"] },
-        { "id": 2, "tier": "soft_cc", "labels": ["비슷하면 좋음", "상대에 맞춤", "선호"], "soft_penalty_if_cc_mismatch": true, "penalty_points": 8 },
-        { "id": 3, "tier": "neutral", "labels": ["상관없음", "무관"] }
+        { "id": 1, "tier": "hard_exact_cc" },
+        { "id": 2, "tier": "soft_cc", "soft_penalty_if_cc_mismatch": true, "penalty_points": 8 },
+        { "id": 3, "tier": "neutral" }
       ]
     }
   }

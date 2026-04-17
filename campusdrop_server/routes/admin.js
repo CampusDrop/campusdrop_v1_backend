@@ -892,6 +892,9 @@ router.delete('/users/:id', async (req, res) => {
  *   get:
  *     tags: [Admin]
  *     summary: 학교 증빙 이미지 제출 목록 (기본 status=pending)
+ *     description: |
+ *       `complete-anonymous-onboarding` 등 설문 전에만 올린 증빙도 동일 `pending` 큐에 포함됩니다.
+ *       `userEmail`이 null이면 이메일 미연동(이미지 가입) 유저입니다. `hasSurvey`로 설문 저장 여부를 구분할 수 있습니다.
  *     security:
  *       - AdminBearerAuth: []
  */
@@ -925,7 +928,15 @@ router.get('/school-proofs', async (req, res) => {
           fileSize: true,
           createdAt: true,
           reviewedAt: true,
-          identity: { select: { email: true, schoolProofVerifiedAt: true } },
+          identity: {
+            select: {
+              email: true,
+              schoolProofVerifiedAt: true,
+              imageUuidAccessUntil: true,
+              studentId: true,
+              trait: { select: { surveyData: true } },
+            },
+          },
         },
       }),
     ]);
@@ -945,17 +956,28 @@ router.get('/school-proofs', async (req, res) => {
       limit,
       offset,
       status: statusRaw,
-      submissions: rows.map((r) => ({
-        id: r.id,
-        identityId: r.identityId,
-        userEmail: r.identity?.email ?? null,
-        status: r.status,
-        mimeType: r.mimeType,
-        fileSize: r.fileSize,
-        createdAt: r.createdAt,
-        reviewedAt: r.reviewedAt,
-        identitySchoolProofVerifiedAt: r.identity?.schoolProofVerifiedAt ?? null,
-      })),
+      submissions: rows.map((r) => {
+        const sd = r.identity?.trait?.surveyData;
+        const hasSurvey = Boolean(
+          sd !== null && sd !== undefined && typeof sd === 'object' && !Array.isArray(sd),
+        );
+        const until = r.identity?.imageUuidAccessUntil;
+        return {
+          id: r.id,
+          identityId: r.identityId,
+          userEmail: r.identity?.email ?? null,
+          studentId: r.identity?.studentId ?? null,
+          hasSurvey,
+          imageUuidAccessUntil:
+            until && !Number.isNaN(new Date(until).getTime()) ? new Date(until).toISOString() : null,
+          status: r.status,
+          mimeType: r.mimeType,
+          fileSize: r.fileSize,
+          createdAt: r.createdAt,
+          reviewedAt: r.reviewedAt,
+          identitySchoolProofVerifiedAt: r.identity?.schoolProofVerifiedAt ?? null,
+        };
+      }),
     });
   } catch (err) {
     console.error('admin GET /school-proofs error:', err);

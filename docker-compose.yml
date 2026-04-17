@@ -64,6 +64,9 @@ services:
       # DATABASE_URL: only from env_file (avoid compose ${} mangling passwords with $ or #).
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       MATCHING_SERVICE_URL: ${MATCHING_SERVICE_URL:-http://matching:8000}
+    # 학교 증빙 등 `campusdrop_server/uploads/*` — 볼륨 없으면 재배포·재빌드 시 파일 유실 → GET .../school-proofs/:id/file 404
+    volumes:
+      - server_uploads:/app/uploads
     ports:
       - "${SERVER_PUBLISH_PORT:-3000}:3000"
     depends_on:
@@ -77,3 +80,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  server_uploads:

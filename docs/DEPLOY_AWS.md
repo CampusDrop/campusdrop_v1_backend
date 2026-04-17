@@ -14,6 +14,7 @@ Campus Drop API 서버를 **AWS 프리티어**에 가깝게 운영하고, 도메
 | **Redis 7 (`redis`)** | AOF, 볼륨 `redis_data` |
 | **매칭 API (`matching`)** | `campusdrop_matching/Dockerfile`, 내부 **8000** |
 | **Node API (`server`)** | 루트 `Dockerfile.server` 빌드, 호스트 **`3000`**(기본, `SERVER_PUBLISH_PORT`로 변경) |
+| **`server` 볼륨 `server_uploads`** | **`/app/uploads`**(학교 증빙 이미지 등) 영속화. 없으면 재배포 후 `GET /api/admin/school-proofs/:id/file` 가 디스크 없음(404)으로 깨짐 |
 | **재시작** | `restart: unless-stopped` |
 | **헬스체크** | `db` / `redis` / `matching` 건강 후 `server` 기동 |
 

@@ -1640,7 +1640,16 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
 
 **쿼리:** `status` = `pending` \| `approved` \| `rejected` \| `all`(기본 `pending`), `limit`(기본 50, 최대 200), `offset`.
 
+**요약:** `school_proof_submissions` 목록. **`POST /api/auth/complete-anonymous-onboarding` 으로 설문 없이 증빙만 올린 건도** 동일하게 `pending` 등으로 조회됩니다. 이미지 바이너리는 아래 **`GET .../school-proofs/:id/file`** 로 확인합니다.
+
 **응답 `200`**
+
+| 필드 (submission 원소) | 설명 |
+|------------------------|------|
+| `userEmail` | 학교 이메일 연동 시 문자열, **이미지 가입만 한 유저는 `null`** |
+| `studentId` | `Identity.studentId`(온보딩 시 넣었을 때만) |
+| `hasSurvey` | `Trait.surveyData`가 객체로 저장돼 있으면 `true`(설문 제출 여부) |
+| `imageUuidAccessUntil` | 이미지 가입 세션 만료 시각(없으면 `null`) |
 
 ```json
 {
@@ -1653,10 +1662,27 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
       "id": "880e8400-e29b-41d4-a716-446655440003",
       "identityId": "550e8400-e29b-41d4-a716-446655440000",
       "userEmail": "student@sju.ac.kr",
+      "studentId": "25123456",
+      "hasSurvey": true,
+      "imageUuidAccessUntil": null,
       "status": "pending",
       "mimeType": "image/jpeg",
       "fileSize": 245678,
       "createdAt": "2026-04-17T09:00:00.000Z",
+      "reviewedAt": null,
+      "identitySchoolProofVerifiedAt": null
+    },
+    {
+      "id": "990e8400-e29b-41d4-a716-446655440004",
+      "identityId": "660e8400-e29b-41d4-a716-446655440001",
+      "userEmail": null,
+      "studentId": null,
+      "hasSurvey": false,
+      "imageUuidAccessUntil": "2026-04-24T15:00:00.000Z",
+      "status": "pending",
+      "mimeType": "image/jpeg",
+      "fileSize": 198000,
+      "createdAt": "2026-04-17T10:00:00.000Z",
       "reviewedAt": null,
       "identitySchoolProofVerifiedAt": null
     }
@@ -1668,7 +1694,12 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
 
 ### GET `/api/admin/school-proofs/:id/file`
 
+**요약:** 위 목록의 `id`로 **증빙 원본 이미지**를 내려받습니다. `Authorization: Bearer` 필수.
+
 **응답:** **JSON이 아님** — `Content-Type`은 저장된 `mimeType`(기본 `application/octet-stream`), 바디는 이미지 바이너리 스트림.
+
+**응답 `404` (`{"error":"파일이 디스크에 없습니다."}`)**  
+DB `school_proof_submissions.storedPath`는 있는데 서버 디스크에 파일이 없을 때입니다. Docker로 띄울 때 **`/app/uploads`를 영구 볼륨에 마운트하지 않으면** 이미지 재빌드·컨테이너 재생성 시 업로드가 통째로 사라지고, 이 API만 404가 납니다. `docker-compose.yml`의 `server` 서비스 `volumes: server_uploads:/app/uploads` 를 적용한 뒤 **이미 유실된 과거 파일은 복구되지 않습니다**(백업·재제출 필요).
 
 ---
 
@@ -1824,6 +1855,8 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
 
 | 날짜 | 내용 |
 |------|------|
+| 2026-04-18 | Docker Compose `server`에 `server_uploads:/app/uploads` 볼륨(증빙 파일 유실 방지). |
+| 2026-04-18 | `GET /api/admin/school-proofs` 응답에 `hasSurvey`·`imageUuidAccessUntil`·`studentId` 추가(설문 전 증빙 구분·이미지는 기존 `.../file` 엔드포인트). |
 | 2026-04-18 | 랜딩 좋아요: 전역 `POST /api/landing-like` +1·`GET` 조회만(`clientKey`/토글·`landing_like_client_toggles` 제거). [HTTP 경로 일람](#http-경로-일람)·상단 표·환경 변수 보강. |
 | 2026-04-17 | 전 엔드포인트를 구현(`routes/*.js`, `index.js`)과 정합되도록 통합. 요청·응답 예시 JSON 보강. CORS·`POST /api/match/request` 응답 필드(`periodStart`/`periodEnd`)·관리자·분석·온보딩 API 반영. |
 | 2026-04-16 | `privacy_policy_agreed` / `privacyPolicyAgreed` 도입. `verify-code`, `complete-registration`, `complete-anonymous-onboarding`, `GET /api/auth/me` 반영. |

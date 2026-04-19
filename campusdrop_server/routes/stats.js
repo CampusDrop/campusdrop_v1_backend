@@ -1,5 +1,4 @@
 const express = require('express');
-const { Prisma } = require('@prisma/client');
 const { prisma } = require('../lib/prisma');
 
 const router = express.Router();
@@ -25,15 +24,12 @@ const router = express.Router();
  */
 router.get('/excitement-count', async (req, res) => {
   try {
-    const rows = await prisma.$queryRaw(Prisma.sql`
-      SELECT COUNT(*)::int AS c
-      FROM traits
-      WHERE survey_data IS NOT NULL
-    `);
-    const excitementCount = Array.isArray(rows) && rows[0] ? Number(rows[0].c) : 0;
+    const excitementCount = await prisma.trait.count({
+      where: { surveyData: { not: null } },
+    });
     return res.status(200).json({
       excitementCount,
-      description: '설문을 한 번이라도 저장한 사용자 수(Trait.survey_data IS NOT NULL)',
+      description: '설문을 한 번이라도 저장한 사용자 수(Trait.surveyData IS NOT NULL)',
     });
   } catch (err) {
     console.error('stats excitement-count:', err);

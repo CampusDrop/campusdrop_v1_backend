@@ -784,14 +784,14 @@ Express 서버 진입점: `campusdrop_server/index.js`. 기본 포트는 환경 
 
 ### GET `/api/stats/excitement-count`
 
-**요약:** `Trait.survey_data IS NOT NULL` 인 행 수.
+**요약:** `Trait.surveyData`가 null이 아닌 행 수.
 
 **응답 `200`**
 
 ```json
 {
   "excitementCount": 128,
-  "description": "설문을 한 번이라도 저장한 사용자 수(Trait.survey_data IS NOT NULL)"
+  "description": "설문을 한 번이라도 저장한 사용자 수(Trait.surveyData IS NOT NULL)"
 }
 ```
 

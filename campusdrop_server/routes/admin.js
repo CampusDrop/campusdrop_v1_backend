@@ -17,7 +17,7 @@ const {
   deleteMatchingsForUsersInPeriod,
 } = require('../lib/matchPolicy');
 const { loadEligibleTraits } = require('../lib/weeklyBatchMatch');
-const { areOppositeTraitGenders, normalizeTraitGender } = require('../lib/genderPolicy');
+const { areOppositeTraitGenders, normalizeTraitGender, traitGenderLabelKo } = require('../lib/genderPolicy');
 const { resolveSchoolProofAbsolutePath } = require('../lib/schoolProofMulter');
 
 const router = express.Router();

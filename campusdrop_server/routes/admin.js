@@ -50,14 +50,6 @@ function isValidDateOnly(s) {
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
 }
 
-function padHour(h) {
-  return String(h).padStart(2, '0');
-}
-
-function slotToTimeSlot(slot) {
-  return `${padHour(slot.hourStart)}:00-${padHour(slot.hourEnd)}:00`;
-}
-
 function parseQueryHour(value, name) {
   const n = Number(value);
   if (!Number.isInteger(n) || n < 0 || n > 23) {
@@ -669,7 +661,6 @@ router.get('/matches/slot-candidates', async (req, res) => {
       return res.status(400).json({ error: '기준 유저의 가능 시간에 요청한 슬롯이 없습니다.' });
     }
 
-    const requestedLegacySlot = { date: slot.date, time_slot: slotToTimeSlot(slot) };
     const candidatesRaw = eligible.filter((t) => {
       if (t.id === base.id) return false;
       if (matchedIds.has(t.id)) return false;
@@ -679,35 +670,25 @@ router.get('/matches/slot-candidates', async (req, res) => {
     });
 
     const candidates = [];
-    const baseAvailability = surveyDataToAvailabilitySlots(
-      /** @type {Record<string, unknown>} */ (base.surveyData),
-    );
     const baseProfile = surveyDataToLifestyleUser(
       /** @type {Record<string, unknown>} */ (base.surveyData),
     );
 
     for (const cand of candidatesRaw) {
-      const candidateAvailability = surveyDataToAvailabilitySlots(
-        /** @type {Record<string, unknown>} */ (cand.surveyData),
-      );
       const candidateProfile = surveyDataToLifestyleUser(
         /** @type {Record<string, unknown>} */ (cand.surveyData),
       );
       const baseIsUserA = base.id.localeCompare(cand.id) <= 0;
+      // 관리자 수동 재매칭 후보 조회는 요청 슬롯 보유 여부만 이 라우트에서 확인한다.
+      // Python availability 하드필터는 일괄/실시간 매칭의 20시 이후 제외 정책까지 적용하므로 여기서는 생략한다.
       const body = baseIsUserA
         ? {
             user_A: baseProfile,
             user_B: candidateProfile,
-            availability_a: baseAvailability.length > 0 ? baseAvailability : [requestedLegacySlot],
-            availability_b:
-              candidateAvailability.length > 0 ? candidateAvailability : [requestedLegacySlot],
           }
         : {
             user_A: candidateProfile,
             user_B: baseProfile,
-            availability_a:
-              candidateAvailability.length > 0 ? candidateAvailability : [requestedLegacySlot],
-            availability_b: baseAvailability.length > 0 ? baseAvailability : [requestedLegacySlot],
           };
 
       const py = await postCalculateMatch(body);

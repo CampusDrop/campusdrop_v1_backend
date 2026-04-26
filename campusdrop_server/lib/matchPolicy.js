@@ -3,8 +3,8 @@
  */
 const MIN_MATCH_SCORE = 50;
 
-/** 매칭 주기 앵커(매주 동일 시각 기준 7일 구간). KST 2026-04-13 00:00. */
-const MATCHING_PERIOD_ANCHOR_ISO = '2026-04-13T00:00:00.000+09:00';
+/** 매칭 주기 앵커(매주 동일 시각 기준 7일 구간). KST 2026-04-14 00:00(화요일). */
+const MATCHING_PERIOD_ANCHOR_ISO = '2026-04-14T00:00:00.000+09:00';
 
 const MS_PER_WEEK = 7 * 86400000;
 

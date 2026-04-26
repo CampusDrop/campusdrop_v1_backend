@@ -1,5 +1,6 @@
 const fs = require('fs');
 const express = require('express');
+const axios = require('axios');
 const { Prisma } = require('@prisma/client');
 const { prisma } = require('../lib/prisma');
 const {
@@ -13,10 +14,15 @@ const { runWeeklyBatchMatch } = require('../lib/weeklyBatchMatch');
 const {
   getMatchingPeriodStart,
   getMatchingPeriodEnd,
+  getHistoricalPartnerIds,
   getUserIdsMatchedInPeriod,
   deleteMatchingsForUsersInPeriod,
 } = require('../lib/matchPolicy');
 const { loadEligibleTraits } = require('../lib/weeklyBatchMatch');
+const { surveyDataToLifestyleUser } = require('../lib/surveyToLifestyleUser');
+const { surveyDataToAvailabilitySlots } = require('../lib/surveyAvailabilitySlots');
+const { getMatchingCalculateMatchUrl } = require('../lib/resolveMatchingServiceUrl');
+const { slimMatchReportForDb } = require('../lib/slimMatchReport');
 const { areOppositeTraitGenders, normalizeTraitGender, traitGenderLabelKo } = require('../lib/genderPolicy');
 const { resolveSchoolProofAbsolutePath } = require('../lib/schoolProofMulter');
 
@@ -27,6 +33,125 @@ const UUID_RE =
 
 function isUuid(s) {
   return typeof s === 'string' && UUID_RE.test(s);
+}
+
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const DEFAULT_MATCH_TIMEOUT_MS = 5_000;
+
+function matchRequestTimeoutMs() {
+  const n = Number(process.env.MATCHING_SERVICE_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_MATCH_TIMEOUT_MS;
+}
+
+function isValidDateOnly(s) {
+  if (typeof s !== 'string' || !DATE_ONLY_RE.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+function padHour(h) {
+  return String(h).padStart(2, '0');
+}
+
+function slotToTimeSlot(slot) {
+  return `${padHour(slot.hourStart)}:00-${padHour(slot.hourEnd)}:00`;
+}
+
+function parseQueryHour(value, name) {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0 || n > 23) {
+    return { ok: false, error: `${name}는 0~23 정수여야 합니다.` };
+  }
+  return { ok: true, value: n };
+}
+
+function normalizeAvailableSlot(row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+  const r = /** @type {Record<string, unknown>} */ (row);
+  const date = typeof r.date === 'string' ? r.date.trim() : '';
+  const hourStart = Number(r.hourStart);
+  const hourEnd = Number(r.hourEnd);
+  if (!isValidDateOnly(date)) return null;
+  if (!Number.isInteger(hourStart) || hourStart < 0 || hourStart > 23) return null;
+  if (!Number.isInteger(hourEnd) || hourEnd < 0 || hourEnd > 23) return null;
+  const diff = (hourEnd - hourStart + 24) % 24;
+  if (diff !== 1) return null;
+  return { date, hourStart, hourEnd };
+}
+
+function legacySlotToAvailableSlot(row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+  const r = /** @type {Record<string, unknown>} */ (row);
+  const date = typeof r.date === 'string' ? r.date.trim() : '';
+  const timeSlot = typeof r.time_slot === 'string' ? r.time_slot.trim() : '';
+  const m = timeSlot.match(/^([01]\d|2[0-3]):00-([01]\d|2[0-3]):00$/);
+  if (!isValidDateOnly(date) || !m) return null;
+  return normalizeAvailableSlot({
+    date,
+    hourStart: Number(m[1]),
+    hourEnd: Number(m[2]),
+  });
+}
+
+function dedupeAndSortAvailableSlots(slots) {
+  const seen = new Set();
+  const out = [];
+  for (const slot of slots) {
+    const n = normalizeAvailableSlot(slot);
+    if (!n) continue;
+    const key = `${n.date}|${n.hourStart}|${n.hourEnd}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(n);
+  }
+  out.sort((a, b) => {
+    const c = a.date.localeCompare(b.date);
+    if (c !== 0) return c;
+    return a.hourStart - b.hourStart || a.hourEnd - b.hourEnd;
+  });
+  return out;
+}
+
+function matchAvailabilityForResponse(surveyData) {
+  if (!surveyData || typeof surveyData !== 'object' || Array.isArray(surveyData)) {
+    return { availableSlots: [] };
+  }
+  const data = /** @type {Record<string, unknown>} */ (surveyData);
+  const ma = data.matchAvailability;
+  if (ma && typeof ma === 'object' && !Array.isArray(ma)) {
+    const raw = /** @type {Record<string, unknown>} */ (ma).availableSlots;
+    if (Array.isArray(raw)) {
+      const availableSlots = dedupeAndSortAvailableSlots(raw);
+      if (availableSlots.length > 0) return { availableSlots };
+    }
+  }
+  const legacySlots = surveyDataToAvailabilitySlots(data)
+    .map(legacySlotToAvailableSlot)
+    .filter(Boolean);
+  return { availableSlots: dedupeAndSortAvailableSlots(legacySlots) };
+}
+
+function hasRequestedSlot(surveyData, slot) {
+  return matchAvailabilityForResponse(surveyData).availableSlots.some(
+    (s) =>
+      s.date === slot.date &&
+      s.hourStart === slot.hourStart &&
+      s.hourEnd === slot.hourEnd,
+  );
+}
+
+async function postCalculateMatch(body) {
+  const url = getMatchingCalculateMatchUrl();
+  const { data, status } = await axios.post(url, body, {
+    timeout: matchRequestTimeoutMs(),
+    headers: { 'Content-Type': 'application/json' },
+    validateStatus: () => true,
+  });
+  if (status < 200 || status >= 300) {
+    return { ok: false, status, data, url };
+  }
+  return { ok: true, data, url };
 }
 
 /**
@@ -444,11 +569,15 @@ router.get('/matches/unmatched', async (req, res) => {
 
     const users = unmatched.map((t) => ({
       id: t.id,
+      identityId: t.id,
       email: t.identity?.email ?? null,
+      kakaoId: t.identity?.kakaoId ?? null,
       kakaoLinked: Boolean(t.identity?.kakaoId && String(t.identity.kakaoId).trim()),
       createdAt: t.identity?.createdAt ?? null,
-      gender: t.gender ?? null,
+      gender: normalizeTraitGender(t.gender) ?? null,
+      genderLabel: traitGenderLabelKo(t.gender) || null,
       surveyUpdatedAt: t.updatedAt ?? null,
+      matchAvailability: matchAvailabilityForResponse(t.surveyData),
     }));
 
     await writeAccessLog({
@@ -476,6 +605,180 @@ router.get('/matches/unmatched', async (req, res) => {
   } catch (err) {
     console.error('admin GET /matches/unmatched error:', err);
     return res.status(500).json({ error: '미매칭 유저 조회 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/matches/slot-candidates:
+ *   get:
+ *     tags: [Admin]
+ *     summary: 기준 여성의 특정 가능 시간에 매칭 가능한 남성 후보와 점수 조회
+ *     description: |
+ *       `identityId`는 여성 Identity UUID여야 하며, 현재 매칭 주기 미매칭·비차단·설문 완료 사용자만 대상으로 한다.
+ *       후보는 요청 슬롯을 가진 남성 미매칭 사용자이며, Python `calculate-match`로 계산한 점수 내림차순으로 반환한다.
+ *     security:
+ *       - AdminBearerAuth: []
+ */
+router.get('/matches/slot-candidates', async (req, res) => {
+  const identityId = String(req.query.identityId ?? req.query.id ?? '').trim();
+  const date = String(req.query.date ?? '').trim();
+  const hs = parseQueryHour(req.query.hourStart, 'hourStart');
+  const he = parseQueryHour(req.query.hourEnd, 'hourEnd');
+
+  if (!isUuid(identityId)) {
+    return res.status(400).json({ error: 'identityId는 유효한 Identity UUID여야 합니다.' });
+  }
+  if (!isValidDateOnly(date)) {
+    return res.status(400).json({ error: 'date는 YYYY-MM-DD 형식의 유효한 날짜여야 합니다.' });
+  }
+  if (!hs.ok) {
+    return res.status(400).json({ error: hs.error });
+  }
+  if (!he.ok) {
+    return res.status(400).json({ error: he.error });
+  }
+  const slot = { date, hourStart: hs.value, hourEnd: he.value };
+  if ((slot.hourEnd - slot.hourStart + 24) % 24 !== 1) {
+    return res.status(400).json({ error: 'hourStart/hourEnd는 정확히 1시간 구간이어야 합니다.' });
+  }
+
+  const periodStart = getMatchingPeriodStart();
+
+  try {
+    const [eligible, matchedIds, historicalPartnerIds] = await Promise.all([
+      loadEligibleTraits(),
+      getUserIdsMatchedInPeriod(prisma, periodStart),
+      getHistoricalPartnerIds(prisma, identityId),
+    ]);
+
+    const base = eligible.find((t) => t.id === identityId);
+    if (!base) {
+      return res.status(404).json({
+        error: '기준 유저를 찾을 수 없거나 설문 미완료/차단 상태입니다.',
+      });
+    }
+    const baseGender = normalizeTraitGender(base.gender);
+    if (baseGender !== 'female') {
+      return res.status(400).json({ error: 'slot-candidates의 기준 유저는 여성만 허용됩니다.' });
+    }
+    if (matchedIds.has(base.id)) {
+      return res.status(400).json({ error: '기준 유저는 이미 이번 매칭 주기에 매칭되었습니다.' });
+    }
+    if (!hasRequestedSlot(base.surveyData, slot)) {
+      return res.status(400).json({ error: '기준 유저의 가능 시간에 요청한 슬롯이 없습니다.' });
+    }
+
+    const requestedLegacySlot = { date: slot.date, time_slot: slotToTimeSlot(slot) };
+    const candidatesRaw = eligible.filter((t) => {
+      if (t.id === base.id) return false;
+      if (matchedIds.has(t.id)) return false;
+      if (historicalPartnerIds.has(t.id)) return false;
+      if (normalizeTraitGender(t.gender) !== 'male') return false;
+      return hasRequestedSlot(t.surveyData, slot);
+    });
+
+    const candidates = [];
+    const baseAvailability = surveyDataToAvailabilitySlots(
+      /** @type {Record<string, unknown>} */ (base.surveyData),
+    );
+    const baseProfile = surveyDataToLifestyleUser(
+      /** @type {Record<string, unknown>} */ (base.surveyData),
+    );
+
+    for (const cand of candidatesRaw) {
+      const candidateAvailability = surveyDataToAvailabilitySlots(
+        /** @type {Record<string, unknown>} */ (cand.surveyData),
+      );
+      const candidateProfile = surveyDataToLifestyleUser(
+        /** @type {Record<string, unknown>} */ (cand.surveyData),
+      );
+      const baseIsUserA = base.id.localeCompare(cand.id) <= 0;
+      const body = baseIsUserA
+        ? {
+            user_A: baseProfile,
+            user_B: candidateProfile,
+            availability_a: baseAvailability.length > 0 ? baseAvailability : [requestedLegacySlot],
+            availability_b:
+              candidateAvailability.length > 0 ? candidateAvailability : [requestedLegacySlot],
+          }
+        : {
+            user_A: candidateProfile,
+            user_B: baseProfile,
+            availability_a:
+              candidateAvailability.length > 0 ? candidateAvailability : [requestedLegacySlot],
+            availability_b: baseAvailability.length > 0 ? baseAvailability : [requestedLegacySlot],
+          };
+
+      const py = await postCalculateMatch(body);
+      if (!py.ok) {
+        return res.status(502).json({
+          error: '매칭 서비스가 오류 상태를 반환했습니다.',
+          pythonStatus: py.status,
+          pythonUrl: py.url,
+          pythonBody: py.data,
+          failedCandidate: { identityId: cand.id },
+        });
+      }
+
+      const score = Number(py.data?.final_score);
+      if (py.data?.match_status !== 'ok' || !Number.isFinite(score)) {
+        continue;
+      }
+      const report = slimMatchReportForDb(score, py.data?.match_report);
+      candidates.push({
+        identityId: cand.id,
+        id: cand.id,
+        email: cand.identity?.email ?? null,
+        gender: 'male',
+        genderLabel: traitGenderLabelKo(cand.gender) || '남성',
+        kakaoId: cand.identity?.kakaoId ?? null,
+        kakaoLinked: Boolean(cand.identity?.kakaoId && String(cand.identity.kakaoId).trim()),
+        score: Math.round(score * 100) / 100,
+        reasons: Array.isArray(report?.reasons) ? report.reasons : [],
+        matchAvailability: matchAvailabilityForResponse(cand.surveyData),
+      });
+    }
+
+    candidates.sort((a, b) => b.score - a.score || a.identityId.localeCompare(b.identityId));
+
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin.adminId,
+      action: 'ADMIN_MATCH_SLOT_CANDIDATES',
+      resource: 'GET /api/admin/matches/slot-candidates',
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: {
+        identityId: base.id,
+        slot,
+        candidateCount: candidates.length,
+      },
+    });
+
+    return res.status(200).json({
+      baseUser: {
+        identityId: base.id,
+        id: base.id,
+        gender: 'female',
+        genderLabel: traitGenderLabelKo(base.gender) || '여성',
+        email: base.identity?.email ?? null,
+      },
+      slot,
+      candidates,
+    });
+  } catch (err) {
+    console.error('admin GET /matches/slot-candidates error:', err);
+    if (axios.isAxiosError(err)) {
+      return res.status(502).json({
+        error: 'Python 매칭 서비스에 연결할 수 없습니다.',
+        pythonUrl: getMatchingCalculateMatchUrl(),
+        detail: err.message,
+        pythonStatus: err.response?.status ?? null,
+        pythonBody: err.response?.data ?? null,
+      });
+    }
+    return res.status(500).json({ error: '시간대별 후보 조회 중 오류가 발생했습니다.' });
   }
 });
 

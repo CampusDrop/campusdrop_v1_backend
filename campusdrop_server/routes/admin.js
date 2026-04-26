@@ -43,6 +43,15 @@ function matchRequestTimeoutMs() {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_MATCH_TIMEOUT_MS;
 }
 
+function ageFromBirthYear(value, now = new Date()) {
+  if (value === null || value === undefined || value === '') return null;
+  const birthYear = Number(value);
+  if (!Number.isInteger(birthYear) || birthYear < 1900 || birthYear > now.getUTCFullYear()) {
+    return null;
+  }
+  return now.getUTCFullYear() - birthYear + 1;
+}
+
 function isValidDateOnly(s) {
   if (typeof s !== 'string' || !DATE_ONLY_RE.test(s)) return false;
   const [y, m, d] = s.split('-').map(Number);
@@ -769,7 +778,10 @@ router.get('/matches/slot-candidates', async (req, res) => {
         email: cand.identity?.email ?? null,
         gender: 'male',
         genderLabel: traitGenderLabelKo(cand.gender) || '남성',
+        birthYear: cand.identity?.birthYear ?? null,
+        age: ageFromBirthYear(cand.identity?.birthYear),
         kakaoId: cand.identity?.kakaoId ?? null,
+        kakaoLinkPin: cand.identity?.kakaoLinkPin ?? null,
         kakaoLinked: Boolean(cand.identity?.kakaoId && String(cand.identity.kakaoId).trim()),
         score: Math.round(score * 100) / 100,
         reasons: Array.isArray(report?.reasons) ? report.reasons : [],

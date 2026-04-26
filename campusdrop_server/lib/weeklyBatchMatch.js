@@ -29,7 +29,15 @@ async function loadEligibleTraits() {
   const traits = await prisma.trait.findMany({
     include: {
       identity: {
-        select: { id: true, email: true, kakaoId: true, blockedAt: true, createdAt: true },
+        select: {
+          id: true,
+          email: true,
+          kakaoId: true,
+          kakaoLinkPin: true,
+          birthYear: true,
+          blockedAt: true,
+          createdAt: true,
+        },
       },
     },
   });

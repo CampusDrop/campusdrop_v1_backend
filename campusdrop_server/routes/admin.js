@@ -50,6 +50,14 @@ function isValidDateOnly(s) {
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
 }
 
+function padHour(h) {
+  return String(h).padStart(2, '0');
+}
+
+function timeSlotFromHours(hourStart, hourEnd) {
+  return `${padHour(hourStart)}:00-${padHour(hourEnd)}:00`;
+}
+
 function parseQueryHour(value, name) {
   const n = Number(value);
   if (!Number.isInteger(n) || n < 0 || n > 23) {
@@ -70,6 +78,54 @@ function normalizeAvailableSlot(row) {
   const diff = (hourEnd - hourStart + 24) % 24;
   if (diff !== 1) return null;
   return { date, hourStart, hourEnd };
+}
+
+function normalizeTimeSlotString(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const s = String(value).trim();
+  const m = s.match(/^(\d{1,2})(?::00)?\s*-\s*(\d{1,2})(?::00)?$/);
+  if (!m) return null;
+  const hourStart = Number(m[1]);
+  const hourEnd = Number(m[2]);
+  const slot = normalizeAvailableSlot({ date: '2026-01-01', hourStart, hourEnd });
+  if (!slot) return null;
+  return { hourStart, hourEnd, time_slot: timeSlotFromHours(hourStart, hourEnd) };
+}
+
+function parseMatchedSlotInput(raw) {
+  if (raw === undefined || raw === null || raw === '') {
+    return { ok: true, value: null };
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, error: 'matchedSlot은 객체여야 합니다.' };
+  }
+  const slot = normalizeAvailableSlot(raw);
+  if (!slot) {
+    return {
+      ok: false,
+      error:
+        'matchedSlot은 { date: YYYY-MM-DD, hourStart: 0~23, hourEnd: 0~23 } 형태의 정확히 1시간 구간이어야 합니다.',
+    };
+  }
+
+  const row = /** @type {Record<string, unknown>} */ (raw);
+  const timeSlot = normalizeTimeSlotString(row.time_slot ?? row.timeSlot);
+  if ((row.time_slot !== undefined || row.timeSlot !== undefined) && !timeSlot) {
+    return { ok: false, error: 'matchedSlot.time_slot은 "12-13" 또는 "12:00-13:00" 형식이어야 합니다.' };
+  }
+  if (timeSlot && (timeSlot.hourStart !== slot.hourStart || timeSlot.hourEnd !== slot.hourEnd)) {
+    return { ok: false, error: 'matchedSlot.time_slot이 hourStart/hourEnd와 일치하지 않습니다.' };
+  }
+
+  return {
+    ok: true,
+    value: {
+      date: slot.date,
+      hourStart: slot.hourStart,
+      hourEnd: slot.hourEnd,
+      time_slot: timeSlotFromHours(slot.hourStart, slot.hourEnd),
+    },
+  };
 }
 
 function legacySlotToAvailableSlot(row) {
@@ -863,6 +919,7 @@ router.post('/matches/force', async (req, res) => {
   const scoreRaw = body.score;
   const genderAIn = body.genderA ?? body.gender_a ?? body.userA_gender;
   const genderBIn = body.genderB ?? body.gender_b ?? body.userB_gender;
+  const matchedSlotRaw = body.matchedSlot ?? body.matched_slot;
 
   if (!isUuid(String(userAId)) || !isUuid(String(userBId))) {
     return res.status(400).json({ error: 'userAId·userBId는 유효한 UUID여야 합니다.' });
@@ -881,6 +938,12 @@ router.post('/matches/force', async (req, res) => {
     }
     score = n;
   }
+
+  const matchedSlotParsed = parseMatchedSlotInput(matchedSlotRaw);
+  if (!matchedSlotParsed.ok) {
+    return res.status(400).json({ error: matchedSlotParsed.error });
+  }
+  const matchedSlot = matchedSlotParsed.value;
 
   try {
     const [identA, identB] = await prisma.$transaction([
@@ -1000,6 +1063,9 @@ router.post('/matches/force', async (req, res) => {
           userBId: b,
           score,
           periodStart,
+          ...(matchedSlot
+            ? { matchReport: { score: Math.round(score * 100) / 100, reasons: [], matchedSlot } }
+            : {}),
         },
       });
     });
@@ -1011,7 +1077,7 @@ router.post('/matches/force', async (req, res) => {
       resource: `Matching:${match.id}`,
       ip: req.ip || null,
       userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
-      metadata: { userAId: a, userBId: b, score, genderA: finalA, genderB: finalB },
+      metadata: { userAId: a, userBId: b, score, genderA: finalA, genderB: finalB, matchedSlot },
     });
 
     return res.status(201).json({
@@ -1024,6 +1090,8 @@ router.post('/matches/force', async (req, res) => {
         matchedAt: match.matchedAt,
         genderA: finalA,
         genderB: finalB,
+        matchedSlot,
+        matchReport: match.matchReport ?? null,
       },
     });
   } catch (err) {

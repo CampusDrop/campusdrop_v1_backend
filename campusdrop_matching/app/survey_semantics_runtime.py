@@ -6,6 +6,7 @@ Node가 저장·전달한 `matchProfile`을 snake_case `match_profile`로 받는
 from __future__ import annotations
 
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -15,9 +16,21 @@ from app.schemas import LifestyleUser
 
 @lru_cache(maxsize=1)
 def survey_semantics() -> dict[str, Any]:
-    root = Path(__file__).resolve().parent.parent.parent
-    with (root / "config" / "surveySemantics.v1.json").open(encoding="utf-8") as f:
-        return json.load(f)
+    configured = os.getenv("SURVEY_SEMANTICS_PATH")
+    here = Path(__file__).resolve()
+    candidates = [
+        Path(configured) if configured else None,
+        # Docker image layout: /app/app/*.py + /app/config/*.json
+        here.parents[1] / "config" / "surveySemantics.v1.json",
+        # Local repo layout: campusdrop_matching/app/*.py + config/*.json
+        here.parents[2] / "config" / "surveySemantics.v1.json",
+    ]
+    for path in candidates:
+        if path is not None and path.exists():
+            with path.open(encoding="utf-8") as f:
+                return json.load(f)
+    checked = ", ".join(str(path) for path in candidates if path is not None)
+    raise FileNotFoundError(f"surveySemantics.v1.json not found. Checked: {checked}")
 
 
 def get_match_profile(u: LifestyleUser) -> dict[str, Any] | None:

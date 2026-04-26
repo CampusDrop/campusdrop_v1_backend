@@ -17,6 +17,7 @@ from app.schemas import (
 
 _MAX_EXACT_SLOT_OPTIMIZATION_EDGES = 220
 _MAX_EXACT_SLOT_OPTIMIZATION_FEMALES = 18
+_MAX_MATCHES_PER_SLOT = 2
 
 
 @dataclass(frozen=True)
@@ -88,8 +89,16 @@ def _edges_by_female(edges: list[_CandidateEdge]) -> list[tuple[str, list[int]]]
 def _resource_bits(edges: list[_CandidateEdge]) -> tuple[dict[str, int], dict[str, int]]:
     male_bits = {male_id: 1 << i for i, male_id in enumerate(sorted({edge.male_id for edge in edges}))}
     slot_values = sorted({edge.slot_key for edge in edges if edge.slot_key is not None})
-    slot_bits = {slot_key: 1 << i for i, slot_key in enumerate(slot_values)}
-    return male_bits, slot_bits
+    slot_indices = {slot_key: i for i, slot_key in enumerate(slot_values)}
+    return male_bits, slot_indices
+
+
+def _slot_usage_count(encoded_counts: int, slot_index: int) -> int:
+    return (encoded_counts // ((_MAX_MATCHES_PER_SLOT + 1) ** slot_index)) % (_MAX_MATCHES_PER_SLOT + 1)
+
+
+def _increment_slot_usage(encoded_counts: int, slot_index: int) -> int:
+    return encoded_counts + ((_MAX_MATCHES_PER_SLOT + 1) ** slot_index)
 
 
 def _use_exact_slot_optimization(edges: list[_CandidateEdge]) -> bool:
@@ -129,19 +138,19 @@ def _greedy_slot_safe_selection(
     selected: list[_CandidateEdge] = []
     used_females: set[str] = set()
     used_males: set[str] = set()
-    used_slots: set[str] = set()
+    used_slot_counts: dict[str, int] = {}
     for edge in ordered:
         if target_count is not None and len(selected) >= target_count:
             break
         if edge.female_id in used_females or edge.male_id in used_males:
             continue
-        if edge.slot_key is not None and edge.slot_key in used_slots:
+        if edge.slot_key is not None and used_slot_counts.get(edge.slot_key, 0) >= _MAX_MATCHES_PER_SLOT:
             continue
         selected.append(edge)
         used_females.add(edge.female_id)
         used_males.add(edge.male_id)
         if edge.slot_key is not None:
-            used_slots.add(edge.slot_key)
+            used_slot_counts[edge.slot_key] = used_slot_counts.get(edge.slot_key, 0) + 1
 
     selected.sort(key=lambda e: (-e.female_score, -e.score, -e.male_score, e.user_a_id, e.user_b_id, e.slot_key or ""))
     return selected
@@ -159,7 +168,7 @@ def _max_cardinality(edges: list[_CandidateEdge], *, min_female_score: float | N
         return len(_greedy_slot_safe_selection(filtered))
 
     female_groups = _edges_by_female(filtered)
-    male_bits, slot_bits = _resource_bits(filtered)
+    male_bits, slot_indices = _resource_bits(filtered)
 
     @lru_cache(maxsize=None)
     def solve(group_idx: int, used_males: int, used_slots: int) -> int:
@@ -169,10 +178,13 @@ def _max_cardinality(edges: list[_CandidateEdge], *, min_female_score: float | N
         for edge_idx in female_groups[group_idx][1]:
             edge = filtered[edge_idx]
             male_bit = male_bits[edge.male_id]
-            slot_bit = slot_bits.get(edge.slot_key, 0)
-            if used_males & male_bit or used_slots & slot_bit:
+            slot_index = slot_indices.get(edge.slot_key)
+            if used_males & male_bit:
                 continue
-            best = max(best, 1 + solve(group_idx + 1, used_males | male_bit, used_slots | slot_bit))
+            if slot_index is not None and _slot_usage_count(used_slots, slot_index) >= _MAX_MATCHES_PER_SLOT:
+                continue
+            next_slots = _increment_slot_usage(used_slots, slot_index) if slot_index is not None else used_slots
+            best = max(best, 1 + solve(group_idx + 1, used_males | male_bit, next_slots))
         return best
 
     return solve(0, 0, 0)
@@ -278,7 +290,7 @@ def _best_weighted_selection(edges: list[_CandidateEdge], target_count: int) -> 
         return _greedy_slot_safe_selection(edges, target_count=target_count)
 
     female_groups = _edges_by_female(edges)
-    male_bits, slot_bits = _resource_bits(edges)
+    male_bits, slot_indices = _resource_bits(edges)
 
     for _, edge_indices in female_groups:
         edge_indices.sort(
@@ -303,10 +315,13 @@ def _best_weighted_selection(edges: list[_CandidateEdge], target_count: int) -> 
         for edge_idx in female_groups[group_idx][1]:
             edge = edges[edge_idx]
             male_bit = male_bits[edge.male_id]
-            slot_bit = slot_bits.get(edge.slot_key, 0)
-            if used_males & male_bit or used_slots & slot_bit:
+            slot_index = slot_indices.get(edge.slot_key)
+            if used_males & male_bit:
                 continue
-            tail = solve(group_idx + 1, used_males | male_bit, used_slots | slot_bit, remaining - 1)
+            if slot_index is not None and _slot_usage_count(used_slots, slot_index) >= _MAX_MATCHES_PER_SLOT:
+                continue
+            next_slots = _increment_slot_usage(used_slots, slot_index) if slot_index is not None else used_slots
+            tail = solve(group_idx + 1, used_males | male_bit, next_slots, remaining - 1)
             if tail is None:
                 continue
             candidate = (_edge_weight(edge) + tail[0], (edge_idx, *tail[1]))

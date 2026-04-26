@@ -202,7 +202,7 @@ def test_batch_protects_female_with_sparse_time_candidates() -> None:
     }
 
 
-def test_batch_does_not_schedule_two_pairs_in_same_slot() -> None:
+def test_batch_allows_up_to_two_pairs_in_same_slot() -> None:
     only_slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     users = [
         ("female-a", _u(), "female", [only_slot]),
@@ -213,12 +213,25 @@ def test_batch_does_not_schedule_two_pairs_in_same_slot() -> None:
 
     result = run_batch_female_coverage_matching(users, set())
 
-    assert len(result.pairs) == 1
-    assert result.pairs[0].matched_slot == only_slot
-    assert result.pairs[0].match_report["batch_match_selection"]["matched_slot"] == {
-        "date": "2026-04-21",
-        "time_slot": "11:00-12:00",
-    }
+    assert len(result.pairs) == 2
+    assert all(pair.matched_slot == only_slot for pair in result.pairs)
+
+
+def test_batch_does_not_schedule_three_pairs_in_same_slot() -> None:
+    only_slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
+    users = [
+        ("female-a", _u(), "female", [only_slot]),
+        ("female-b", _u(), "female", [only_slot]),
+        ("female-c", _u(), "female", [only_slot]),
+        ("male-a", _u(), "male", [only_slot]),
+        ("male-b", _u(), "male", [only_slot]),
+        ("male-c", _u(), "male", [only_slot]),
+    ]
+
+    result = run_batch_female_coverage_matching(users, set())
+
+    assert len(result.pairs) == 2
+    assert all(pair.matched_slot == only_slot for pair in result.pairs)
 
 
 def test_batch_large_candidate_pool_uses_slot_safe_fallback() -> None:
@@ -241,8 +254,8 @@ def test_batch_large_candidate_pool_uses_slot_safe_fallback() -> None:
         if pair.matched_slot is not None
     ]
 
-    assert len(result.pairs) == len(set(slot_keys))
-    assert len(result.pairs) == len(slots)
+    assert len(result.pairs) == 2 * len(slots)
+    assert all(slot_keys.count(slot_key) <= 2 for slot_key in set(slot_keys))
 
 
 def test_batch_forbidden_pairs_are_excluded() -> None:

@@ -32,6 +32,21 @@ def availability_overlap_count(
     return len(normalized_slot_keys(slots_a) & normalized_slot_keys(slots_b))
 
 
+def overlapping_slot_keys(
+    slots_a: Sequence[AvailabilitySlot | dict[str, str]],
+    slots_b: Sequence[AvailabilitySlot | dict[str, str]],
+) -> list[str]:
+    return sorted(normalized_slot_keys(slots_a) & normalized_slot_keys(slots_b))
+
+
+def slot_key_to_availability_slot(slot_key: str) -> AvailabilitySlot | None:
+    try:
+        date, time_slot = slot_key.split("\t", 1)
+    except ValueError:
+        return None
+    return AvailabilitySlot(date=date, time_slot=time_slot)
+
+
 def availability_pair_compatible_for_matching(
     slots_a: Sequence[AvailabilitySlot | dict[str, str]],
     slots_b: Sequence[AvailabilitySlot | dict[str, str]],

@@ -335,11 +335,19 @@ router.post('/request', async (req, res) => {
   const partnerLabel = traitGenderLabelKo(partner.trait?.gender) || '상대';
   const partnerEmail =
     typeof partner.email === 'string' && partner.email.trim() !== '' ? partner.email.trim() : null;
+  const partnerKakaoId =
+    typeof partner.kakaoId === 'string' && partner.kakaoId.trim() !== '' ? partner.kakaoId.trim() : null;
+  const partnerKakaoLinkPin =
+    typeof partner.kakaoLinkPin === 'string' && partner.kakaoLinkPin.trim() !== ''
+      ? partner.kakaoLinkPin.trim()
+      : null;
 
   const best = {
     partnerId,
     partnerLabel,
     partnerEmail,
+    partnerKakaoId,
+    partnerKakaoLinkPin,
     score,
     report: myPair.match_report,
   };
@@ -369,6 +377,8 @@ router.post('/request', async (req, res) => {
   return res.status(200).json({
     partnerLabel: best.partnerLabel,
     partnerEmail: best.partnerEmail,
+    partnerKakaoId: best.partnerKakaoId,
+    partnerKakaoLinkPin: best.partnerKakaoLinkPin,
     score: best.score,
     report: reportSlim,
     periodStart: periodStart.toISOString(),

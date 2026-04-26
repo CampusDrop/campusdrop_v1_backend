@@ -9,7 +9,7 @@ const MIN_REASONS_BEFORE_FILL = 3;
  *
  * @param {number} score `matchings.score`와 동일한 최종 점수
  * @param {Record<string, unknown> | null | undefined} full Python `match_report`
- * @returns {{ score: number, reasons: string[] } | null}
+ * @returns {{ score: number, reasons: string[], matchedSlot?: { date: string, time_slot: string } } | null}
  */
 function slimMatchReportForDb(score, full) {
   if (full == null || typeof full !== 'object') return null;
@@ -32,7 +32,7 @@ function slimMatchReportForDb(score, full) {
     for (const line of numbered) {
       push(String(line));
       if (reasons.length >= MAX_REASONS) {
-        return pack(score, reasons);
+        return pack(score, reasons, full);
       }
     }
   }
@@ -66,17 +66,28 @@ function slimMatchReportForDb(score, full) {
     push('설문 기반 궁합 점수로 매칭되었습니다.');
   }
 
-  return pack(score, reasons.slice(0, MAX_REASONS));
+  return pack(score, reasons.slice(0, MAX_REASONS), full);
 }
 
 /**
  * @param {number} score
  * @param {string[]} reasons
+ * @param {Record<string, unknown>} [full]
  */
-function pack(score, reasons) {
+function pack(score, reasons, full) {
   const n = typeof score === 'number' && Number.isFinite(score) ? score : Number(score);
   const s = Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
-  return { score: s, reasons: reasons.slice(0, MAX_REASONS) };
+  const out = { score: s, reasons: reasons.slice(0, MAX_REASONS) };
+  const selection = full && typeof full.batch_match_selection === 'object' ? full.batch_match_selection : null;
+  const matchedSlot = selection && typeof selection.matched_slot === 'object' ? selection.matched_slot : null;
+  if (matchedSlot) {
+    const date = typeof matchedSlot.date === 'string' ? matchedSlot.date : '';
+    const timeSlot = typeof matchedSlot.time_slot === 'string' ? matchedSlot.time_slot : '';
+    if (date && timeSlot) {
+      out.matchedSlot = { date, time_slot: timeSlot };
+    }
+  }
+  return out;
 }
 
 module.exports = { slimMatchReportForDb, MAX_REASONS };

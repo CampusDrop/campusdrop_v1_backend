@@ -24,6 +24,7 @@ from app.schemas import (
 )
 
 _LIKERT_MAX_DIFF = 4.0
+_COMPLEMENTARY_LIKERT_KEYS = {"date_expense"}
 
 AXIS_LABEL_KO: dict[str, str] = {
     "energy": "에너지·활동성",
@@ -254,6 +255,27 @@ def _weight_vector() -> np.ndarray:
 
 def continuous_vectors(u: LifestyleUser) -> np.ndarray:
     return np.array([getattr(u, k) for k in CONTINUOUS_KEYS], dtype=np.float64)
+
+
+def _continuous_diffs(a: LifestyleUser, b: LifestyleUser) -> np.ndarray:
+    diffs: list[float] = []
+    for k in CONTINUOUS_KEYS:
+        av = float(getattr(a, k))
+        bv = float(getattr(b, k))
+        if k in _COMPLEMENTARY_LIKERT_KEYS:
+            diffs.append(abs((av + bv) - 6.0))
+        else:
+            diffs.append(abs(av - bv))
+    return np.array(diffs, dtype=np.float64)
+
+
+def _continuous_vectors_for_cosine(a: LifestyleUser, b: LifestyleUser) -> tuple[np.ndarray, np.ndarray]:
+    va = continuous_vectors(a)
+    vb = continuous_vectors(b)
+    for i, k in enumerate(CONTINUOUS_KEYS):
+        if k in _COMPLEMENTARY_LIKERT_KEYS:
+            vb[i] = 6.0 - vb[i]
+    return va, vb
 
 
 def religion_soft_score_0_100(a: LifestyleUser, b: LifestyleUser) -> tuple[float, dict[str, Any]]:
@@ -491,7 +513,7 @@ def score_group_a_weighted_manhattan(
     w = _weight_vector()
     va = continuous_vectors(a)
     vb = continuous_vectors(b)
-    diffs = np.abs(va - vb)
+    diffs = _continuous_diffs(a, b)
     likert_num = float(np.sum(w * (1.0 - diffs / _LIKERT_MAX_DIFF)))
     likert_den = float(np.sum(w))
     rel_01 = max(0.0, min(1.0, rel_score / 100.0))
@@ -507,6 +529,7 @@ def score_group_a_weighted_manhattan(
             "abs_diff": float(diffs[i]),
             "weight": float(w[i]),
             "weighted_gap": float(w[i] * diffs[i]),
+            "match_mode": "complementary_sum_to_6" if k in _COMPLEMENTARY_LIKERT_KEYS else "same_value",
         }
         for i, k in enumerate(CONTINUOUS_KEYS)
     ]
@@ -526,8 +549,9 @@ def score_group_a_weighted_manhattan(
 
 def score_group_a_weighted_cosine(a: LifestyleUser, b: LifestyleUser) -> tuple[float, dict[str, Any]]:
     w = _weight_vector()
-    va = (continuous_vectors(a) - 3.0) * np.sqrt(w)
-    vb = (continuous_vectors(b) - 3.0) * np.sqrt(w)
+    raw_a, raw_b = _continuous_vectors_for_cosine(a, b)
+    va = (raw_a - 3.0) * np.sqrt(w)
+    vb = (raw_b - 3.0) * np.sqrt(w)
     denom = float(np.linalg.norm(va) * np.linalg.norm(vb))
     if denom <= 0:
         cos = 1.0 if float(np.linalg.norm(va - vb)) == 0.0 else 0.0
@@ -535,7 +559,13 @@ def score_group_a_weighted_cosine(a: LifestyleUser, b: LifestyleUser) -> tuple[f
         cos = float(np.dot(va, vb) / denom)
     cos = max(0.0, min(1.0, cos))
     cosine_100 = 100.0 * cos
-    return cosine_100, {"cosine_similarity": cos, "cosine_score_0_100": cosine_100, "centering": 3.0, "weights": "sqrt(weight) per axis"}
+    return cosine_100, {
+        "cosine_similarity": cos,
+        "cosine_score_0_100": cosine_100,
+        "centering": 3.0,
+        "weights": "sqrt(weight) per axis",
+        "complementary_axes_flipped_for_B": sorted(_COMPLEMENTARY_LIKERT_KEYS),
+    }
 
 
 def _rule_label_ko(rule: str) -> str:
@@ -661,9 +691,7 @@ def compute_match(
     c_score, c_report = score_group_a_weighted_cosine(a, b)
 
     w = _weight_vector()
-    va = continuous_vectors(a)
-    vb = continuous_vectors(b)
-    diffs = np.abs(va - vb)
+    diffs = _continuous_diffs(a, b)
     likert_den = float(np.sum(w))
     likert_manhattan_only = (
         100.0 * float(np.sum(w * (1.0 - diffs / _LIKERT_MAX_DIFF))) / likert_den if likert_den > 0 else 0.0

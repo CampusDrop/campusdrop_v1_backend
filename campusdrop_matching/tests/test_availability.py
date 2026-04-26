@@ -5,7 +5,7 @@ from app.availability import (
     availability_pair_compatible_for_matching,
     normalized_slot_keys,
 )
-from app.batch_match import run_batch_greedy_unique_pairs
+from app.batch_match import run_batch_female_coverage_matching, run_batch_greedy_unique_pairs
 from app.matching import compute_match
 from app.schemas import AvailabilitySlot, LifestyleUser
 
@@ -145,3 +145,79 @@ def test_batch_pair_with_overlap() -> None:
     pairs = run_batch_greedy_unique_pairs(users, set())
     assert len(pairs) == 1
     assert pairs[0].score > 0
+
+
+def test_batch_protects_female_with_sparse_time_candidates() -> None:
+    shared = AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")
+    backup = AvailabilitySlot(date="2026-04-20", time_slot="12:00-13:00")
+    female_flexible = _u()
+    female_sparse = _u(energy=1, weekend=1, pattern=1, trend=1, contact=1)
+    male_best_for_flexible = _u()
+    male_backup = _u(energy=4, weekend=4, pattern=4, trend=4, contact=4)
+
+    users = [
+        ("female-flexible", female_flexible, "female", [shared, backup]),
+        ("female-sparse", female_sparse, "female", [shared]),
+        ("male-best", male_best_for_flexible, "male", [shared]),
+        ("male-backup", male_backup, "male", [backup]),
+    ]
+
+    result = run_batch_female_coverage_matching(users, set())
+    matched_sets = {frozenset((pair.user_a_id, pair.user_b_id)) for pair in result.pairs}
+
+    assert len(result.pairs) == 2
+    assert frozenset(("female-sparse", "male-best")) in matched_sets
+    assert frozenset(("female-flexible", "male-backup")) in matched_sets
+    matched_slots = [pair.matched_slot for pair in result.pairs]
+    assert all(slot is not None for slot in matched_slots)
+    assert {f"{slot.date}\t{slot.time_slot}" for slot in matched_slots if slot is not None} == {
+        "2026-04-20\t11:00-12:00",
+        "2026-04-20\t12:00-13:00",
+    }
+
+
+def test_batch_does_not_schedule_two_pairs_in_same_slot() -> None:
+    only_slot = AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")
+    users = [
+        ("female-a", _u(), "female", [only_slot]),
+        ("female-b", _u(), "female", [only_slot]),
+        ("male-a", _u(), "male", [only_slot]),
+        ("male-b", _u(), "male", [only_slot]),
+    ]
+
+    result = run_batch_female_coverage_matching(users, set())
+
+    assert len(result.pairs) == 1
+    assert result.pairs[0].matched_slot == only_slot
+    assert result.pairs[0].match_report["batch_match_selection"]["matched_slot"] == {
+        "date": "2026-04-20",
+        "time_slot": "11:00-12:00",
+    }
+
+
+def test_batch_forbidden_pairs_are_excluded() -> None:
+    slot = AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")
+    users = [
+        ("female-a", _u(), "female", [slot]),
+        ("male-a", _u(), "male", [slot]),
+    ]
+
+    result = run_batch_female_coverage_matching(users, {"female-a|male-a"})
+
+    assert result.pairs == []
+    assert result.unmatched_females[0].reason == "no_match_candidates"
+    assert result.unmatched_females[0].time_candidate_count == 1
+
+
+def test_batch_reports_female_without_any_time_candidate() -> None:
+    users = [
+        ("female-a", _u(), "female", [AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")]),
+        ("male-a", _u(), "male", [AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")]),
+    ]
+
+    result = run_batch_female_coverage_matching(users, set())
+
+    assert result.pairs == []
+    assert len(result.unmatched_females) == 1
+    assert result.unmatched_females[0].user_id == "female-a"
+    assert result.unmatched_females[0].reason == "no_time_candidates"

@@ -111,3 +111,21 @@ def test_hard_pref_smoking_level_1_vs_smoker() -> None:
     b = LifestyleUser.model_validate(db)
     out = compute_match(a, b)
     assert out["match_status"] == "violated"
+
+
+def test_date_expense_is_complementary_axis() -> None:
+    low = LifestyleUser.model_validate({**_base(), "date_expense": 1})
+    complementary_high = LifestyleUser.model_validate({**_base(), "date_expense": 5})
+    same_low = LifestyleUser.model_validate({**_base(), "date_expense": 1})
+
+    complementary = compute_match(low, complementary_high)
+    same = compute_match(low, same_low)
+
+    assert complementary["final_score"] > same["final_score"]
+    complementary_axis = next(
+        d for d in complementary["match_report"]["group_a"]["manhattan_per_dimension"] if d["field"] == "date_expense"
+    )
+    same_axis = next(d for d in same["match_report"]["group_a"]["manhattan_per_dimension"] if d["field"] == "date_expense")
+    assert complementary_axis["abs_diff"] == 0.0
+    assert same_axis["abs_diff"] == 4.0
+    assert complementary_axis["match_mode"] == "complementary_sum_to_6"

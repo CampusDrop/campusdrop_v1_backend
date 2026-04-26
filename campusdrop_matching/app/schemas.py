@@ -174,9 +174,19 @@ class BatchMatchPair(BaseModel):
     user_a_id: str
     user_b_id: str
     score: float
+    matched_slot: AvailabilitySlot | None = None
     # `compute_match`의 `match_report` 스냅샷(요약·축별 정렬·위반 목록 등). GET /admin/matches용.
     match_report: dict[str, Any] | None = None
 
 
+class BatchUnmatchedFemale(BaseModel):
+    user_id: str
+    reason: Literal["no_time_candidates", "no_match_candidates", "unmatched_after_optimization"]
+    time_candidate_count: int = 0
+    match_candidate_count: int = 0
+
+
 class BatchMatchResponse(BaseModel):
     pairs: list[BatchMatchPair]
+    unmatched_females: list[BatchUnmatchedFemale] = Field(default_factory=list)
+    match_summary: dict[str, Any] | None = None

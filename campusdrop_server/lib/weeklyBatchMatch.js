@@ -222,7 +222,7 @@ async function runWeeklyBatchMatch(options = {}) {
   if (notifyIds.size > 0) {
     const identities = await prisma.identity.findMany({
       where: { id: { in: [...notifyIds] } },
-      select: { id: true, kakaoId: true },
+      select: { id: true, kakaoId: true, kakaoLinkPin: true },
     });
     for (const row of identities) {
       if (!row.kakaoId) continue;
@@ -233,6 +233,29 @@ async function runWeeklyBatchMatch(options = {}) {
       });
     }
   }
+
+  const matchedIdentityRows =
+    notifyIds.size > 0
+      ? await prisma.identity.findMany({
+          where: { id: { in: [...notifyIds] } },
+          select: { id: true, kakaoId: true, kakaoLinkPin: true },
+        })
+      : [];
+  const identityById = new Map(matchedIdentityRows.map((row) => [row.id, row]));
+  const matches = insertRows.map((row) => {
+    const userA = identityById.get(row.userAId);
+    const userB = identityById.get(row.userBId);
+    return {
+      userAId: row.userAId,
+      userBId: row.userBId,
+      userAKakaoId: userA?.kakaoId ?? null,
+      userBKakaoId: userB?.kakaoId ?? null,
+      userAKakaoLinkPin: userA?.kakaoLinkPin ?? null,
+      userBKakaoLinkPin: userB?.kakaoLinkPin ?? null,
+      score: row.score,
+      matchReport: row.matchReport ?? null,
+    };
+  });
 
   await writeAccessLog({
     actorType,
@@ -258,6 +281,7 @@ async function runWeeklyBatchMatch(options = {}) {
     userCount: batchTraitsCount,
     eligibleSurveyCount: traitsCount,
     pairCount: insertRows.length,
+    matches,
   };
 }
 

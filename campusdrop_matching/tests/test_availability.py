@@ -195,6 +195,30 @@ def test_batch_does_not_schedule_two_pairs_in_same_slot() -> None:
     }
 
 
+def test_batch_large_candidate_pool_uses_slot_safe_fallback() -> None:
+    slots = [
+        AvailabilitySlot(date="2026-04-20", time_slot="10:00-11:00"),
+        AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00"),
+        AvailabilitySlot(date="2026-04-20", time_slot="12:00-13:00"),
+        AvailabilitySlot(date="2026-04-20", time_slot="13:00-14:00"),
+        AvailabilitySlot(date="2026-04-20", time_slot="14:00-15:00"),
+    ]
+    users = []
+    for i in range(24):
+        users.append((f"female-{i:02d}", _u(), "female", slots))
+        users.append((f"male-{i:02d}", _u(), "male", slots))
+
+    result = run_batch_female_coverage_matching(users, set())
+    slot_keys = [
+        f"{pair.matched_slot.date}\t{pair.matched_slot.time_slot}"
+        for pair in result.pairs
+        if pair.matched_slot is not None
+    ]
+
+    assert len(result.pairs) == len(set(slot_keys))
+    assert len(result.pairs) == len(slots)
+
+
 def test_batch_forbidden_pairs_are_excluded() -> None:
     slot = AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")
     users = [

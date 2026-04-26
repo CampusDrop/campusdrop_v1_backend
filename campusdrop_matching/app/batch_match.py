@@ -15,6 +15,9 @@ from app.schemas import (
     LifestyleUser,
 )
 
+_MAX_EXACT_SLOT_OPTIMIZATION_EDGES = 220
+_MAX_EXACT_SLOT_OPTIMIZATION_FEMALES = 18
+
 
 @dataclass(frozen=True)
 class _CandidateEdge:
@@ -89,6 +92,61 @@ def _resource_bits(edges: list[_CandidateEdge]) -> tuple[dict[str, int], dict[st
     return male_bits, slot_bits
 
 
+def _use_exact_slot_optimization(edges: list[_CandidateEdge]) -> bool:
+    return (
+        len(edges) <= _MAX_EXACT_SLOT_OPTIMIZATION_EDGES
+        and len({edge.female_id for edge in edges}) <= _MAX_EXACT_SLOT_OPTIMIZATION_FEMALES
+    )
+
+
+def _greedy_slot_safe_selection(
+    edges: list[_CandidateEdge],
+    *,
+    min_female_score: float | None = None,
+    target_count: int | None = None,
+) -> list[_CandidateEdge]:
+    filtered = [
+        edge
+        for edge in edges
+        if min_female_score is None or edge.female_score + 1e-9 >= min_female_score
+    ]
+    candidate_counts: dict[str, int] = {}
+    for edge in filtered:
+        candidate_counts[edge.female_id] = candidate_counts.get(edge.female_id, 0) + 1
+
+    ordered = sorted(
+        filtered,
+        key=lambda edge: (
+            candidate_counts.get(edge.female_id, 0),
+            -edge.female_score,
+            -edge.score,
+            -edge.male_score,
+            edge.female_id,
+            edge.male_id,
+            edge.slot_key or "",
+        ),
+    )
+    selected: list[_CandidateEdge] = []
+    used_females: set[str] = set()
+    used_males: set[str] = set()
+    used_slots: set[str] = set()
+    for edge in ordered:
+        if target_count is not None and len(selected) >= target_count:
+            break
+        if edge.female_id in used_females or edge.male_id in used_males:
+            continue
+        if edge.slot_key is not None and edge.slot_key in used_slots:
+            continue
+        selected.append(edge)
+        used_females.add(edge.female_id)
+        used_males.add(edge.male_id)
+        if edge.slot_key is not None:
+            used_slots.add(edge.slot_key)
+
+    selected.sort(key=lambda e: (-e.female_score, -e.score, -e.male_score, e.user_a_id, e.user_b_id, e.slot_key or ""))
+    return selected
+
+
 def _max_cardinality(edges: list[_CandidateEdge], *, min_female_score: float | None = None) -> int:
     filtered = [
         edge
@@ -97,6 +155,8 @@ def _max_cardinality(edges: list[_CandidateEdge], *, min_female_score: float | N
     ]
     if not filtered:
         return 0
+    if not _use_exact_slot_optimization(filtered):
+        return len(_greedy_slot_safe_selection(filtered))
 
     female_groups = _edges_by_female(filtered)
     male_bits, slot_bits = _resource_bits(filtered)
@@ -214,6 +274,8 @@ def _min_cost_max_flow_selected_edges(edges: list[_CandidateEdge], target_count:
 def _best_weighted_selection(edges: list[_CandidateEdge], target_count: int) -> list[_CandidateEdge]:
     if target_count <= 0 or not edges:
         return []
+    if not _use_exact_slot_optimization(edges):
+        return _greedy_slot_safe_selection(edges, target_count=target_count)
 
     female_groups = _edges_by_female(edges)
     male_bits, slot_bits = _resource_bits(edges)

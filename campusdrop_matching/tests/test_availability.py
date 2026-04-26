@@ -3,7 +3,9 @@ from __future__ import annotations
 from app.availability import (
     availability_overlap_count,
     availability_pair_compatible_for_matching,
+    is_matchable_meeting_slot,
     normalized_slot_keys,
+    overlapping_slot_keys,
 )
 from app.batch_match import run_batch_female_coverage_matching, run_batch_greedy_unique_pairs
 from app.matching import compute_match
@@ -52,39 +54,63 @@ def _u(**kwargs: object) -> LifestyleUser:
 
 
 def test_overlap_different_days() -> None:
-    a = [AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")]
-    b = [AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")]
+    a = [AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")]
+    b = [AvailabilitySlot(date="2026-04-22", time_slot="11:00-12:00")]
     assert availability_overlap_count(a, b) == 0
     assert not availability_pair_compatible_for_matching(a, b)
 
 
 def test_overlap_same_slot() -> None:
-    s = AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")
+    s = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     a = [s]
-    b = [AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")]
+    b = [AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")]
     assert availability_overlap_count(a, b) == 1
     assert availability_pair_compatible_for_matching(a, b)
 
 
 def test_same_day_adjacent_slots_no_overlap() -> None:
-    a = [AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")]
-    b = [AvailabilitySlot(date="2026-04-20", time_slot="12:00-13:00")]
+    a = [AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")]
+    b = [AvailabilitySlot(date="2026-04-21", time_slot="12:00-13:00")]
     assert availability_overlap_count(a, b) == 0
 
 
 def test_midnight_spanning_slot_string_match() -> None:
     """검증기가 허용하는 자정 넘김 1시간 구간은 문자열 동일성으로만 겹침 판정."""
-    a = [AvailabilitySlot(date="2026-04-20", time_slot="23:00-00:00")]
-    b = [AvailabilitySlot(date="2026-04-20", time_slot="23:00-00:00")]
+    a = [AvailabilitySlot(date="2026-04-21", time_slot="23:00-00:00")]
+    b = [AvailabilitySlot(date="2026-04-21", time_slot="23:00-00:00")]
     assert availability_overlap_count(a, b) == 1
+    assert not availability_pair_compatible_for_matching(a, b)
+
+
+def test_matching_excludes_slots_starting_at_20_or_later() -> None:
+    early = AvailabilitySlot(date="2026-04-21", time_slot="19:00-20:00")
+    late = AvailabilitySlot(date="2026-04-21", time_slot="20:00-21:00")
+    later = AvailabilitySlot(date="2026-04-21", time_slot="21:00-22:00")
+
+    assert is_matchable_meeting_slot(early)
+    assert not is_matchable_meeting_slot(late)
+    assert not is_matchable_meeting_slot(later)
+    assert availability_pair_compatible_for_matching([early], [early])
+    assert not availability_pair_compatible_for_matching([late], [late])
+    assert overlapping_slot_keys([early, late], [early, late]) == ["2026-04-21\t19:00-20:00"]
+
+
+def test_matching_temporarily_excludes_monday_slots() -> None:
+    monday = AvailabilitySlot(date="2026-04-20", time_slot="19:00-20:00")
+    tuesday = AvailabilitySlot(date="2026-04-21", time_slot="19:00-20:00")
+
+    assert not is_matchable_meeting_slot(monday)
+    assert is_matchable_meeting_slot(tuesday)
+    assert availability_overlap_count([monday], [monday]) == 1
+    assert not availability_pair_compatible_for_matching([monday], [monday])
 
 
 def test_duplicate_slots_counted_once() -> None:
     a = [
-        AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00"),
-        AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00"),
+        AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00"),
+        AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00"),
     ]
-    b = [AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")]
+    b = [AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")]
     keys = normalized_slot_keys(a)
     assert len(keys) == 1
     assert availability_overlap_count(a, b) == 1
@@ -95,7 +121,7 @@ def test_both_empty_legacy_compatible() -> None:
 
 
 def test_one_side_empty_incompatible() -> None:
-    a = [AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")]
+    a = [AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")]
     assert not availability_pair_compatible_for_matching(a, [])
     assert not availability_pair_compatible_for_matching([], a)
 
@@ -112,8 +138,8 @@ def test_compute_match_skips_time_when_availability_omitted() -> None:
     out2 = compute_match(
         ua,
         ub,
-        availability_a=[AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")],
-        availability_b=[AvailabilitySlot(date="2026-04-21", time_slot="14:00-15:00")],
+        availability_a=[AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")],
+        availability_b=[AvailabilitySlot(date="2026-04-22", time_slot="14:00-15:00")],
     )
     assert out2["match_status"] == "violated"
     rules = {v["rule"] for v in out2["match_report"]["group_b"]["violations"]}
@@ -124,8 +150,8 @@ def test_compute_match_skips_time_when_availability_omitted() -> None:
 def test_batch_excludes_time_incompatible_pair() -> None:
     m = _u()
     f = _u()
-    slot = AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")
-    slot_b = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
+    slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
+    slot_b = AvailabilitySlot(date="2026-04-22", time_slot="11:00-12:00")
     users = [
         ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot]),
         ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot_b]),
@@ -137,7 +163,7 @@ def test_batch_excludes_time_incompatible_pair() -> None:
 def test_batch_pair_with_overlap() -> None:
     m = _u()
     f = _u()
-    slot = AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")
+    slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     users = [
         ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot]),
         ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot]),
@@ -148,8 +174,8 @@ def test_batch_pair_with_overlap() -> None:
 
 
 def test_batch_protects_female_with_sparse_time_candidates() -> None:
-    shared = AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")
-    backup = AvailabilitySlot(date="2026-04-20", time_slot="12:00-13:00")
+    shared = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
+    backup = AvailabilitySlot(date="2026-04-21", time_slot="12:00-13:00")
     female_flexible = _u()
     female_sparse = _u(energy=1, weekend=1, pattern=1, trend=1, contact=1)
     male_best_for_flexible = _u()
@@ -171,13 +197,13 @@ def test_batch_protects_female_with_sparse_time_candidates() -> None:
     matched_slots = [pair.matched_slot for pair in result.pairs]
     assert all(slot is not None for slot in matched_slots)
     assert {f"{slot.date}\t{slot.time_slot}" for slot in matched_slots if slot is not None} == {
-        "2026-04-20\t11:00-12:00",
-        "2026-04-20\t12:00-13:00",
+        "2026-04-21\t11:00-12:00",
+        "2026-04-21\t12:00-13:00",
     }
 
 
 def test_batch_does_not_schedule_two_pairs_in_same_slot() -> None:
-    only_slot = AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")
+    only_slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     users = [
         ("female-a", _u(), "female", [only_slot]),
         ("female-b", _u(), "female", [only_slot]),
@@ -190,18 +216,18 @@ def test_batch_does_not_schedule_two_pairs_in_same_slot() -> None:
     assert len(result.pairs) == 1
     assert result.pairs[0].matched_slot == only_slot
     assert result.pairs[0].match_report["batch_match_selection"]["matched_slot"] == {
-        "date": "2026-04-20",
+        "date": "2026-04-21",
         "time_slot": "11:00-12:00",
     }
 
 
 def test_batch_large_candidate_pool_uses_slot_safe_fallback() -> None:
     slots = [
-        AvailabilitySlot(date="2026-04-20", time_slot="10:00-11:00"),
-        AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00"),
-        AvailabilitySlot(date="2026-04-20", time_slot="12:00-13:00"),
-        AvailabilitySlot(date="2026-04-20", time_slot="13:00-14:00"),
-        AvailabilitySlot(date="2026-04-20", time_slot="14:00-15:00"),
+        AvailabilitySlot(date="2026-04-21", time_slot="10:00-11:00"),
+        AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00"),
+        AvailabilitySlot(date="2026-04-21", time_slot="12:00-13:00"),
+        AvailabilitySlot(date="2026-04-21", time_slot="13:00-14:00"),
+        AvailabilitySlot(date="2026-04-21", time_slot="14:00-15:00"),
     ]
     users = []
     for i in range(24):
@@ -220,7 +246,7 @@ def test_batch_large_candidate_pool_uses_slot_safe_fallback() -> None:
 
 
 def test_batch_forbidden_pairs_are_excluded() -> None:
-    slot = AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")
+    slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     users = [
         ("female-a", _u(), "female", [slot]),
         ("male-a", _u(), "male", [slot]),
@@ -235,8 +261,8 @@ def test_batch_forbidden_pairs_are_excluded() -> None:
 
 def test_batch_reports_female_without_any_time_candidate() -> None:
     users = [
-        ("female-a", _u(), "female", [AvailabilitySlot(date="2026-04-20", time_slot="11:00-12:00")]),
-        ("male-a", _u(), "male", [AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")]),
+        ("female-a", _u(), "female", [AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")]),
+        ("male-a", _u(), "male", [AvailabilitySlot(date="2026-04-22", time_slot="11:00-12:00")]),
     ]
 
     result = run_batch_female_coverage_matching(users, set())

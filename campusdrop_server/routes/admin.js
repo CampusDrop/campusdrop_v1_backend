@@ -315,7 +315,7 @@ router.get('/surveys', async (req, res) => {
  *     tags: [Admin]
  *     summary: DB에 저장된 매칭(주간 배치 등) 현황
  *     description: |
- *       각 행에 `userAEmail`·`userBEmail`(`Identity.email`, 없으면 null), 카카오 연동 식별자,
+ *       각 행에 `userAEmail`·`userBEmail`(`Identity.email`, 없으면 null), 성별, 카카오 연동 식별자,
  *       배치 시 저장된 `matchReport`(Python `match_report` JSON, 없으면 null) 포함.
  *       기본은 현재 매칭 주(앵커 2026-04-13 KST부터 7일 단위, `periodStart` 또는 레거시 `matchedAt` 구간).
  *       `includeAll=1`이면 전체 이력.
@@ -351,8 +351,24 @@ router.get('/matches', async (req, res) => {
         skip: offset,
         take: limit,
         include: {
-          userA: { select: { id: true, email: true, kakaoId: true, kakaoLinkPin: true } },
-          userB: { select: { id: true, email: true, kakaoId: true, kakaoLinkPin: true } },
+          userA: {
+            select: {
+              id: true,
+              email: true,
+              kakaoId: true,
+              kakaoLinkPin: true,
+              trait: { select: { gender: true } },
+            },
+          },
+          userB: {
+            select: {
+              id: true,
+              email: true,
+              kakaoId: true,
+              kakaoLinkPin: true,
+              trait: { select: { gender: true } },
+            },
+          },
         },
       }),
     ]);
@@ -380,6 +396,10 @@ router.get('/matches', async (req, res) => {
         userBId: m.userBId,
         userAEmail: m.userA?.email ?? null,
         userBEmail: m.userB?.email ?? null,
+        userAGender: normalizeTraitGender(m.userA?.trait?.gender) ?? null,
+        userBGender: normalizeTraitGender(m.userB?.trait?.gender) ?? null,
+        userAGenderLabel: traitGenderLabelKo(m.userA?.trait?.gender) || null,
+        userBGenderLabel: traitGenderLabelKo(m.userB?.trait?.gender) || null,
         userAKakaoId: m.userA?.kakaoId ?? null,
         userBKakaoId: m.userB?.kakaoId ?? null,
         userAKakaoLinkPin: m.userA?.kakaoLinkPin ?? null,

@@ -341,6 +341,15 @@ const swaggerDefinition = {
         properties: {
           uuid: { type: 'string', format: 'uuid' },
           email: { type: 'string', nullable: true, description: '@sju.ac.kr 또는 익명 null' },
+          kakaoLinkPin: {
+            type: 'string',
+            nullable: true,
+            description: '카카오 챗봇 연동용 4자리 PIN. 연동 완료 후에는 null',
+          },
+          kakaoLinked: {
+            type: 'boolean',
+            description: '`kakaoId`가 있으면 true',
+          },
           privacyPolicyAgreed: {
             type: 'boolean',
             description: 'DB `Identity.privacy_policy_agreed`',

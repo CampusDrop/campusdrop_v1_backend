@@ -375,6 +375,8 @@ router.get('/me', requireUserUuid, async (req, res) => {
   return res.status(200).json({
     uuid: u.id,
     email: u.email ?? null,
+    kakaoLinkPin: u.kakaoLinkPin ?? null,
+    kakaoLinked: Boolean(u.kakaoId && String(u.kakaoId).trim()),
     profile,
     participantMeta: { profile: { ...profile } },
     privacyPolicyAgreed: Boolean(u.privacyPolicyAgreed),

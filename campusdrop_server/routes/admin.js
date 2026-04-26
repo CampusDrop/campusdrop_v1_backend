@@ -806,6 +806,7 @@ router.get('/users/:id', async (req, res) => {
         schoolProofVerifiedAt: row.schoolProofVerifiedAt,
         studentId: row.studentId,
         birthYear: row.birthYear,
+        kakaoLinkPin: row.kakaoLinkPin ?? null,
         kakaoLinked: Boolean(row.kakaoId && String(row.kakaoId).trim()),
         blockedAt: row.blockedAt,
         createdAt: row.createdAt,

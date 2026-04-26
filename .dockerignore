@@ -1,7 +1,6 @@
-# docker compose server 빌드: context = repo 루트
+# docker compose server/matching 빌드: context = repo 루트
 .git
 **/node_modules
-campusdrop_matching/
 **/__pycache__
 *.pyc
 .env

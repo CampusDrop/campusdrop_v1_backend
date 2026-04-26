@@ -35,8 +35,8 @@ services:
 
   matching:
     build:
-      context: ./campusdrop_matching
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: campusdrop_matching/Dockerfile
     restart: unless-stopped
     expose:
       - "8000"

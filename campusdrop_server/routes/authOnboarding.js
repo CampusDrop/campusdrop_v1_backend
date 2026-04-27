@@ -10,6 +10,7 @@ const {
   identityProfileColumnsFromSurveyData,
 } = require('../lib/surveyValidation');
 const { validateSurveyAvailabilityForCurrentWindow } = require('../lib/surveyAvailabilityWindow');
+const { upsertWeeklySurveySubmission } = require('../lib/weeklySurveySubmission');
 const { verifyRegistrationToken } = require('../lib/registrationToken');
 const {
   createSchoolProofUploader,
@@ -171,6 +172,7 @@ router.post('/complete-registration', handleSchoolProofMulter, async (req, res) 
   }
 
   let validation = { ok: true, data: null };
+  let surveyAvailabilityWindow = null;
   if (parsedSurvey.data !== null) {
     validation = validateSurveyPayload(parsedSurvey.data);
     if (!validation.ok) {
@@ -185,6 +187,7 @@ router.post('/complete-registration', handleSchoolProofMulter, async (req, res) 
         availabilityWindow: windowValidation.window,
       });
     }
+    surveyAvailabilityWindow = windowValidation.window;
   } else {
     const pp = parseSignupProfile(req.body?.profile);
     if (!pp.ok) {
@@ -229,13 +232,16 @@ router.post('/complete-registration', handleSchoolProofMulter, async (req, res) 
       const emailHash = await hashEmailForStorage(normalizedEmail);
       /** @type {Record<string, string>} */
       let profileCols = {};
-      /** @type {{ gender: string | null, surveyData?: object }} */
+      /** @type {{ gender: string | null, surveyData?: object, surveySubmittedAt?: Date }} */
       let traitCreate = { gender: null };
+      let surveySubmittedAt = null;
       if (validation.data) {
+        surveySubmittedAt = new Date();
         profileCols = identityProfileColumnsFromSurveyData(validation.data);
         traitCreate = {
           gender: String(validation.data.gender),
           surveyData: validation.data,
+          surveySubmittedAt,
         };
       } else {
         const pp = parseSignupProfile(req.body?.profile);
@@ -256,6 +262,15 @@ router.post('/complete-registration', handleSchoolProofMulter, async (req, res) 
         },
         select: { id: true },
       });
+      if (validation.data && surveyAvailabilityWindow && surveySubmittedAt) {
+        await upsertWeeklySurveySubmission(tx, {
+          identityId: created.id,
+          surveyData: validation.data,
+          gender: String(validation.data.gender),
+          submittedAt: surveySubmittedAt,
+          availabilityWindow: surveyAvailabilityWindow,
+        });
+      }
       if (req.file && draft) {
         await tx.schoolProofSubmission.create({
           data: {
@@ -367,6 +382,7 @@ router.post('/complete-anonymous-onboarding', handleSchoolProofMulter, async (re
   }
 
   let validation = { ok: true, data: null };
+  let surveyAvailabilityWindow = null;
   if (parsedSurvey.data !== null) {
     validation = validateSurveyPayload(parsedSurvey.data);
     if (!validation.ok) {
@@ -385,6 +401,7 @@ router.post('/complete-anonymous-onboarding', handleSchoolProofMulter, async (re
         availabilityWindow: windowValidation.window,
       });
     }
+    surveyAvailabilityWindow = windowValidation.window;
   } else {
     const pp = parseSignupProfile(req.body?.profile);
     if (!pp.ok) {
@@ -416,13 +433,16 @@ router.post('/complete-anonymous-onboarding', handleSchoolProofMulter, async (re
       const emailHash = await hashEmailForStorage(placeholder);
       /** @type {Record<string, string>} */
       let profileCols = {};
-      /** @type {{ gender: string | null, surveyData?: object }} */
+      /** @type {{ gender: string | null, surveyData?: object, surveySubmittedAt?: Date }} */
       let traitCreate = { gender: null };
+      let surveySubmittedAt = null;
       if (validation.data) {
+        surveySubmittedAt = new Date();
         profileCols = identityProfileColumnsFromSurveyData(validation.data);
         traitCreate = {
           gender: String(validation.data.gender),
           surveyData: validation.data,
+          surveySubmittedAt,
         };
       } else {
         const pp = parseSignupProfile(req.body?.profile);
@@ -444,6 +464,15 @@ router.post('/complete-anonymous-onboarding', handleSchoolProofMulter, async (re
           },
         },
       });
+      if (validation.data && surveyAvailabilityWindow && surveySubmittedAt) {
+        await upsertWeeklySurveySubmission(tx, {
+          identityId: id,
+          surveyData: validation.data,
+          gender: String(validation.data.gender),
+          submittedAt: surveySubmittedAt,
+          availabilityWindow: surveyAvailabilityWindow,
+        });
+      }
       await tx.schoolProofSubmission.create({
         data: {
           id: draft.id,

@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   buildSurveyAvailabilityWindow,
+  buildSurveySubmissionWindowForMatchingPeriod,
   validateSurveyAvailabilityForCurrentWindow,
 } = require('../lib/surveyAvailabilityWindow');
 
@@ -47,4 +48,15 @@ test('availability validation only accepts target dates while open', () => {
   assert.equal(badDate.status, 400);
   assert.equal(closed.ok, false);
   assert.equal(closed.status, 403);
+});
+
+test('matching period uses previous Tuesday-Sunday submission window', () => {
+  const window = buildSurveySubmissionWindowForMatchingPeriod(
+    new Date('2026-04-28T00:00:00.000+09:00'),
+  );
+
+  assert.equal(window.application.opensAt, '2026-04-20T15:00:00.000Z');
+  assert.equal(window.application.closesAt, '2026-04-26T09:00:00.000Z');
+  assert.equal(window.target.periodStart, '2026-04-27T15:00:00.000Z');
+  assert.equal(window.target.periodEnd, '2026-05-04T15:00:00.000Z');
 });

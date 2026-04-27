@@ -11,6 +11,7 @@ const {
   getMatchingPeriodEnd,
   deleteMatchingsForUsersInPeriod,
 } = require('../lib/matchPolicy');
+const { buildSurveySubmissionWindowForMatchingPeriod } = require('../lib/surveyAvailabilityWindow');
 const { fetchPythonBatchPairs } = require('../lib/weeklyBatchMatch');
 const { slimMatchReportForDb } = require('../lib/slimMatchReport');
 const { normalizeTraitGender, traitGenderLabelKo } = require('../lib/genderPolicy');
@@ -257,6 +258,29 @@ router.post('/request', async (req, res) => {
 
   const periodStart = getMatchingPeriodStart();
   const periodEnd = getMatchingPeriodEnd(periodStart);
+  const submissionWindow = buildSurveySubmissionWindowForMatchingPeriod(periodStart);
+
+  let selfWeeklySubmission;
+  try {
+    selfWeeklySubmission = await prisma.weeklySurveySubmission.findUnique({
+      where: {
+        identityId_targetPeriodStart: {
+          identityId: self.id,
+          targetPeriodStart: periodStart,
+        },
+      },
+      select: { id: true },
+    });
+  } catch (err) {
+    console.error('match /request weekly survey load error:', err);
+    return res.status(500).json({ error: '주차별 설문 제출 여부를 확인하지 못했습니다.' });
+  }
+  if (!selfWeeklySubmission) {
+    return res.status(400).json({
+      error: '이번 매칭 주기에 참여하려면 직전 신청 기간에 설문을 다시 제출해 주세요.',
+      submissionWindow,
+    });
+  }
 
   /** @type {Awaited<ReturnType<typeof fetchPythonBatchPairs>>} */
   let fetched;

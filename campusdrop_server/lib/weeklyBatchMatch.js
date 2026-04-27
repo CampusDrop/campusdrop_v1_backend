@@ -12,6 +12,7 @@ const {
   getSamePeriodLockedPairTuplesExceptUser,
   deleteMatchingsForUsersInPeriod,
 } = require('./matchPolicy');
+const { buildSurveySubmissionWindowForMatchingPeriod } = require('./surveyAvailabilityWindow');
 const { slimMatchReportForDb } = require('./slimMatchReport');
 const { isBinaryTraitGender, normalizeTraitGender } = require('./genderPolicy');
 
@@ -23,10 +24,14 @@ function batchTimeoutMs() {
 }
 
 /**
- * Trait에 설문이 있는 유저만 배치 대상.
+ * 목표 매칭 주 직전 신청 기간에 설문을 제출한 유저만 배치 대상.
+ * @param {{ prismaClient?: import('@prisma/client').PrismaClient, periodStart?: Date }} [options]
  */
-async function loadEligibleTraits() {
-  const traits = await prisma.trait.findMany({
+async function loadEligibleTraits(options = {}) {
+  const prismaClient = options.prismaClient || prisma;
+  const periodStart = options.periodStart || getMatchingPeriodStart();
+  const submissions = await prismaClient.weeklySurveySubmission.findMany({
+    where: { targetPeriodStart: periodStart },
     include: {
       identity: {
         select: {
@@ -42,14 +47,25 @@ async function loadEligibleTraits() {
       },
     },
   });
-  return traits.filter(
-    (t) =>
-      t.surveyData !== null &&
-      t.surveyData !== undefined &&
-      typeof t.surveyData === 'object' &&
-      t.identity &&
-      !t.identity.blockedAt,
-  );
+  return submissions
+    .map((s) => ({
+      id: s.identityId,
+      gender: s.gender,
+      surveyData: s.surveyData,
+      surveySubmittedAt: s.submittedAt,
+      updatedAt: s.updatedAt,
+      targetPeriodStart: s.targetPeriodStart,
+      targetPeriodEnd: s.targetPeriodEnd,
+      identity: s.identity,
+    }))
+    .filter(
+      (t) =>
+        t.surveyData !== null &&
+        t.surveyData !== undefined &&
+        typeof t.surveyData === 'object' &&
+        t.identity &&
+        !t.identity.blockedAt,
+    );
 }
 
 /**
@@ -64,7 +80,8 @@ async function loadEligibleTraits() {
 async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
   const { lockSamePeriodPairsExceptUserId = null } = options;
   const url = getMatchingBatchMatchUrl();
-  const traits = await loadEligibleTraits();
+  const submissionWindow = buildSurveySubmissionWindowForMatchingPeriod(periodStart);
+  const traits = await loadEligibleTraits({ prismaClient, periodStart });
   if (traits.length < 2) {
     return {
       pairs: [],
@@ -72,6 +89,7 @@ async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
       skipReason: 'not_enough_users',
       batchTraitsCount: 0,
       eligibleSurveyCount: traits.length,
+      submissionWindow,
       url,
     };
   }
@@ -84,6 +102,7 @@ async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
       skipReason: 'not_enough_binary_gender_users',
       batchTraitsCount: batchTraits.length,
       eligibleSurveyCount: traits.length,
+      submissionWindow,
       url,
     };
   }
@@ -150,6 +169,7 @@ async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
       skipped: false,
       batchTraitsCount: batchTraits.length,
       eligibleSurveyCount: traits.length,
+      submissionWindow,
       url,
     };
   } catch (err) {
@@ -172,7 +192,12 @@ async function runWeeklyBatchMatch(options = {}) {
   if (fetched.skipped) {
     if (fetched.skipReason === 'not_enough_users') {
       console.warn('[weeklyBatchMatch] 설문이 있는 유저가 2명 미만이라 스킵합니다.', fetched.eligibleSurveyCount);
-      return { skipped: true, reason: 'not_enough_users', count: fetched.eligibleSurveyCount };
+      return {
+        skipped: true,
+        reason: 'not_enough_users',
+        count: fetched.eligibleSurveyCount,
+        submissionWindow: fetched.submissionWindow,
+      };
     }
     if (fetched.skipReason === 'not_enough_binary_gender_users') {
       console.warn(
@@ -186,12 +211,14 @@ async function runWeeklyBatchMatch(options = {}) {
         reason: 'not_enough_binary_gender_users',
         count: fetched.batchTraitsCount,
         eligibleSurveyCount: fetched.eligibleSurveyCount,
+        submissionWindow: fetched.submissionWindow,
       };
     }
   }
 
   const pairs = fetched.pairs;
   const url = fetched.url;
+  const submissionWindow = fetched.submissionWindow;
   const batchTraitsCount = fetched.batchTraitsCount;
   const traitsCount = fetched.eligibleSurveyCount;
 
@@ -279,6 +306,7 @@ async function runWeeklyBatchMatch(options = {}) {
       eligibleSurveyCount: traitsCount,
       pythonUrl: url,
       periodStart: insertRows.length > 0 ? insertRows[0].periodStart?.toISOString?.() ?? null : null,
+      submissionWindow,
     },
   });
 
@@ -289,6 +317,7 @@ async function runWeeklyBatchMatch(options = {}) {
     skipped: false,
     userCount: batchTraitsCount,
     eligibleSurveyCount: traitsCount,
+    submissionWindow,
     pairCount: insertRows.length,
     matches,
   };

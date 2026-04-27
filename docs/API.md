@@ -1525,9 +1525,9 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
 
 ### GET `/api/admin/matches`
 
-**쿼리:** `limit`(기본 200, 최대 1000), `offset`, `includeAll`(`1`/`true`/`yes` 이면 주기 필터 없음).
+**쿼리:** `limit`(기본 200, 최대 1000), `offset`, `weeks`(기본 5, 최대 52, 현재 주 포함 최근 N개 매칭 주), `includeAll`(`1`/`true`/`yes` 이면 주기 필터 없음).
 
-**응답 `200` (현재 주기 필터 시)**
+**응답 `200` (최근 주기 필터 시)**
 
 ```json
 {
@@ -1535,7 +1535,8 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
   "limit": 200,
   "offset": 0,
   "includeAll": false,
-  "periodStart": "2026-04-13T00:00:00.000Z",
+  "weeks": 5,
+  "periodStart": "2026-03-16T00:00:00.000Z",
   "periodEnd": "2026-04-20T00:00:00.000Z",
   "matches": [
     {

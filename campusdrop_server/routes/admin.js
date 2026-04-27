@@ -19,6 +19,7 @@ const {
   deleteMatchingsForUsersInPeriod,
 } = require('../lib/matchPolicy');
 const { loadEligibleTraits } = require('../lib/weeklyBatchMatch');
+const { buildSurveySubmissionWindowForMatchingPeriod } = require('../lib/surveyAvailabilityWindow');
 const { surveyDataToLifestyleUser } = require('../lib/surveyToLifestyleUser');
 const { surveyDataToAvailabilitySlots } = require('../lib/surveyAvailabilitySlots');
 const { getMatchingCalculateMatchUrl } = require('../lib/resolveMatchingServiceUrl');
@@ -37,10 +38,19 @@ function isUuid(s) {
 
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_MATCH_TIMEOUT_MS = 5_000;
+const DEFAULT_ADMIN_MATCH_WEEKS = 5;
+const MAX_ADMIN_MATCH_WEEKS = 52;
+const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
 
 function matchRequestTimeoutMs() {
   const n = Number(process.env.MATCHING_SERVICE_TIMEOUT_MS);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_MATCH_TIMEOUT_MS;
+}
+
+function parseMatchWeeks(value) {
+  const n = Number(value ?? DEFAULT_ADMIN_MATCH_WEEKS);
+  if (!Number.isInteger(n) || n < 1) return DEFAULT_ADMIN_MATCH_WEEKS;
+  return Math.min(n, MAX_ADMIN_MATCH_WEEKS);
 }
 
 function ageFromBirthYear(value, now = new Date()) {
@@ -376,6 +386,7 @@ router.get('/users', async (req, res) => {
           trait: {
             select: {
               surveyData: true,
+              surveySubmittedAt: true,
               updatedAt: true,
               gender: true,
             },
@@ -407,6 +418,7 @@ router.get('/users', async (req, res) => {
           row.trait.surveyData !== undefined &&
           typeof row.trait.surveyData === 'object',
         surveyUpdatedAt: row.trait?.updatedAt ?? null,
+        surveySubmittedAt: row.trait?.surveySubmittedAt ?? null,
         gender: row.trait?.gender ?? null,
         availability,
         matchAvailability,
@@ -456,6 +468,7 @@ router.get('/surveys', async (req, res) => {
           id: true,
           gender: true,
           surveyData: true,
+          surveySubmittedAt: true,
           updatedAt: true,
           identity: {
             select: { blockedAt: true, createdAt: true, kakaoId: true },
@@ -482,6 +495,7 @@ router.get('/surveys', async (req, res) => {
         userId: t.id,
         gender: t.gender,
         surveyData: t.surveyData,
+        surveySubmittedAt: t.surveySubmittedAt,
         updatedAt: t.updatedAt,
         identity: t.identity,
       })),
@@ -501,8 +515,8 @@ router.get('/surveys', async (req, res) => {
  *     description: |
  *       각 행에 `userAEmail`·`userBEmail`(`Identity.email`, 없으면 null), 성별, 카카오 연동 식별자,
  *       배치 시 저장된 `matchReport`(Python `match_report` JSON, 없으면 null) 포함.
- *       기본은 현재 매칭 주(앵커 2026-04-13 KST부터 7일 단위, `periodStart` 또는 레거시 `matchedAt` 구간).
- *       `includeAll=1`이면 전체 이력.
+ *       기본은 최근 5개 매칭 주(현재 주 포함, `periodStart` 또는 레거시 `matchedAt` 구간).
+ *       `weeks`로 최근 N주(1~52)를 지정할 수 있고, `includeAll=1`이면 전체 이력.
  *     security:
  *       - AdminBearerAuth: []
  */
@@ -513,13 +527,15 @@ router.get('/matches', async (req, res) => {
   const offset = Math.max(Number(offsetRaw ?? 0) || 0, 0);
 
   const includeAll = ['1', 'true', 'yes'].includes(String(req.query.includeAll || '').toLowerCase());
-  const ps = getMatchingPeriodStart();
-  const pe = getMatchingPeriodEnd(ps);
+  const weeks = parseMatchWeeks(req.query.weeks);
+  const currentPeriodStart = getMatchingPeriodStart();
+  const ps = new Date(currentPeriodStart.getTime() - (weeks - 1) * MS_PER_WEEK);
+  const pe = getMatchingPeriodEnd(currentPeriodStart);
   const where = includeAll
     ? {}
     : {
         OR: [
-          { periodStart: ps },
+          { periodStart: { gte: ps, lt: pe } },
           {
             AND: [{ periodStart: null }, { matchedAt: { gte: ps, lt: pe } }],
           },
@@ -561,10 +577,10 @@ router.get('/matches', async (req, res) => {
       actorType: 'admin',
       actorId: null,
       action: 'ADMIN_LIST_MATCHES',
-      resource: `GET /api/admin/matches?limit=${limit}&offset=${offset}&includeAll=${includeAll ? 1 : 0}`,
+      resource: `GET /api/admin/matches?limit=${limit}&offset=${offset}&includeAll=${includeAll ? 1 : 0}&weeks=${weeks}`,
       ip: req.ip || null,
       userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
-      metadata: { total, returned: matchings.length },
+      metadata: { total, returned: matchings.length, weeks: includeAll ? null : weeks },
     });
 
     return res.status(200).json({
@@ -572,6 +588,7 @@ router.get('/matches', async (req, res) => {
       limit,
       offset,
       includeAll,
+      weeks: includeAll ? null : weeks,
       periodStart: includeAll ? null : ps.toISOString(),
       periodEnd: includeAll ? null : pe.toISOString(),
       matches: matchings.map((m) => ({
@@ -617,10 +634,11 @@ router.get('/matches', async (req, res) => {
 router.get('/matches/unmatched', async (req, res) => {
   const ps = getMatchingPeriodStart();
   const pe = getMatchingPeriodEnd(ps);
+  const submissionWindow = buildSurveySubmissionWindowForMatchingPeriod(ps);
 
   try {
     const [eligible, matchedIds] = await Promise.all([
-      loadEligibleTraits(),
+      loadEligibleTraits({ periodStart: ps }),
       getUserIdsMatchedInPeriod(prisma, ps),
     ]);
 
@@ -635,6 +653,7 @@ router.get('/matches/unmatched', async (req, res) => {
       createdAt: t.identity?.createdAt ?? null,
       gender: normalizeTraitGender(t.gender) ?? null,
       genderLabel: traitGenderLabelKo(t.gender) || null,
+      surveySubmittedAt: t.surveySubmittedAt ?? null,
       surveyUpdatedAt: t.updatedAt ?? null,
       matchAvailability: matchAvailabilityForResponse(t.surveyData),
     }));
@@ -656,6 +675,7 @@ router.get('/matches/unmatched', async (req, res) => {
     return res.status(200).json({
       periodStart: ps.toISOString(),
       periodEnd: pe.toISOString(),
+      submissionWindow,
       eligibleCount: eligible.length,
       matchedInPeriodCount: matchedIds.size,
       unmatchedCount: users.length,
@@ -703,10 +723,11 @@ router.get('/matches/slot-candidates', async (req, res) => {
   }
 
   const periodStart = getMatchingPeriodStart();
+  const submissionWindow = buildSurveySubmissionWindowForMatchingPeriod(periodStart);
 
   try {
     const [eligible, matchedIds, historicalPartnerIds] = await Promise.all([
-      loadEligibleTraits(),
+      loadEligibleTraits({ periodStart }),
       getUserIdsMatchedInPeriod(prisma, periodStart),
       getHistoricalPartnerIds(prisma, identityId),
     ]);
@@ -786,6 +807,7 @@ router.get('/matches/slot-candidates', async (req, res) => {
         kakaoId: cand.identity?.kakaoId ?? null,
         kakaoLinkPin: cand.identity?.kakaoLinkPin ?? null,
         kakaoLinked: Boolean(cand.identity?.kakaoId && String(cand.identity.kakaoId).trim()),
+        surveySubmittedAt: cand.surveySubmittedAt ?? null,
         score: Math.round(score * 100) / 100,
         reasons: Array.isArray(report?.reasons) ? report.reasons : [],
         matchAvailability: matchAvailabilityForResponse(cand.surveyData),
@@ -809,6 +831,8 @@ router.get('/matches/slot-candidates', async (req, res) => {
     });
 
     return res.status(200).json({
+      periodStart: periodStart.toISOString(),
+      submissionWindow,
       baseUser: {
         identityId: base.id,
         id: base.id,

@@ -36,6 +36,33 @@ function buildDateOption(date) {
 }
 
 /**
+ * 특정 매칭 주(만남 가능 날짜가 속한 주)는 직전 화~일 신청으로 만들어진다.
+ * @param {Date} targetPeriodStart
+ */
+function buildSurveySubmissionWindowForMatchingPeriod(targetPeriodStart) {
+  const targetStart = new Date(targetPeriodStart);
+  const targetEnd = getMatchingPeriodEnd(targetStart);
+  const applicationOpensAt = new Date(targetStart.getTime() - MS_PER_DAY * 7);
+  const applicationClosesAt = new Date(
+    applicationOpensAt.getTime() +
+      APPLICATION_CLOSE_DAY_OFFSET * MS_PER_DAY +
+      APPLICATION_CLOSE_HOUR_KST * MS_PER_HOUR,
+  );
+
+  return {
+    timezone: 'Asia/Seoul',
+    application: {
+      opensAt: serializeDateTime(applicationOpensAt),
+      closesAt: serializeDateTime(applicationClosesAt),
+    },
+    target: {
+      periodStart: serializeDateTime(targetStart),
+      periodEnd: serializeDateTime(targetEnd),
+    },
+  };
+}
+
+/**
  * 신청 주기는 화 00:00(KST)에 열리고 일 18:00(KST)에 닫힌다.
  * 신청하는 날짜 선택지는 다음 매칭 주의 화~일이다.
  * @param {Date} [now]
@@ -106,5 +133,6 @@ function validateSurveyAvailabilityForCurrentWindow(availability, now = new Date
 
 module.exports = {
   buildSurveyAvailabilityWindow,
+  buildSurveySubmissionWindowForMatchingPeriod,
   validateSurveyAvailabilityForCurrentWindow,
 };

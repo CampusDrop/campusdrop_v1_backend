@@ -6,6 +6,7 @@ const {
   identityProfileColumnsFromSurveyData,
 } = require('../lib/surveyValidation');
 const { validateSurveyAvailabilityForCurrentWindow } = require('../lib/surveyAvailabilityWindow');
+const { upsertWeeklySurveySubmission } = require('../lib/weeklySurveySubmission');
 const { writeAccessLog } = require('../lib/accessLog');
 const { storePinForIdentity } = require('../lib/pinSession');
 
@@ -73,7 +74,7 @@ router.get('/me', async (req, res) => {
   try {
     const row = await prisma.trait.findUnique({
       where: { id: req.user.id },
-      select: { surveyData: true, gender: true, updatedAt: true },
+      select: { surveyData: true, gender: true, surveySubmittedAt: true, updatedAt: true },
     });
 
     const hasSurvey = Boolean(
@@ -98,6 +99,9 @@ router.get('/me', async (req, res) => {
       hasSurvey,
       surveyData: hasSurvey ? row.surveyData : null,
       gender: row?.gender ?? null,
+      surveySubmittedAt: row?.surveySubmittedAt
+        ? new Date(row.surveySubmittedAt).toISOString()
+        : null,
       updatedAt: row?.updatedAt ? new Date(row.updatedAt).toISOString() : null,
     });
   } catch (err) {
@@ -186,27 +190,41 @@ router.post('/submit', async (req, res) => {
   }
 
   try {
-    const trait = await prisma.trait.upsert({
-      where: { id: req.user.id },
-      create: {
-        id: req.user.id,
-        surveyData: validation.data,
-        gender: String(validation.data.gender),
-      },
-      update: {
-        surveyData: validation.data,
-        gender: String(validation.data.gender),
-      },
-      select: { id: true },
-    });
-
-    const profileCols = identityProfileColumnsFromSurveyData(validation.data);
-    if (Object.keys(profileCols).length > 0) {
-      await prisma.identity.update({
+    const surveySubmittedAt = new Date();
+    const surveyGender = String(validation.data.gender);
+    const trait = await prisma.$transaction(async (tx) => {
+      const savedTrait = await tx.trait.upsert({
         where: { id: req.user.id },
-        data: profileCols,
+        create: {
+          id: req.user.id,
+          surveyData: validation.data,
+          gender: surveyGender,
+          surveySubmittedAt,
+        },
+        update: {
+          surveyData: validation.data,
+          gender: surveyGender,
+          surveySubmittedAt,
+        },
+        select: { id: true },
       });
-    }
+      await upsertWeeklySurveySubmission(tx, {
+        identityId: req.user.id,
+        surveyData: validation.data,
+        gender: surveyGender,
+        submittedAt: surveySubmittedAt,
+        availabilityWindow: windowValidation.window,
+      });
+
+      const profileCols = identityProfileColumnsFromSurveyData(validation.data);
+      if (Object.keys(profileCols).length > 0) {
+        await tx.identity.update({
+          where: { id: req.user.id },
+          data: profileCols,
+        });
+      }
+      return savedTrait;
+    });
 
     await writeAccessLog({
       actorType: 'user_session',

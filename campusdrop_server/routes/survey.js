@@ -5,6 +5,7 @@ const {
   validateSurveyPayload,
   identityProfileColumnsFromSurveyData,
 } = require('../lib/surveyValidation');
+const { validateSurveyAvailabilityForCurrentWindow } = require('../lib/surveyAvailabilityWindow');
 const { writeAccessLog } = require('../lib/accessLog');
 const { storePinForIdentity } = require('../lib/pinSession');
 
@@ -175,6 +176,13 @@ router.post('/submit', async (req, res) => {
   const validation = validateSurveyPayload(payload);
   if (!validation.ok) {
     return res.status(400).json({ error: validation.error });
+  }
+  const windowValidation = validateSurveyAvailabilityForCurrentWindow(validation.data.availability);
+  if (!windowValidation.ok) {
+    return res.status(windowValidation.status).json({
+      error: windowValidation.error,
+      availabilityWindow: windowValidation.window,
+    });
   }
 
   try {

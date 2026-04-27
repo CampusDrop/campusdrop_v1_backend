@@ -9,6 +9,7 @@ Express 서버 진입점: `campusdrop_server/index.js`. 기본 포트는 환경 
 | Swagger UI | `GET /api-docs` (HTML UI, 브라우저용) |
 | 정적 파일 | `GET /assets/*` — `campusdrop_server/assets` (로그인 메일 로고 등; 프로덕션에서 캐시 `max-age` 적용) |
 | 학과 선택지 | `GET /api/departments` — 프로필 `department` 선택 목록 |
+| 설문 가능 날짜 | `GET /api/survey/availability-window` — 신청 오픈 여부와 다음 주 화~일 날짜 |
 | JSON 본문(일반 라우트) | `Content-Type: application/json` 권장 |
 | 분석 전용 바디 상한 | `/api/analytics/*` 만 `ANALYTICS_JSON_BODY_MAX_BYTES`(기본 **512KiB**) |
 | 엔드포인트 색인 | [HTTP 경로 일람](#http-경로-일람) |
@@ -1115,6 +1116,33 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
   "departments": [
     { "college": "인공지능융합대학", "department": "컴퓨터공학과" }
   ]
+}
+```
+
+### GET `/api/survey/availability-window`
+
+**요약:** 설문 시간 선택에 사용할 서버 기준 날짜 목록을 반환합니다. 인증은 필요 없습니다. 신청은 매주 화요일 00:00부터 일요일 18:00(KST)까지 열리고, 선택 가능한 날짜는 다음 주 화요일~일요일입니다.
+
+**응답 `200`**
+
+```json
+{
+  "timezone": "Asia/Seoul",
+  "now": "2026-04-21T03:00:00.000Z",
+  "isOpen": true,
+  "application": {
+    "opensAt": "2026-04-20T15:00:00.000Z",
+    "closesAt": "2026-04-26T09:00:00.000Z",
+    "nextOpensAt": "2026-04-27T15:00:00.000Z"
+  },
+  "target": {
+    "periodStart": "2026-04-27T15:00:00.000Z",
+    "periodEnd": "2026-05-04T15:00:00.000Z",
+    "dates": [
+      { "date": "2026-04-28", "dayOfWeek": "TUE", "dayOfWeekKo": "화" },
+      { "date": "2026-04-29", "dayOfWeek": "WED", "dayOfWeekKo": "수" }
+    ]
+  }
 }
 ```
 

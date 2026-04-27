@@ -9,6 +9,7 @@ const {
   validateSurveyPayload,
   identityProfileColumnsFromSurveyData,
 } = require('../lib/surveyValidation');
+const { validateSurveyAvailabilityForCurrentWindow } = require('../lib/surveyAvailabilityWindow');
 const { verifyRegistrationToken } = require('../lib/registrationToken');
 const {
   createSchoolProofUploader,
@@ -22,6 +23,17 @@ const { parsePrivacyPolicyAgreed } = require('../lib/privacyPolicyConsent');
 
 const router = express.Router();
 const upload = createSchoolProofUploader();
+
+function cleanupUploadedFile(req) {
+  if (!req.file) {
+    return;
+  }
+  try {
+    fs.unlinkSync(req.file.path);
+  } catch (_) {
+    /* ignore */
+  }
+}
 
 function handleSchoolProofMulter(req, res, next) {
   upload.single('image')(req, res, (err) => {
@@ -162,14 +174,16 @@ router.post('/complete-registration', handleSchoolProofMulter, async (req, res) 
   if (parsedSurvey.data !== null) {
     validation = validateSurveyPayload(parsedSurvey.data);
     if (!validation.ok) {
-      if (req.file) {
-        try {
-          fs.unlinkSync(req.file.path);
-        } catch (_) {
-          /* ignore */
-        }
-      }
+      cleanupUploadedFile(req);
       return res.status(400).json({ error: validation.error });
+    }
+    const windowValidation = validateSurveyAvailabilityForCurrentWindow(validation.data.availability);
+    if (!windowValidation.ok) {
+      cleanupUploadedFile(req);
+      return res.status(windowValidation.status).json({
+        error: windowValidation.error,
+        availabilityWindow: windowValidation.window,
+      });
     }
   } else {
     const pp = parseSignupProfile(req.body?.profile);
@@ -362,6 +376,14 @@ router.post('/complete-anonymous-onboarding', handleSchoolProofMulter, async (re
         /* ignore */
       }
       return res.status(400).json({ error: validation.error });
+    }
+    const windowValidation = validateSurveyAvailabilityForCurrentWindow(validation.data.availability);
+    if (!windowValidation.ok) {
+      cleanupUploadedFile(req);
+      return res.status(windowValidation.status).json({
+        error: windowValidation.error,
+        availabilityWindow: windowValidation.window,
+      });
     }
   } else {
     const pp = parseSignupProfile(req.body?.profile);

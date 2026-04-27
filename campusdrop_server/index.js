@@ -95,6 +95,7 @@ app.use('/api/kakao', require('./routes/kakao'));
 app.use('/api/stats', require('./routes/stats'));
 app.use('/api/landing-like', require('./routes/landingLike'));
 app.use('/api/departments', require('./routes/departments'));
+app.use('/api/survey', require('./routes/surveyOptions'));
 app.use('/api/survey', requireUserUuid, requireImageUuidAccessForSurveyApis, require('./routes/survey'));
 app.use('/api/match', requireUserUuid, requireImageUuidAccessForSurveyApis, require('./routes/match'));
 

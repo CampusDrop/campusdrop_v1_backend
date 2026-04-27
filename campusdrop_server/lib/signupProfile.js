@@ -1,4 +1,5 @@
 const { normalizeTraitGender } = require('./genderPolicy');
+const { normalizeDepartment } = require('./departments');
 
 const MAX_STUDENT_ID_LEN = 64;
 const MAX_BIRTH_YEAR_LEN = 16;
@@ -6,7 +7,7 @@ const MAX_BIRTH_YEAR_LEN = 16;
 /**
  * 가입 직후(이메일/이미지) 프로필. 설문 없이 `Identity`·`Trait.gender`에 반영.
  * @param {unknown} raw — JSON 본문의 `profile` 객체 또는 multipart 문자열 파싱 결과
- * @returns {{ ok: true, studentId?: string, birthYear?: string, genderTrait: 'male' | 'female' | null } | { ok: false, error: string }}
+ * @returns {{ ok: true, studentId?: string, birthYear?: string, department?: string, genderTrait: 'male' | 'female' | null } | { ok: false, error: string }}
  */
 function parseSignupProfile(raw) {
   if (raw === undefined || raw === null || raw === '') {
@@ -25,11 +26,17 @@ function parseSignupProfile(raw) {
   }
   const sid = o.studentId != null ? String(o.studentId).trim().slice(0, MAX_STUDENT_ID_LEN) : '';
   const by = o.birthYear != null ? String(o.birthYear).trim().slice(0, MAX_BIRTH_YEAR_LEN) : '';
+  const departmentRaw = o.department != null ? String(o.department).trim() : '';
+  const department = departmentRaw ? normalizeDepartment(departmentRaw) : null;
+  if (departmentRaw && !department) {
+    return { ok: false, error: 'profile.department는 등록된 학과 목록 중 하나여야 합니다.' };
+  }
   const genderTrait = normalizeTraitGender(o.gender);
-  /** @type {{ ok: true, studentId?: string, birthYear?: string, genderTrait: 'male' | 'female' | null }} */
+  /** @type {{ ok: true, studentId?: string, birthYear?: string, department?: string, genderTrait: 'male' | 'female' | null }} */
   const out = { ok: true, genderTrait };
   if (sid) out.studentId = sid;
   if (by) out.birthYear = by;
+  if (department) out.department = department;
   return out;
 }
 

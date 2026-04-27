@@ -67,6 +67,7 @@ const P5 = {
 };
 const P6 = {
   campus_couple_openness: 3,
+  partner_age_preference: ['OLDER', 'SAME_AGE', 'YOUNGER'],
   partner_smoking_tolerance: 3,
   partner_tattoo_tolerance: 3,
   partner_religion_tolerance: 3,

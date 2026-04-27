@@ -371,6 +371,7 @@ router.get('/users', async (req, res) => {
           schoolProofVerifiedAt: true,
           studentId: true,
           birthYear: true,
+          department: true,
           createdAt: true,
           trait: {
             select: {
@@ -396,6 +397,7 @@ router.get('/users', async (req, res) => {
         schoolProofVerifiedAt: row.schoolProofVerifiedAt,
         studentId: row.studentId,
         birthYear: row.birthYear,
+        department: row.department,
         kakaoLinked: Boolean(row.kakaoId && String(row.kakaoId).trim()),
         blockedAt: row.blockedAt,
         createdAt: row.createdAt,
@@ -779,6 +781,7 @@ router.get('/matches/slot-candidates', async (req, res) => {
         gender: 'male',
         genderLabel: traitGenderLabelKo(cand.gender) || '남성',
         birthYear: cand.identity?.birthYear ?? null,
+        department: cand.identity?.department ?? null,
         age: ageFromBirthYear(cand.identity?.birthYear),
         kakaoId: cand.identity?.kakaoId ?? null,
         kakaoLinkPin: cand.identity?.kakaoLinkPin ?? null,
@@ -1170,6 +1173,7 @@ router.get('/users/:id', async (req, res) => {
         schoolProofVerifiedAt: row.schoolProofVerifiedAt,
         studentId: row.studentId,
         birthYear: row.birthYear,
+        department: row.department,
         kakaoLinkPin: row.kakaoLinkPin ?? null,
         kakaoLinked: Boolean(row.kakaoId && String(row.kakaoId).trim()),
         blockedAt: row.blockedAt,
@@ -1325,6 +1329,7 @@ router.get('/school-proofs', async (req, res) => {
               schoolProofVerifiedAt: true,
               imageUuidAccessUntil: true,
               studentId: true,
+              department: true,
               trait: { select: { surveyData: true } },
             },
           },
@@ -1358,6 +1363,7 @@ router.get('/school-proofs', async (req, res) => {
           identityId: r.identityId,
           userEmail: r.identity?.email ?? null,
           studentId: r.identity?.studentId ?? null,
+          department: r.identity?.department ?? null,
           hasSurvey,
           imageUuidAccessUntil:
             until && !Number.isNaN(new Date(until).getTime()) ? new Date(until).toISOString() : null,

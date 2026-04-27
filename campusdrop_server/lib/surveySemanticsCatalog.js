@@ -1,6 +1,6 @@
 /**
  * 설문 시맨틱(`surveySemantics.v1.json`) — 단일 진실 소스.
- * v3: 중첩 surveyAnswers를 평탄화한 뒤 matchProfile(surveySchemaVersion)을 부착한다.
+ * v4: 중첩 surveyAnswers를 평탄화한 뒤 matchProfile(surveySchemaVersion)을 부착한다.
  */
 
 const fs = require('fs');

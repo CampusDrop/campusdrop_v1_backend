@@ -35,6 +35,7 @@ async function loadEligibleTraits() {
           kakaoId: true,
           kakaoLinkPin: true,
           birthYear: true,
+          department: true,
           blockedAt: true,
           createdAt: true,
         },

@@ -1,6 +1,6 @@
 {
-  "version": 3,
-  "documentation_ko": "Campusdrop 설문 시맨틱 v3. 6단계 중첩 surveyAnswers(영문 Enum + 1~5 정수). 매칭 엔진은 Node가 부착하는 matchProfile과 surveyToLifestyleUser 투영을 사용한다.",
+  "version": 4,
+  "documentation_ko": "Campusdrop 설문 시맨틱 v4. 6단계 중첩 surveyAnswers(영문 Enum + 1~5 정수 + 복수선택 Enum 배열). 매칭 엔진은 Node가 부착하는 matchProfile과 surveyToLifestyleUser 투영을 사용한다.",
   "survey_phases": [
     "phase1_lifestyle",
     "phase2_relationship_views",
@@ -52,6 +52,7 @@
     ],
     "phase6_partner_preferences": [
       "campus_couple_openness",
+      "partner_age_preference",
       "partner_smoking_tolerance",
       "partner_tattoo_tolerance",
       "partner_religion_tolerance"
@@ -95,6 +96,9 @@
     "drinking_on_date": ["DRINK", "NO_DRINK", "ANY"],
     "religion": ["NONE", "PROTESTANT", "CATHOLIC", "BUDDHIST", "OTHER"]
   },
+  "multi_select_enum_keys": {
+    "partner_age_preference": ["OLDER", "YOUNGER", "SAME_AGE"]
+  },
   "scales": {
     "continuous_matching_keys": [],
     "religion_soft_weight": 1.0
@@ -114,6 +118,11 @@
       "CATHOLIC": "catholic",
       "BUDDHIST": "buddhist",
       "OTHER": "other"
+    },
+    "partner_age_preference": {
+      "OLDER": "연상",
+      "YOUNGER": "연하",
+      "SAME_AGE": "동갑"
     }
   },
   "preference_policies": {

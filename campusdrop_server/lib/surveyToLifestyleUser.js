@@ -1,6 +1,6 @@
 /**
  * Node 설문(JSON) → Python `LifestyleUser` (campusdrop_matching/app/schemas.py).
- * v3: `surveyAnswers` phase 중첩 또는 레거시 평탄 키를 지원한다.
+ * v4: `surveyAnswers` phase 중첩 또는 레거시 평탄 키를 지원한다.
  */
 
 const { loadSemantics, validateCatalogAndBuildMatchProfile } = require('./surveySemanticsCatalog');

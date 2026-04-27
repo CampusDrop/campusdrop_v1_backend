@@ -1,9 +1,10 @@
 /**
- * 설문 검증 v3: `surveyAnswers`는 phase별 중첩 객체, 척도 1~5, Enum은 영문 대문자 스네이크.
+ * 설문 검증 v4: `surveyAnswers`는 phase별 중첩 객체, 척도 1~5, Enum은 영문 대문자 스네이크.
  * 시맨틱: `config/surveySemantics.v1.json`, matchProfile: `surveySemanticsCatalog.js`.
  */
 
 const { normalizeTraitGender } = require('./genderPolicy');
+const { normalizeDepartment } = require('./departments');
 const { loadSemantics, validateCatalogAndBuildMatchProfile } = require('./surveySemanticsCatalog');
 
 const MAX_AVAILABILITY_SLOTS = 100;
@@ -22,7 +23,11 @@ function specFlatSurveyKeys() {
   const s = loadSemantics();
   const ints = Array.isArray(s.integer_scale_keys) ? s.integer_scale_keys : [];
   const enums = s.string_enum_keys && typeof s.string_enum_keys === 'object' ? Object.keys(s.string_enum_keys) : [];
-  return [...ints, ...enums];
+  const multiEnums =
+    s.multi_select_enum_keys && typeof s.multi_select_enum_keys === 'object'
+      ? Object.keys(s.multi_select_enum_keys)
+      : [];
+  return [...ints, ...enums, ...multiEnums];
 }
 
 const ALL_KEYS = specFlatSurveyKeys();
@@ -31,6 +36,11 @@ const ALL_KEYS_SET = new Set(ALL_KEYS);
 const s0 = loadSemantics();
 const STRING_KEYS = new Set(
   s0.string_enum_keys && typeof s0.string_enum_keys === 'object' ? Object.keys(s0.string_enum_keys) : [],
+);
+const MULTI_SELECT_KEYS = new Set(
+  s0.multi_select_enum_keys && typeof s0.multi_select_enum_keys === 'object'
+    ? Object.keys(s0.multi_select_enum_keys)
+    : [],
 );
 const SCALE_KEYS = new Set(Array.isArray(s0.integer_scale_keys) ? s0.integer_scale_keys : []);
 
@@ -347,10 +357,13 @@ function normalizeParticipantMetaForStorage(pm) {
     const p = /** @type {Record<string, unknown>} */ (profileRaw);
     const studentId = p.studentId != null ? String(p.studentId).trim() : '';
     const birthYear = p.birthYear != null ? String(p.birthYear).trim() : '';
+    const departmentRaw = p.department != null ? String(p.department).trim() : '';
+    const department = departmentRaw ? normalizeDepartment(departmentRaw) : null;
     const gender = p.gender != null ? String(p.gender).trim() : '';
     out.profile = {
       ...(studentId ? { studentId } : {}),
       ...(birthYear ? { birthYear } : {}),
+      ...(department ? { department } : {}),
       ...(gender ? { gender } : {}),
     };
     if (Object.keys(/** @type {object} */ (out.profile)).length === 0) {
@@ -366,10 +379,28 @@ function normalizeParticipantMetaForStorage(pm) {
   return Object.keys(out).length ? out : null;
 }
 
+/** @param {unknown} pm */
+function validateParticipantMetaProfileDepartment(pm) {
+  if (pm === null || pm === undefined || typeof pm !== 'object' || Array.isArray(pm)) {
+    return null;
+  }
+  const profileRaw = /** @type {Record<string, unknown>} */ (pm).profile;
+  if (!profileRaw || typeof profileRaw !== 'object' || Array.isArray(profileRaw)) {
+    return null;
+  }
+  const departmentRaw = /** @type {Record<string, unknown>} */ (profileRaw).department;
+  if (departmentRaw === undefined || departmentRaw === null || String(departmentRaw).trim() === '') {
+    return null;
+  }
+  return normalizeDepartment(departmentRaw)
+    ? null
+    : 'participantMeta.profile.department는 등록된 학과 목록 중 하나여야 합니다.';
+}
+
 /**
  * `validateSurveyPayload` 결과의 `participantMeta.profile` → `Identity` 선택 컬럼
  * @param {Record<string, unknown>} data
- * @returns {{ studentId?: string, birthYear?: string }}
+ * @returns {{ studentId?: string, birthYear?: string, department?: string }}
  */
 function identityProfileColumnsFromSurveyData(data) {
   const pm = data && typeof data === 'object' ? data.participantMeta : null;
@@ -382,10 +413,12 @@ function identityProfileColumnsFromSurveyData(data) {
   }
   const sid = pr.studentId != null ? String(pr.studentId).trim() : '';
   const by = pr.birthYear != null ? String(pr.birthYear).trim() : '';
-  /** @type {{ studentId?: string, birthYear?: string }} */
+  const department = normalizeDepartment(pr.department);
+  /** @type {{ studentId?: string, birthYear?: string, department?: string }} */
   const out = {};
   if (sid) out.studentId = sid;
   if (by) out.birthYear = by;
+  if (department) out.department = department;
   return out;
 }
 
@@ -404,6 +437,28 @@ function coerceScaleInt(value) {
 }
 
 /**
+ * @param {unknown} value
+ * @param {Set<string>} allowed
+ * @returns {string[] | null}
+ */
+function normalizeMultiSelectEnum(value, allowed) {
+  if (!Array.isArray(value) || value.length === 0) {
+    return null;
+  }
+  const out = [];
+  const seen = new Set();
+  for (const raw of value) {
+    const item = typeof raw === 'string' ? raw.trim() : '';
+    if (!allowed.has(item) || seen.has(item)) {
+      return null;
+    }
+    seen.add(item);
+    out.push(item);
+  }
+  return out;
+}
+
+/**
  * @param {Record<string, Record<string, unknown>>} nested
  * @returns {{ ok: true, nested: Record<string, Record<string, unknown>>, flat: Record<string, unknown> } | { ok: false, error: string }}
  */
@@ -413,6 +468,10 @@ function validateAndNormalizeSurveyAnswers(nested) {
   const phaseFields = spec.phase_fields;
   const intKeys = new Set(Array.isArray(spec.integer_scale_keys) ? spec.integer_scale_keys : []);
   const enumSpec = spec.string_enum_keys && typeof spec.string_enum_keys === 'object' ? spec.string_enum_keys : {};
+  const multiEnumSpec =
+    spec.multi_select_enum_keys && typeof spec.multi_select_enum_keys === 'object'
+      ? spec.multi_select_enum_keys
+      : {};
 
   if (!nested || typeof nested !== 'object' || Array.isArray(nested)) {
     return { ok: false, error: 'surveyAnswers는 JSON 객체여야 합니다.' };
@@ -522,6 +581,16 @@ function validateAndNormalizeSurveyAnswers(nested) {
           };
         }
         block[field] = s;
+      } else if (Object.prototype.hasOwnProperty.call(multiEnumSpec, field)) {
+        const allowed = new Set(/** @type {string[]} */ (multiEnumSpec[field]));
+        const values = normalizeMultiSelectEnum(v, allowed);
+        if (values === null) {
+          return {
+            ok: false,
+            error: `surveyAnswers.${ph}.${field}는 중복 없는 배열이어야 하며 각 값은 다음 중 하나여야 합니다: ${[...allowed].join(', ')}`,
+          };
+        }
+        block[field] = values;
       } else {
         return { ok: false, error: `시맨틱에 정의되지 않은 필드입니다: ${field}` };
       }
@@ -709,6 +778,11 @@ function validateSurveyPayload(surveyData) {
     data.matchAvailability = matchAvailability;
   }
 
+  const departmentError = validateParticipantMetaProfileDepartment(participantMeta);
+  if (departmentError) {
+    return { ok: false, error: departmentError };
+  }
+
   const pmStored = normalizeParticipantMetaForStorage(participantMeta);
   if (pmStored) {
     data.participantMeta = pmStored;
@@ -730,6 +804,7 @@ module.exports = {
   ALL_KEYS,
   SCALE_KEYS,
   STRING_KEYS,
+  MULTI_SELECT_KEYS,
   SCALE_MIN,
   SCALE_MAX,
   MAX_AVAILABILITY_SLOTS,

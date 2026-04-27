@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { validateSurveyPayload } = require('../lib/surveyValidation');
+const { validateSurveyPayload, identityProfileColumnsFromSurveyData } = require('../lib/surveyValidation');
 
-function minimalSurvey(phase1Overrides = {}, phase3Overrides = {}) {
+function minimalSurvey(phase1Overrides = {}, phase3Overrides = {}, phase6Overrides = {}) {
   return {
     surveyAnswers: {
       phase1_lifestyle: {
@@ -49,9 +49,11 @@ function minimalSurvey(phase1Overrides = {}, phase3Overrides = {}) {
       },
       phase6_partner_preferences: {
         campus_couple_openness: 3,
+        partner_age_preference: ['OLDER', 'SAME_AGE', 'YOUNGER'],
         partner_smoking_tolerance: 3,
         partner_tattoo_tolerance: 3,
         partner_religion_tolerance: 3,
+        ...phase6Overrides,
       },
     },
     gender: '남성',
@@ -69,6 +71,20 @@ test('invalid drinking_on_date enum → 400', () => {
   const r = validateSurveyPayload(minimalSurvey({}, { drinking_on_date: 'SOMETIMES' }));
   assert.equal(r.ok, false);
   assert.ok(String(r.error).includes('drinking_on_date'));
+});
+
+test('invalid partner_age_preference multi-select enum → 400', () => {
+  const r = validateSurveyPayload(minimalSurvey({}, {}, { partner_age_preference: ['OLDER', 'ANY_AGE'] }));
+  assert.equal(r.ok, false);
+  assert.ok(String(r.error).includes('partner_age_preference'));
+});
+
+test('invalid participantMeta.profile.department → 400', () => {
+  const p = minimalSurvey();
+  p.participantMeta = { profile: { department: '없는학과', gender: '남성' } };
+  const r = validateSurveyPayload(p);
+  assert.equal(r.ok, false);
+  assert.ok(String(r.error).includes('department'));
 });
 
 test('invalid religion enum → 400', () => {
@@ -92,7 +108,21 @@ test('minimal valid payload → ok + nested surveyAnswers', () => {
   assert.ok(r.data && r.data.surveyAnswers && r.data.surveyAnswers.phase1_lifestyle);
   assert.equal(r.data.surveyAnswers.phase1_lifestyle.smoking_status, 'NON_SMOKER');
   assert.equal(r.data.surveyAnswers.phase3_opposite_sex_and_intimacy.drinking_on_date, 'ANY');
+  assert.deepEqual(r.data.surveyAnswers.phase6_partner_preferences.partner_age_preference, [
+    'OLDER',
+    'SAME_AGE',
+    'YOUNGER',
+  ]);
   assert.equal(r.data.matchProfile.smoking.label, 'NON_SMOKER');
+});
+
+test('participantMeta.profile.department → stored profile + identity columns', () => {
+  const p = minimalSurvey();
+  p.participantMeta = { profile: { department: '컴퓨터공학과', gender: '남성' } };
+  const r = validateSurveyPayload(p);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.participantMeta.profile.department, '컴퓨터공학과');
+  assert.deepEqual(identityProfileColumnsFromSurveyData(r.data), { department: '컴퓨터공학과' });
 });
 
 test('religion NONE → faith_depth 생략 가능', () => {

@@ -8,6 +8,7 @@ Express 서버 진입점: `campusdrop_server/index.js`. 기본 포트는 환경 
 | OpenAPI JSON | `GET /openapi.json` |
 | Swagger UI | `GET /api-docs` (HTML UI, 브라우저용) |
 | 정적 파일 | `GET /assets/*` — `campusdrop_server/assets` (로그인 메일 로고 등; 프로덕션에서 캐시 `max-age` 적용) |
+| 학과 선택지 | `GET /api/departments` — 프로필 `department` 선택 목록 |
 | JSON 본문(일반 라우트) | `Content-Type: application/json` 권장 |
 | 분석 전용 바디 상한 | `/api/analytics/*` 만 `ANALYTICS_JSON_BODY_MAX_BYTES`(기본 **512KiB**) |
 | 엔드포인트 색인 | [HTTP 경로 일람](#http-경로-일람) |
@@ -1095,7 +1096,27 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
 
 `x-user-uuid`는 `verify-code` 등으로 받은 **`Identity.id`** 와 같아야 합니다. 루트에 `survey` 키를 써도 동작은 동일합니다(`surveyData ?? survey`).
 
-문자열 선택지·척도·하드/소프트 규칙의 단일 진실 소스: 루트 **`config/surveySemantics.v1.json`**, 검증 구현: **`campusdrop_server/lib/surveyValidation.js`**. 성공 시 서버가 `surveySchemaVersion`, `matchProfile` 등을 덮어써 저장합니다.
+문자열 선택지·복수선택·척도·하드/소프트 규칙의 단일 진실 소스: 루트 **`config/surveySemantics.v1.json`**, 검증 구현: **`campusdrop_server/lib/surveyValidation.js`**. 성공 시 서버가 `surveySchemaVersion`, `matchProfile` 등을 덮어써 저장합니다. 상대 나이 기준은 `phase6_partner_preferences.partner_age_preference`에 `["OLDER", "YOUNGER", "SAME_AGE"]` 중 하나 이상을 배열로 보냅니다(표시 라벨: 연상·연하·동갑). 내 학과는 `participantMeta.profile.department` 또는 루트 `profile.department`에 `GET /api/departments`가 반환한 학과명 중 하나를 문자열로 보냅니다.
+
+### GET `/api/departments`
+
+**요약:** 프로필 학과 선택지 목록을 반환합니다. 인증은 필요 없습니다.
+
+**응답 `200`**
+
+```json
+{
+  "colleges": [
+    {
+      "college": "인공지능융합대학",
+      "departments": ["컴퓨터공학과", "정보보호학과"]
+    }
+  ],
+  "departments": [
+    { "college": "인공지능융합대학", "department": "컴퓨터공학과" }
+  ]
+}
+```
 
 **응답 `200`**
 

@@ -227,6 +227,7 @@ router.post('/complete-registration', handleSchoolProofMulter, async (req, res) 
         const pp = parseSignupProfile(req.body?.profile);
         if (pp.studentId) profileCols.studentId = pp.studentId;
         if (pp.birthYear) profileCols.birthYear = pp.birthYear;
+        if (pp.department) profileCols.department = pp.department;
         traitCreate = { gender: pp.genderTrait };
       }
       const created = await tx.identity.create({
@@ -405,6 +406,7 @@ router.post('/complete-anonymous-onboarding', handleSchoolProofMulter, async (re
         const pp = parseSignupProfile(req.body?.profile);
         if (pp.studentId) profileCols.studentId = pp.studentId;
         if (pp.birthYear) profileCols.birthYear = pp.birthYear;
+        if (pp.department) profileCols.department = pp.department;
         traitCreate = { gender: pp.genderTrait };
       }
       await tx.identity.create({

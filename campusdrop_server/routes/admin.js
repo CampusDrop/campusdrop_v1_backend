@@ -19,7 +19,7 @@ const {
   deleteMatchingsForUsersInPeriod,
 } = require('../lib/matchPolicy');
 const { loadEligibleTraits } = require('../lib/weeklyBatchMatch');
-const { buildSurveySubmissionWindowForMatchingPeriod } = require('../lib/surveyAvailabilityWindow');
+const { buildSurveySubmissionWindowForApplicationPeriod } = require('../lib/surveyAvailabilityWindow');
 const { surveyDataToLifestyleUser } = require('../lib/surveyToLifestyleUser');
 const { surveyDataToAvailabilitySlots } = require('../lib/surveyAvailabilitySlots');
 const { getMatchingCalculateMatchUrl } = require('../lib/resolveMatchingServiceUrl');
@@ -634,7 +634,7 @@ router.get('/matches', async (req, res) => {
 router.get('/matches/unmatched', async (req, res) => {
   const ps = getMatchingPeriodStart();
   const pe = getMatchingPeriodEnd(ps);
-  const submissionWindow = buildSurveySubmissionWindowForMatchingPeriod(ps);
+  const submissionWindow = buildSurveySubmissionWindowForApplicationPeriod(ps);
 
   try {
     const [eligible, matchedIds] = await Promise.all([
@@ -723,7 +723,7 @@ router.get('/matches/slot-candidates', async (req, res) => {
   }
 
   const periodStart = getMatchingPeriodStart();
-  const submissionWindow = buildSurveySubmissionWindowForMatchingPeriod(periodStart);
+  const submissionWindow = buildSurveySubmissionWindowForApplicationPeriod(periodStart);
 
   try {
     const [eligible, matchedIds, historicalPartnerIds] = await Promise.all([

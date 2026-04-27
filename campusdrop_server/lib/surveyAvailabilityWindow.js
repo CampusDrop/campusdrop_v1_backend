@@ -63,6 +63,25 @@ function buildSurveySubmissionWindowForMatchingPeriod(targetPeriodStart) {
 }
 
 /**
+ * 특정 신청·매칭 운영 주(화~월)에 제출된 설문이 대상으로 삼는 실제 만남 주.
+ * 예: 4/28~5/4 운영 주에 신청하면 5/5~5/11 주의 화~일 날짜를 고른다.
+ * @param {Date} applicationPeriodStart
+ */
+function getSurveyTargetPeriodStartForApplicationPeriod(applicationPeriodStart) {
+  return getMatchingPeriodEnd(applicationPeriodStart);
+}
+
+/**
+ * 특정 신청·매칭 운영 주 기준의 신청 창과 실제 만남 대상 주를 반환한다.
+ * @param {Date} applicationPeriodStart
+ */
+function buildSurveySubmissionWindowForApplicationPeriod(applicationPeriodStart) {
+  return buildSurveySubmissionWindowForMatchingPeriod(
+    getSurveyTargetPeriodStartForApplicationPeriod(applicationPeriodStart),
+  );
+}
+
+/**
  * 신청 주기는 화 00:00(KST)에 열리고 일 18:00(KST)에 닫힌다.
  * 신청하는 날짜 선택지는 다음 매칭 주의 화~일이다.
  * @param {Date} [now]
@@ -133,6 +152,8 @@ function validateSurveyAvailabilityForCurrentWindow(availability, now = new Date
 
 module.exports = {
   buildSurveyAvailabilityWindow,
+  buildSurveySubmissionWindowForApplicationPeriod,
   buildSurveySubmissionWindowForMatchingPeriod,
+  getSurveyTargetPeriodStartForApplicationPeriod,
   validateSurveyAvailabilityForCurrentWindow,
 };

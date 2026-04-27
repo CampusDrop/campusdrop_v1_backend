@@ -12,7 +12,10 @@ const {
   getSamePeriodLockedPairTuplesExceptUser,
   deleteMatchingsForUsersInPeriod,
 } = require('./matchPolicy');
-const { buildSurveySubmissionWindowForMatchingPeriod } = require('./surveyAvailabilityWindow');
+const {
+  buildSurveySubmissionWindowForApplicationPeriod,
+  getSurveyTargetPeriodStartForApplicationPeriod,
+} = require('./surveyAvailabilityWindow');
 const { slimMatchReportForDb } = require('./slimMatchReport');
 const { isBinaryTraitGender, normalizeTraitGender } = require('./genderPolicy');
 
@@ -30,8 +33,9 @@ function batchTimeoutMs() {
 async function loadEligibleTraits(options = {}) {
   const prismaClient = options.prismaClient || prisma;
   const periodStart = options.periodStart || getMatchingPeriodStart();
+  const targetPeriodStart = getSurveyTargetPeriodStartForApplicationPeriod(periodStart);
   const submissions = await prismaClient.weeklySurveySubmission.findMany({
-    where: { targetPeriodStart: periodStart },
+    where: { targetPeriodStart },
     include: {
       identity: {
         select: {
@@ -80,7 +84,7 @@ async function loadEligibleTraits(options = {}) {
 async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
   const { lockSamePeriodPairsExceptUserId = null } = options;
   const url = getMatchingBatchMatchUrl();
-  const submissionWindow = buildSurveySubmissionWindowForMatchingPeriod(periodStart);
+  const submissionWindow = buildSurveySubmissionWindowForApplicationPeriod(periodStart);
   const traits = await loadEligibleTraits({ prismaClient, periodStart });
   if (traits.length < 2) {
     return {

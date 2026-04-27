@@ -2,7 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   buildSurveyAvailabilityWindow,
+  buildSurveySubmissionWindowForApplicationPeriod,
   buildSurveySubmissionWindowForMatchingPeriod,
+  getSurveyTargetPeriodStartForApplicationPeriod,
   validateSurveyAvailabilityForCurrentWindow,
 } = require('../lib/surveyAvailabilityWindow');
 
@@ -59,4 +61,17 @@ test('matching period uses previous Tuesday-Sunday submission window', () => {
   assert.equal(window.application.closesAt, '2026-04-26T09:00:00.000Z');
   assert.equal(window.target.periodStart, '2026-04-27T15:00:00.000Z');
   assert.equal(window.target.periodEnd, '2026-05-04T15:00:00.000Z');
+});
+
+test('application period matches current applicants for next Tuesday-Sunday dates', () => {
+  const applicationPeriodStart = new Date('2026-04-28T00:00:00.000+09:00');
+  const targetPeriodStart =
+    getSurveyTargetPeriodStartForApplicationPeriod(applicationPeriodStart);
+  const window = buildSurveySubmissionWindowForApplicationPeriod(applicationPeriodStart);
+
+  assert.equal(targetPeriodStart.toISOString(), '2026-05-04T15:00:00.000Z');
+  assert.equal(window.application.opensAt, '2026-04-27T15:00:00.000Z');
+  assert.equal(window.application.closesAt, '2026-05-03T09:00:00.000Z');
+  assert.equal(window.target.periodStart, '2026-05-04T15:00:00.000Z');
+  assert.equal(window.target.periodEnd, '2026-05-11T15:00:00.000Z');
 });

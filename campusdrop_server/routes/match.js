@@ -11,7 +11,10 @@ const {
   getMatchingPeriodEnd,
   deleteMatchingsForUsersInPeriod,
 } = require('../lib/matchPolicy');
-const { buildSurveySubmissionWindowForMatchingPeriod } = require('../lib/surveyAvailabilityWindow');
+const {
+  buildSurveySubmissionWindowForApplicationPeriod,
+  getSurveyTargetPeriodStartForApplicationPeriod,
+} = require('../lib/surveyAvailabilityWindow');
 const { fetchPythonBatchPairs } = require('../lib/weeklyBatchMatch');
 const { slimMatchReportForDb } = require('../lib/slimMatchReport');
 const { normalizeTraitGender, traitGenderLabelKo } = require('../lib/genderPolicy');
@@ -258,7 +261,8 @@ router.post('/request', async (req, res) => {
 
   const periodStart = getMatchingPeriodStart();
   const periodEnd = getMatchingPeriodEnd(periodStart);
-  const submissionWindow = buildSurveySubmissionWindowForMatchingPeriod(periodStart);
+  const targetPeriodStart = getSurveyTargetPeriodStartForApplicationPeriod(periodStart);
+  const submissionWindow = buildSurveySubmissionWindowForApplicationPeriod(periodStart);
 
   let selfWeeklySubmission;
   try {
@@ -266,7 +270,7 @@ router.post('/request', async (req, res) => {
       where: {
         identityId_targetPeriodStart: {
           identityId: self.id,
-          targetPeriodStart: periodStart,
+          targetPeriodStart,
         },
       },
       select: { id: true },
@@ -277,7 +281,7 @@ router.post('/request', async (req, res) => {
   }
   if (!selfWeeklySubmission) {
     return res.status(400).json({
-      error: '이번 매칭 주기에 참여하려면 직전 신청 기간에 설문을 다시 제출해 주세요.',
+      error: '이번 매칭 주기에 참여하려면 현재 신청 기간에 설문을 제출해 주세요.',
       submissionWindow,
     });
   }

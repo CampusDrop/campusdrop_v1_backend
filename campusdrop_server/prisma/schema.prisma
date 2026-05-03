@@ -48,6 +48,8 @@ model Identity {
   /// 이 유저이 `user_b_id`로 참여한 매칭 행.
   matchesAsUserB Matching[] @relation("MatchPairUserB")
 
+  meetingChatMessages MeetingChatMessage[] @relation("MeetingChatSender")
+
   @@index([emailHash])
   @@map("identities")
 }
@@ -135,15 +137,35 @@ model Matching {
   periodStart DateTime? @map("period_start")
   /// 배치 시점 Python `compute_match`의 `match_report` 스냅샷(요약·축별 정렬 등). 강제 매칭 등 없으면 null.
   matchReport Json? @map("match_report")
+  /// 소개팅 약속 시각(KST 벽시계 기준으로 저장한 순간의 UTC 인스턴스). QR 채팅 시간대 계산에 사용.
+  meetingStartsAt DateTime? @map("meeting_starts_at")
+  /// 채팅방 제목 등에 쓰는 장소명(예: 카페 이름).
+  meetingVenueName String? @map("meeting_venue_name")
 
   userA Identity @relation("MatchPairUserA", fields: [userAId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   userB Identity @relation("MatchPairUserB", fields: [userBId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  chatMessages MeetingChatMessage[]
 
   @@index([matchedAt])
   @@index([periodStart])
   @@index([userAId])
   @@index([userBId])
+  @@index([meetingStartsAt])
   @@map("matchings")
+}
+
+/// 소개팅 매칭 단위 QR 채팅 메시지. 행은 유지되며 관리자는 항상 조회 가능.
+model MeetingChatMessage {
+  id         String   @id @default(uuid()) @db.Uuid
+  matchingId String   @map("matching_id") @db.Uuid
+  matching   Matching @relation(fields: [matchingId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  senderId   String   @map("sender_id") @db.Uuid
+  sender     Identity @relation("MeetingChatSender", fields: [senderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  body       String   @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([matchingId, createdAt])
+  @@map("meeting_chat_messages")
 }
 
 /// 학교 소속 증빙 이미지 제출 1건. 이메일 인증과 별도로 관리자가 `approved` 처리하면 `Identity.schoolProofVerifiedAt`이 설정됩니다.

@@ -26,6 +26,8 @@ const { getMatchingCalculateMatchUrl } = require('../lib/resolveMatchingServiceU
 const { slimMatchReportForDb } = require('../lib/slimMatchReport');
 const { areOppositeTraitGenders, normalizeTraitGender, traitGenderLabelKo } = require('../lib/genderPolicy');
 const { resolveSchoolProofAbsolutePath } = require('../lib/schoolProofMulter');
+const { kstWallClockToUtc } = require('../lib/kstMeetingInstant');
+const { signMeetChatQrToken, meetChatQrSecret } = require('../lib/meetChatQr');
 
 const router = express.Router();
 
@@ -610,6 +612,8 @@ router.get('/matches', async (req, res) => {
         score: m.score,
         matchedAt: m.matchedAt,
         periodStart: m.periodStart ?? null,
+        meetingStartsAt: m.meetingStartsAt ?? null,
+        meetingVenueName: m.meetingVenueName ?? null,
         matchReport: m.matchReport ?? null,
       })),
     });
@@ -860,6 +864,209 @@ router.get('/matches/slot-candidates', async (req, res) => {
 
 /**
  * @openapi
+ * /api/admin/matches/{id}/meet-details:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: 소개팅 채팅용 약속 시각·장소명 설정
+ *     security:
+ *       - AdminBearerAuth: []
+ */
+router.patch('/matches/:id/meet-details', async (req, res) => {
+  const { id } = req.params;
+  if (!isUuid(id)) {
+    return res.status(400).json({ error: '유효한 매칭 UUID가 아닙니다.' });
+  }
+
+  const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+  /** @type {Record<string, unknown>} */
+  const data = {};
+
+  if ('meetingVenueName' in body || 'meeting_venue_name' in body) {
+    const v = body.meetingVenueName ?? body.meeting_venue_name;
+    if (v === null) {
+      data.meetingVenueName = null;
+    } else if (typeof v === 'string') {
+      const t = v.trim();
+      data.meetingVenueName = t.length > 0 ? t.slice(0, 200) : null;
+    } else {
+      return res.status(400).json({ error: 'meetingVenueName은 문자열이거나 null이어야 합니다.' });
+    }
+  }
+
+  if ('meetingStartsAt' in body || 'meeting_starts_at' in body) {
+    const v = body.meetingStartsAt ?? body.meeting_starts_at;
+    if (v === null || v === '') {
+      data.meetingStartsAt = null;
+    } else {
+      const d = new Date(String(v));
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ error: 'meetingStartsAt는 유효한 ISO-8601 날짜여야 합니다.' });
+      }
+      data.meetingStartsAt = d;
+    }
+  }
+
+  if (Object.keys(data).length === 0) {
+    return res.status(400).json({ error: 'meetingStartsAt 또는 meetingVenueName 중 하나 이상을 보내 주세요.' });
+  }
+
+  try {
+    const updated = await prisma.matching.update({
+      where: { id },
+      data,
+      select: {
+        id: true,
+        userAId: true,
+        userBId: true,
+        meetingStartsAt: true,
+        meetingVenueName: true,
+        matchReport: true,
+      },
+    });
+
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin.adminId,
+      action: 'ADMIN_MATCH_MEET_DETAILS',
+      resource: `Matching:${id}`,
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: { keys: Object.keys(data) },
+    });
+
+    return res.status(200).json({ match: updated });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+      return res.status(404).json({ error: '매칭을 찾을 수 없습니다.' });
+    }
+    console.error('admin PATCH /matches/:id/meet-details:', err);
+    return res.status(500).json({ error: '매칭 정보 갱신 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/matches/{id}/chat-messages:
+ *   get:
+ *     tags: [Admin]
+ *     summary: 소개팅 QR 채팅 메시지 전체 이력 (시간 제한 없음)
+ *     security:
+ *       - AdminBearerAuth: []
+ */
+router.get('/matches/:id/chat-messages', async (req, res) => {
+  const { id } = req.params;
+  if (!isUuid(id)) {
+    return res.status(400).json({ error: '유효한 매칭 UUID가 아닙니다.' });
+  }
+
+  let limit = Number(req.query.limit);
+  if (!Number.isFinite(limit)) limit = 500;
+  limit = Math.min(Math.max(Math.trunc(limit), 1), 2000);
+
+  try {
+    const matchRow = await prisma.matching.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!matchRow) {
+      return res.status(404).json({ error: '매칭을 찾을 수 없습니다.' });
+    }
+
+    const items = await prisma.meetingChatMessage.findMany({
+      where: { matchingId: id },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+      select: {
+        id: true,
+        matchingId: true,
+        senderId: true,
+        body: true,
+        createdAt: true,
+      },
+    });
+
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin.adminId,
+      action: 'ADMIN_MATCH_CHAT_MESSAGES_LIST',
+      resource: `Matching:${id}`,
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: { count: items.length, limit },
+    });
+
+    return res.status(200).json({
+      matchingId: id,
+      messages: items.map((m) => ({
+        id: m.id,
+        senderId: m.senderId,
+        body: m.body,
+        createdAt: m.createdAt.toISOString(),
+      })),
+    });
+  } catch (err) {
+    console.error('admin GET /matches/:id/chat-messages:', err);
+    return res.status(500).json({ error: '채팅 메시지 조회 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/matches/{id}/meet-chat-qr-token:
+ *   get:
+ *     tags: [Admin]
+ *     summary: 소개팅 채팅 페이지용 서명 QR 토큰 발급
+ *     security:
+ *       - AdminBearerAuth: []
+ */
+router.get('/matches/:id/meet-chat-qr-token', async (req, res) => {
+  const { id } = req.params;
+  if (!isUuid(id)) {
+    return res.status(400).json({ error: '유효한 매칭 UUID가 아닙니다.' });
+  }
+
+  if (!meetChatQrSecret()) {
+    return res.status(503).json({
+      error: 'MEET_CHAT_QR_SECRET 환경 변수를 설정한 뒤 QR 토큰을 발급할 수 있습니다.',
+    });
+  }
+
+  try {
+    const row = await prisma.matching.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!row) {
+      return res.status(404).json({ error: '매칭을 찾을 수 없습니다.' });
+    }
+
+    const qrToken = signMeetChatQrToken(id);
+    if (!qrToken) {
+      return res.status(503).json({ error: 'QR 토큰을 생성하지 못했습니다.' });
+    }
+
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin.adminId,
+      action: 'ADMIN_MATCH_MEET_CHAT_QR',
+      resource: `Matching:${id}`,
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: {},
+    });
+
+    return res.status(200).json({
+      matchingId: id,
+      qrToken,
+    });
+  } catch (err) {
+    console.error('admin GET /matches/:id/meet-chat-qr-token:', err);
+    return res.status(500).json({ error: 'QR 토큰 발급 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * @openapi
  * /api/admin/matches/{id}:
  *   delete:
  *     tags: [Admin]
@@ -984,6 +1191,28 @@ router.post('/matches/force', async (req, res) => {
   }
   const matchedSlot = matchedSlotParsed.value;
 
+  let meetingStartsAt = null;
+  const msRaw = body.meetingStartsAt ?? body.meeting_starts_at;
+  if (msRaw !== undefined && msRaw !== null && String(msRaw).trim() !== '') {
+    const d = new Date(String(msRaw));
+    if (Number.isNaN(d.getTime())) {
+      return res.status(400).json({ error: 'meetingStartsAt는 유효한 ISO-8601 날짜여야 합니다.' });
+    }
+    meetingStartsAt = d;
+  } else if (matchedSlot) {
+    meetingStartsAt = kstWallClockToUtc(matchedSlot.date, matchedSlot.hourStart);
+  }
+
+  let meetingVenueName = null;
+  const venueIn = body.meetingVenueName ?? body.meeting_venue_name;
+  if (venueIn !== undefined && venueIn !== null) {
+    if (typeof venueIn !== 'string') {
+      return res.status(400).json({ error: 'meetingVenueName은 문자열이어야 합니다.' });
+    }
+    const t = venueIn.trim();
+    meetingVenueName = t.length > 0 ? t.slice(0, 200) : null;
+  }
+
   try {
     const [identA, identB] = await prisma.$transaction([
       prisma.identity.findUnique({
@@ -1102,6 +1331,8 @@ router.post('/matches/force', async (req, res) => {
           userBId: b,
           score,
           periodStart,
+          meetingStartsAt,
+          meetingVenueName,
           ...(matchedSlot
             ? { matchReport: { score: Math.round(score * 100) / 100, reasons: [], matchedSlot } }
             : {}),
@@ -1116,7 +1347,16 @@ router.post('/matches/force', async (req, res) => {
       resource: `Matching:${match.id}`,
       ip: req.ip || null,
       userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
-      metadata: { userAId: a, userBId: b, score, genderA: finalA, genderB: finalB, matchedSlot },
+      metadata: {
+        userAId: a,
+        userBId: b,
+        score,
+        genderA: finalA,
+        genderB: finalB,
+        matchedSlot,
+        meetingStartsAt: meetingStartsAt ? meetingStartsAt.toISOString() : null,
+        meetingVenueName,
+      },
     });
 
     return res.status(201).json({
@@ -1130,8 +1370,11 @@ router.post('/matches/force', async (req, res) => {
         genderA: finalA,
         genderB: finalB,
         matchedSlot,
+        meetingStartsAt: match.meetingStartsAt ?? null,
+        meetingVenueName: match.meetingVenueName ?? null,
         matchReport: match.matchReport ?? null,
       },
+      meetChatQrToken: signMeetChatQrToken(match.id),
     });
   } catch (err) {
     console.error('admin POST /matches/force:', err);

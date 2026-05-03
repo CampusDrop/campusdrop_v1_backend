@@ -17,6 +17,7 @@ const {
 } = require('../lib/surveyAvailabilityWindow');
 const { fetchPythonBatchPairs } = require('../lib/weeklyBatchMatch');
 const { slimMatchReportForDb } = require('../lib/slimMatchReport');
+const { meetingStartsAtFromMatchReport } = require('../lib/meetingStartsAtDerive');
 const { normalizeTraitGender, traitGenderLabelKo } = require('../lib/genderPolicy');
 
 const router = express.Router();
@@ -382,6 +383,9 @@ router.post('/request', async (req, res) => {
 
   const [userLo, userHi] = [self.id, partnerId].sort();
 
+  const reportSlim = slimMatchReportForDb(best.score, best.report);
+  const meetingStartsAt = meetingStartsAtFromMatchReport(reportSlim);
+
   try {
     await prisma.$transaction(async (tx) => {
       await deleteMatchingsForUsersInPeriod(tx, periodStart, [self.id, partnerId]);
@@ -392,7 +396,8 @@ router.post('/request', async (req, res) => {
           score: best.score,
           matchedAt: new Date(),
           periodStart,
-          matchReport: slimMatchReportForDb(best.score, best.report),
+          matchReport: reportSlim,
+          ...(meetingStartsAt ? { meetingStartsAt } : {}),
         },
       });
     });
@@ -401,7 +406,6 @@ router.post('/request', async (req, res) => {
     return res.status(500).json({ error: '매칭 결과를 저장하지 못했습니다.' });
   }
 
-  const reportSlim = slimMatchReportForDb(best.score, best.report);
   return res.status(200).json({
     partnerLabel: best.partnerLabel,
     partnerEmail: best.partnerEmail,

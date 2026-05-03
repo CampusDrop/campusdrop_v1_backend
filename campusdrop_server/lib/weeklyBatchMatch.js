@@ -17,6 +17,7 @@ const {
   getSurveyTargetPeriodStartForApplicationPeriod,
 } = require('./surveyAvailabilityWindow');
 const { slimMatchReportForDb } = require('./slimMatchReport');
+const { meetingStartsAtFromMatchReport } = require('./meetingStartsAtDerive');
 const { isBinaryTraitGender, normalizeTraitGender } = require('./genderPolicy');
 
 const DEFAULT_BATCH_TIMEOUT_MS = 120_000;
@@ -234,7 +235,8 @@ async function runWeeklyBatchMatch(options = {}) {
       if (!Number.isFinite(score) || !p.user_a_id || !p.user_b_id) return null;
       if (score < MIN_MATCH_SCORE) return null;
       const matchReport = slimMatchReportForDb(score, p.match_report);
-      return {
+      const meetingStartsAt = meetingStartsAtFromMatchReport(matchReport);
+      const row = {
         userAId: p.user_a_id,
         userBId: p.user_b_id,
         score,
@@ -242,6 +244,10 @@ async function runWeeklyBatchMatch(options = {}) {
         periodStart,
         matchReport,
       };
+      if (meetingStartsAt) {
+        row.meetingStartsAt = meetingStartsAt;
+      }
+      return row;
     })
     .filter(Boolean)
     .sort((a, b) => b.score - a.score);

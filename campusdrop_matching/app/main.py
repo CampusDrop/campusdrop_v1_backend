@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import logging
 import os
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.batch_match import batch_match_endpoint
@@ -16,6 +17,7 @@ from app.schemas import (
 )
 
 app = FastAPI(title="CampusDrop Lifestyle Match", version="1.0.0")
+logger = logging.getLogger(__name__)
 
 app.add_middleware(
     CORSMiddleware,
@@ -51,7 +53,14 @@ def calculate_match(body: CalculateMatchRequest) -> CalculateMatchResponse:
 @app.post("/batch-match", response_model=BatchMatchResponse)
 def batch_match(body: BatchMatchRequest) -> BatchMatchResponse:
     """전체 유저 리스트를 한 번에 받아 쌍·점수를 계산한다(서버 내부에서 전 쌍 연산)."""
-    return batch_match_endpoint(body)
+    try:
+        return batch_match_endpoint(body)
+    except Exception:
+        logger.exception("batch_match failed (users=%s)", len(body.users))
+        raise HTTPException(
+            status_code=500,
+            detail="batch_match_failed",
+        ) from None
 
 
 if __name__ == "__main__":

@@ -41,6 +41,13 @@ services:
       context: .
       dockerfile: campusdrop_matching/Dockerfile
     restart: unless-stopped
+    # 배치 매칭은 유저 수에 따라 CPU·메모리 사용이 커진다. OOM 시 프로세스가 죙여 Node 쪽에서는 ECONNRESET·socket hang up 로 보임.
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
     expose:
       - "8000"
     healthcheck:

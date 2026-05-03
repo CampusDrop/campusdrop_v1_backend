@@ -21,7 +21,7 @@ const { slimMatchReportForDb } = require('./slimMatchReport');
 const { meetingStartsAtFromMatchReport } = require('./meetingStartsAtDerive');
 const { isBinaryTraitGender, normalizeTraitGender } = require('./genderPolicy');
 
-const DEFAULT_BATCH_TIMEOUT_MS = 120_000;
+const DEFAULT_BATCH_TIMEOUT_MS = 300_000;
 
 function batchTimeoutMs() {
   const n = Number(process.env.MATCHING_BATCH_TIMEOUT_MS);

@@ -153,8 +153,8 @@ def test_batch_excludes_time_incompatible_pair() -> None:
     slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     slot_b = AvailabilitySlot(date="2026-04-22", time_slot="11:00-12:00")
     users = [
-        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot], None),
-        ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot_b], None),
+        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot], None, None, None),
+        ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot_b], None, None, None),
     ]
     pairs = run_batch_greedy_unique_pairs(users, set())
     assert pairs == []
@@ -165,8 +165,8 @@ def test_batch_pair_with_overlap() -> None:
     f = _u()
     slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     users = [
-        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot], None),
-        ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot], None),
+        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot], None, None, None),
+        ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot], None, None, None),
     ]
     pairs = run_batch_greedy_unique_pairs(users, set())
     assert len(pairs) == 1
@@ -182,10 +182,10 @@ def test_batch_protects_female_with_sparse_time_candidates() -> None:
     male_backup = _u(energy=4, weekend=4, pattern=4, trend=4, contact=4)
 
     users = [
-        ("female-flexible", female_flexible, "female", [shared, backup], None),
-        ("female-sparse", female_sparse, "female", [shared], None),
-        ("male-best", male_best_for_flexible, "male", [shared], None),
-        ("male-backup", male_backup, "male", [backup], None),
+        ("female-flexible", female_flexible, "female", [shared, backup], None, None, None),
+        ("female-sparse", female_sparse, "female", [shared], None, None, None),
+        ("male-best", male_best_for_flexible, "male", [shared], None, None, None),
+        ("male-backup", male_backup, "male", [backup], None, None, None),
     ]
 
     result = run_batch_female_coverage_matching(users, set())
@@ -205,10 +205,10 @@ def test_batch_protects_female_with_sparse_time_candidates() -> None:
 def test_batch_allows_up_to_two_pairs_in_same_slot() -> None:
     only_slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     users = [
-        ("female-a", _u(), "female", [only_slot], None),
-        ("female-b", _u(), "female", [only_slot], None),
-        ("male-a", _u(), "male", [only_slot], None),
-        ("male-b", _u(), "male", [only_slot], None),
+        ("female-a", _u(), "female", [only_slot], None, None, None),
+        ("female-b", _u(), "female", [only_slot], None, None, None),
+        ("male-a", _u(), "male", [only_slot], None, None, None),
+        ("male-b", _u(), "male", [only_slot], None, None, None),
     ]
 
     result = run_batch_female_coverage_matching(users, set())
@@ -220,12 +220,12 @@ def test_batch_allows_up_to_two_pairs_in_same_slot() -> None:
 def test_batch_does_not_schedule_three_pairs_in_same_slot() -> None:
     only_slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     users = [
-        ("female-a", _u(), "female", [only_slot], None),
-        ("female-b", _u(), "female", [only_slot], None),
-        ("female-c", _u(), "female", [only_slot], None),
-        ("male-a", _u(), "male", [only_slot], None),
-        ("male-b", _u(), "male", [only_slot], None),
-        ("male-c", _u(), "male", [only_slot], None),
+        ("female-a", _u(), "female", [only_slot], None, None, None),
+        ("female-b", _u(), "female", [only_slot], None, None, None),
+        ("female-c", _u(), "female", [only_slot], None, None, None),
+        ("male-a", _u(), "male", [only_slot], None, None, None),
+        ("male-b", _u(), "male", [only_slot], None, None, None),
+        ("male-c", _u(), "male", [only_slot], None, None, None),
     ]
 
     result = run_batch_female_coverage_matching(users, set())
@@ -244,8 +244,8 @@ def test_batch_large_candidate_pool_uses_slot_safe_fallback() -> None:
     ]
     users = []
     for i in range(24):
-        users.append((f"female-{i:02d}", _u(), "female", slots, None))
-        users.append((f"male-{i:02d}", _u(), "male", slots, None))
+        users.append((f"female-{i:02d}", _u(), "female", slots, None, None, None))
+        users.append((f"male-{i:02d}", _u(), "male", slots, None, None, None))
 
     result = run_batch_female_coverage_matching(users, set())
     slot_keys = [
@@ -261,8 +261,8 @@ def test_batch_large_candidate_pool_uses_slot_safe_fallback() -> None:
 def test_batch_forbidden_pairs_are_excluded() -> None:
     slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     users = [
-        ("female-a", _u(), "female", [slot], None),
-        ("male-a", _u(), "male", [slot], None),
+        ("female-a", _u(), "female", [slot], None, None, None),
+        ("male-a", _u(), "male", [slot], None, None, None),
     ]
 
     result = run_batch_female_coverage_matching(users, {"female-a|male-a"})
@@ -274,8 +274,8 @@ def test_batch_forbidden_pairs_are_excluded() -> None:
 
 def test_batch_reports_female_without_any_time_candidate() -> None:
     users = [
-        ("female-a", _u(), "female", [AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")], None),
-        ("male-a", _u(), "male", [AvailabilitySlot(date="2026-04-22", time_slot="11:00-12:00")], None),
+        ("female-a", _u(), "female", [AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")], None, None, None),
+        ("male-a", _u(), "male", [AvailabilitySlot(date="2026-04-22", time_slot="11:00-12:00")], None, None, None),
     ]
 
     result = run_batch_female_coverage_matching(users, set())
@@ -308,8 +308,8 @@ def test_batch_excludes_same_department() -> None:
     f = _u()
     slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     users = [
-        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot], dept),
-        ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot], dept),
+        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot], dept, None, None),
+        ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot], dept, None, None),
     ]
     pairs = run_batch_greedy_unique_pairs(users, set())
     assert pairs == []
@@ -321,8 +321,69 @@ def test_batch_allows_when_department_unknown() -> None:
     f = _u()
     slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     users = [
-        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot], None),
-        ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot], "컴퓨터공학과"),
+        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot], None, None, None),
+        ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot], "컴퓨터공학과", None, None),
     ]
     pairs = run_batch_greedy_unique_pairs(users, set())
     assert len(pairs) == 1
+
+
+def test_age_gap_four_years_violates() -> None:
+    ua = _u()
+    ub = _u()
+    out = compute_match(ua, ub, birth_year_a=2002, birth_year_b=2006)
+    assert out["match_status"] == "violated"
+    assert "age_gap_exceeded" in {v["rule"] for v in out["match_report"]["group_b"]["violations"]}
+
+
+def test_age_gap_three_years_allowed() -> None:
+    ua = _u()
+    ub = _u()
+    out = compute_match(ua, ub, birth_year_a=2002, birth_year_b=2005)
+    assert out["match_status"] == "ok"
+
+
+def test_partner_age_pref_requires_older_when_partner_older() -> None:
+    """A(2003)보다 B(2000)가 연상이면 A는 OLDER를 허용해야 한다."""
+    ua = _u()
+    ub = _u()
+    out = compute_match(
+        ua,
+        ub,
+        birth_year_a=2003,
+        birth_year_b=2000,
+        partner_age_preference_a=["YOUNGER", "SAME_AGE"],
+    )
+    assert out["match_status"] == "violated"
+    assert any(
+        v["rule"] == "partner_age_preference" and v["viewer"] == "A" for v in out["match_report"]["group_b"]["violations"]
+    )
+
+
+def test_partner_age_pref_b_side_when_partner_younger() -> None:
+    """B(2000)이 A(2003)를 연하로 보므로 B는 YOUNGER를 허용해야 한다."""
+    ua = _u()
+    ub = _u()
+    out = compute_match(
+        ua,
+        ub,
+        birth_year_a=2003,
+        birth_year_b=2000,
+        partner_age_preference_b=["OLDER", "SAME_AGE"],
+    )
+    assert out["match_status"] == "violated"
+    assert any(
+        v["rule"] == "partner_age_preference" and v["viewer"] == "B" for v in out["match_report"]["group_b"]["violations"]
+    )
+
+
+def test_batch_excludes_large_age_gap() -> None:
+    m = _u()
+    f = _u()
+    slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
+    users = [
+        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot], None, 2000, ["OLDER", "YOUNGER", "SAME_AGE"]),
+        ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot], None, 2005, ["OLDER", "YOUNGER", "SAME_AGE"]),
+    ]
+    pairs = run_batch_greedy_unique_pairs(users, set())
+    assert pairs == []

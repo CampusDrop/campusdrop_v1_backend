@@ -10,7 +10,12 @@ const {
 } = require('../lib/adminAuth');
 const { verifyAdminDbCredentials } = require('../lib/adminDbAuth');
 const { writeAccessLog } = require('../lib/accessLog');
-const { runWeeklyBatchMatch } = require('../lib/weeklyBatchMatch');
+const {
+  runWeeklyBatchMatch,
+  loadEligibleTraits,
+  parseBirthYearForMatch,
+  partnerAgePreferenceFromSurveyData,
+} = require('../lib/weeklyBatchMatch');
 const {
   getMatchingPeriodStart,
   getMatchingPeriodEnd,
@@ -18,7 +23,6 @@ const {
   getUserIdsMatchedInPeriod,
   deleteMatchingsForUsersInPeriod,
 } = require('../lib/matchPolicy');
-const { loadEligibleTraits } = require('../lib/weeklyBatchMatch');
 const { buildSurveySubmissionWindowForApplicationPeriod } = require('../lib/surveyAvailabilityWindow');
 const { surveyDataToLifestyleUser } = require('../lib/surveyToLifestyleUser');
 const { surveyDataToAvailabilitySlots } = require('../lib/surveyAvailabilitySlots');
@@ -767,12 +771,16 @@ router.get('/matches/slot-candidates', async (req, res) => {
       /** @type {Record<string, unknown>} */ (base.surveyData),
     );
     const baseDeptNorm = normalizeDepartment(base.identity?.department);
+    const baseBirthYear = parseBirthYearForMatch(base.identity?.birthYear);
+    const baseAgePrefs = partnerAgePreferenceFromSurveyData(base.surveyData);
 
     for (const cand of candidatesRaw) {
       const candidateProfile = surveyDataToLifestyleUser(
         /** @type {Record<string, unknown>} */ (cand.surveyData),
       );
       const candDeptNorm = normalizeDepartment(cand.identity?.department);
+      const candBirthYear = parseBirthYearForMatch(cand.identity?.birthYear);
+      const candAgePrefs = partnerAgePreferenceFromSurveyData(cand.surveyData);
       const baseIsUserA = base.id.localeCompare(cand.id) <= 0;
       // 관리자 수동 재매칭 후보 조회는 요청 슬롯 보유 여부만 이 라우트에서 확인한다.
       // Python availability 하드필터는 일괄/실시간 매칭의 20시 이후 제외 정책까지 적용하므로 여기서는 생략한다.
@@ -782,12 +790,20 @@ router.get('/matches/slot-candidates', async (req, res) => {
             user_B: candidateProfile,
             department_a: baseDeptNorm,
             department_b: candDeptNorm,
+            birth_year_a: baseBirthYear,
+            birth_year_b: candBirthYear,
+            partner_age_preference_a: baseAgePrefs,
+            partner_age_preference_b: candAgePrefs,
           }
         : {
             user_A: candidateProfile,
             user_B: baseProfile,
             department_a: candDeptNorm,
             department_b: baseDeptNorm,
+            birth_year_a: candBirthYear,
+            birth_year_b: baseBirthYear,
+            partner_age_preference_a: candAgePrefs,
+            partner_age_preference_b: baseAgePrefs,
           };
 
       const py = await postCalculateMatch(body);

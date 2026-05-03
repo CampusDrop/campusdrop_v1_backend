@@ -151,6 +151,8 @@ async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
       gender: normalizeTraitGender(t.gender),
       profile: surveyDataToLifestyleUser(/** @type {Record<string, unknown>} */ (t.surveyData)),
       department: normalizeDepartment(t.identity?.department),
+      birth_year: parseBirthYearForMatch(t.identity?.birthYear),
+      partner_age_preference: partnerAgePreferenceFromSurveyData(t.surveyData),
       availability: surveyDataToAvailabilitySlots(/** @type {Record<string, unknown>} */ (t.surveyData)),
     })),
     forbidden_pairs: mergedForbidden,
@@ -335,4 +337,42 @@ async function runWeeklyBatchMatch(options = {}) {
   };
 }
 
-module.exports = { runWeeklyBatchMatch, loadEligibleTraits, fetchPythonBatchPairs };
+const PARTNER_AGE_PREF_ALLOWED = new Set(['OLDER', 'YOUNGER', 'SAME_AGE']);
+
+/** @param {unknown} value Identity.birthYear 등 */
+function parseBirthYearForMatch(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const y = Number(String(value).trim());
+  if (!Number.isInteger(y) || y < 1900 || y > new Date().getUTCFullYear()) return null;
+  return y;
+}
+
+/**
+ * phase6_partner_preferences.partner_age_preference 복수 선택.
+ * @param {unknown} surveyData
+ * @returns {string[] | null} 미존재·비어 있으면 null(Python에서 전 연령 허용)
+ */
+function partnerAgePreferenceFromSurveyData(surveyData) {
+  if (surveyData === null || typeof surveyData !== 'object' || Array.isArray(surveyData)) return null;
+  const phases = /** @type {Record<string, unknown>} */ (surveyData).surveyAnswers;
+  if (!phases || typeof phases !== 'object' || Array.isArray(phases)) return null;
+  const block = /** @type {Record<string, unknown>} */ (phases).phase6_partner_preferences;
+  if (!block || typeof block !== 'object' || Array.isArray(block)) return null;
+  const raw = block.partner_age_preference;
+  if (!Array.isArray(raw)) return null;
+  /** @type {string[]} */
+  const out = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const x = raw[i];
+    if (typeof x === 'string' && PARTNER_AGE_PREF_ALLOWED.has(x)) out.push(x);
+  }
+  return out.length ? out : null;
+}
+
+module.exports = {
+  runWeeklyBatchMatch,
+  loadEligibleTraits,
+  fetchPythonBatchPairs,
+  parseBirthYearForMatch,
+  partnerAgePreferenceFromSurveyData,
+};

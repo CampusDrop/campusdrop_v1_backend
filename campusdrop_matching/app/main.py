@@ -40,6 +40,10 @@ def calculate_match(body: CalculateMatchRequest) -> CalculateMatchResponse:
         availability_b=body.availability_b,
         department_a=body.department_a,
         department_b=body.department_b,
+        birth_year_a=body.birth_year_a,
+        birth_year_b=body.birth_year_b,
+        partner_age_preference_a=body.partner_age_preference_a,
+        partner_age_preference_b=body.partner_age_preference_b,
     )
     return CalculateMatchResponse.model_validate(result)
 

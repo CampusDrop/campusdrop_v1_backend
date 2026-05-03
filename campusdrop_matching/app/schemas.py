@@ -141,6 +141,10 @@ class CalculateMatchRequest(BaseModel):
     # Node `normalizeDepartment` 통과 학과명만 의미 있음. 둘 다 비어있지 않고 동일하면 하드 위반(same_department).
     department_a: str | None = None
     department_b: str | None = None
+    birth_year_a: int | None = None
+    birth_year_b: int | None = None
+    partner_age_preference_a: list[str] | None = None
+    partner_age_preference_b: list[str] | None = None
 
 
 class CalculateMatchResponse(BaseModel):
@@ -161,6 +165,10 @@ class BatchMatchUserEntry(BaseModel):
     gender: Literal["male", "female"] | None = None
     # Node `Identity.department` → `normalizeDepartment` 결과. 미입력·비목록 학과면 None → 학과 규칙 미적용.
     department: str | None = None
+    # Node `Identity.birthYear` 정수 연도. 미입력 시 나이·연상/연하 규칙 미적용.
+    birth_year: int | None = None
+    # phase6 `partner_age_preference`: OLDER/YOUNGER/SAME_AGE. 생략 시 매칭에서 전체 허용으로 간주.
+    partner_age_preference: list[str] | None = None
     # Node가 `Trait.surveyData`에서 추출해 전달. 키 생략 시 [] — 구버전 호출자는 시간 제약 없음(양쪽 []).
     availability: list[AvailabilitySlot] = Field(default_factory=list)
 

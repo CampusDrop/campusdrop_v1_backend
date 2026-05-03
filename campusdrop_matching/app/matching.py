@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 import numpy as np
@@ -117,6 +118,57 @@ def _canonical_department(value: Any) -> str | None:
         return None
     s = str(value).strip()
     return s or None
+
+
+# 한국 나이(출생연도+1 방식)에서 나이 차이 = |출생연도 차이|; 최대 허용 살수.
+_MAX_BIRTH_YEAR_GAP = 3
+_PARTNER_AGE_PREF_CODES: frozenset[str] = frozenset({"OLDER", "YOUNGER", "SAME_AGE"})
+
+
+def _parse_birth_year_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        if isinstance(value, str):
+            s = value.strip()
+            if not s:
+                return None
+            y = int(s, 10)
+        else:
+            y = int(value)
+    except (TypeError, ValueError):
+        return None
+    now_y = datetime.now(timezone.utc).year
+    if y < 1900 or y > now_y:
+        return None
+    return y
+
+
+def _normalize_partner_age_preferences(raw: Any) -> frozenset[str]:
+    """선택 없음·비정상 값이면 전체 허용(레거시 호환)."""
+    if raw is None:
+        return _PARTNER_AGE_PREF_CODES
+    if not isinstance(raw, (list, tuple, set)):
+        return _PARTNER_AGE_PREF_CODES
+    out: set[str] = set()
+    for x in raw:
+        if x is None:
+            continue
+        s = str(x).strip().upper()
+        if s in _PARTNER_AGE_PREF_CODES:
+            out.add(s)
+    return frozenset(out) if out else _PARTNER_AGE_PREF_CODES
+
+
+def _viewer_accepts_partner_birth_year(viewer_year: int, partner_year: int, prefs: frozenset[str]) -> bool:
+    """partner가 viewer보다 어떻게 나이 많은지(출생연도 기준·동갑=같은 연도)."""
+    if partner_year < viewer_year:
+        return "OLDER" in prefs
+    if partner_year > viewer_year:
+        return "YOUNGER" in prefs
+    return "SAME_AGE" in prefs
 
 
 def _norm_str(v: Any) -> str:
@@ -326,6 +378,10 @@ def collect_hard_violations(
     availability_b: list[AvailabilitySlot] | None = None,
     department_a: str | None = None,
     department_b: str | None = None,
+    birth_year_a: int | None = None,
+    birth_year_b: int | None = None,
+    partner_age_preference_a: list[str] | None = None,
+    partner_age_preference_b: list[str] | None = None,
 ) -> list[HardHit]:
     hits: list[HardHit] = []
 
@@ -342,6 +398,54 @@ def collect_hard_violations(
                 detail=f"두 사용자의 학과가 동일합니다({da}). 같은 학과끼리는 매칭되지 않습니다.",
             )
         )
+
+    ya = _parse_birth_year_int(birth_year_a)
+    yb = _parse_birth_year_int(birth_year_b)
+    if ya is not None and yb is not None:
+        if abs(ya - yb) > _MAX_BIRTH_YEAR_GAP:
+            hits.append(
+                HardHit(
+                    viewer="A",
+                    candidate="B",
+                    rule="age_gap_exceeded",
+                    constraint_field="birth_year",
+                    state_field="birth_year",
+                    detail=(
+                        f"출생연도 차이가 {_MAX_BIRTH_YEAR_GAP}을 초과합니다"
+                        f"(A={ya}, B={yb}, 허용: 한국나이 기준 최대 {_MAX_BIRTH_YEAR_GAP}살 차이까지)."
+                    ),
+                )
+            )
+        prefs_a = _normalize_partner_age_preferences(partner_age_preference_a)
+        if not _viewer_accepts_partner_birth_year(ya, yb, prefs_a):
+            hits.append(
+                HardHit(
+                    viewer="A",
+                    candidate="B",
+                    rule="partner_age_preference",
+                    constraint_field="partner_age_preference",
+                    state_field="birth_year",
+                    detail=(
+                        f"{ya}생(A)의 상대 연령 선택(연상·동갑·연하)에 맞지 않습니다"
+                        f"(상대 출생연도 {yb})."
+                    ),
+                )
+            )
+        prefs_b = _normalize_partner_age_preferences(partner_age_preference_b)
+        if not _viewer_accepts_partner_birth_year(yb, ya, prefs_b):
+            hits.append(
+                HardHit(
+                    viewer="B",
+                    candidate="A",
+                    rule="partner_age_preference",
+                    constraint_field="partner_age_preference",
+                    state_field="birth_year",
+                    detail=(
+                        f"{yb}생(B)의 상대 연령 선택(연상·동갑·연하)에 맞지 않습니다"
+                        f"(상대 출생연도 {ya})."
+                    ),
+                )
+            )
 
     def check(viewer: LifestyleUser, cand: LifestyleUser, v_lit: Literal["A", "B"], c_lit: Literal["A", "B"]) -> None:
         mpv = get_match_profile(viewer)
@@ -602,6 +706,8 @@ def _rule_label_ko(rule: str) -> str:
         "pref_cc": "기타(pref_cc)",
         "availability_mismatch": "만남 가능 시간",
         "same_department": "동일 학과",
+        "age_gap_exceeded": "나이 차이(출생연도)",
+        "partner_age_preference": "상대 연령(연상·동갑·연하)",
     }.get(rule, rule)
 
 
@@ -629,6 +735,10 @@ def build_summary_text(
             s1 = "만남 가능 시간이 겹치지 않거나 한쪽만 일정이 있어 동시 만남이 어렵습니다."
         elif "same_department" in rules:
             s1 = "같은 학과끼리는 매칭되지 않는 정책에 해당합니다."
+        elif "age_gap_exceeded" in rules:
+            s1 = "허용된 나이 차이를 넘어 매칭이 권장되지 않습니다."
+        elif "partner_age_preference" in rules:
+            s1 = "만날 상대 연령(연상·동갑·연하) 조건과 맞지 않아 매칭이 권장되지 않습니다."
         else:
             s1 = "상호 배타적인 하드 필터가 감지되어 매칭이 권장되지 않습니다."
         if len(violations) > 1:
@@ -712,6 +822,10 @@ def compute_match(
     availability_b: list[AvailabilitySlot] | None = None,
     department_a: str | None = None,
     department_b: str | None = None,
+    birth_year_a: int | None = None,
+    birth_year_b: int | None = None,
+    partner_age_preference_a: list[str] | None = None,
+    partner_age_preference_b: list[str] | None = None,
 ) -> dict[str, Any]:
     rel_score, rel_meta = religion_soft_score_0_100(a, b)
     w_rel = float(RELIGION_SOFT_WEIGHT)
@@ -735,6 +849,10 @@ def compute_match(
         availability_b=availability_b,
         department_a=department_a,
         department_b=department_b,
+        birth_year_a=birth_year_a,
+        birth_year_b=birth_year_b,
+        partner_age_preference_a=partner_age_preference_a,
+        partner_age_preference_b=partner_age_preference_b,
     )
     n_hits = len(hits)
 

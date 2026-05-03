@@ -18,6 +18,8 @@ from app.schemas import (
 _MAX_EXACT_SLOT_OPTIMIZATION_EDGES = 220
 _MAX_EXACT_SLOT_OPTIMIZATION_FEMALES = 18
 _MAX_MATCHES_PER_SLOT = 1
+# Max edges per overlapping (female, male) pair; extra overlaps dropped (sorted keys kept first).
+_MAX_OVERLAPPING_SLOT_KEYS_PER_PAIR = 1
 
 
 @dataclass(frozen=True)
@@ -348,6 +350,7 @@ def run_batch_female_coverage_matching(
     `forbidden_keys`에 있는 (정렬된) 쌍은 엣지에서 제외(과거 매칭 재매칭 방지).
     남성·여성 쌍만 점수 계산(이성 매칭 최우선).
     `compute_match` 하드필터를 통과한 후보만 사용한다.
+    겹치는 슬롯이 여러 개여도 쌍당 후보 간선은 `_MAX_OVERLAPPING_SLOT_KEYS_PER_PAIR`개만 둔다(정렬된 키 앞쪽).
 
     최적화 우선순위:
     1. 매칭 가능한 여성 수 최대화
@@ -410,6 +413,8 @@ def run_batch_female_coverage_matching(
             slot_keys = overlapping_slot_keys(avail_by_id[id_lo], avail_by_id[id_hi])
             if not slot_keys and availability_pair_compatible_for_matching(avail_by_id[id_lo], avail_by_id[id_hi]):
                 slot_keys = [None]
+            elif len(slot_keys) > _MAX_OVERLAPPING_SLOT_KEYS_PER_PAIR:
+                slot_keys = slot_keys[:_MAX_OVERLAPPING_SLOT_KEYS_PER_PAIR]
             for slot_key in slot_keys:
                 edges.append(
                     _CandidateEdge(

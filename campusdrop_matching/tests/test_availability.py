@@ -255,8 +255,10 @@ def test_batch_large_candidate_pool_uses_slot_safe_fallback() -> None:
         if pair.matched_slot is not None
     ]
 
-    assert len(result.pairs) == len(slots)
-    assert all(slot_keys.count(slot_key) <= 1 for slot_key in set(slot_keys))
+    # Everyone shares the same slot list → only the lexicographically first overlap is kept per pair:
+    # all candidate edges compete for one slot bucket; with _MAX_MATCHES_PER_SLOT=1 at most one match.
+    assert len(result.pairs) == 1
+    assert slot_keys.count("2026-04-21\t10:00-11:00") == 1
 
 
 def test_batch_forbidden_pairs_are_excluded() -> None:

@@ -636,7 +636,12 @@ def collect_hard_violations(
 
 
 def score_group_a_weighted_manhattan(
-    a: LifestyleUser, b: LifestyleUser, rel_score: float, w_rel: float
+    a: LifestyleUser,
+    b: LifestyleUser,
+    rel_score: float,
+    w_rel: float,
+    *,
+    axis_breakdown: bool = True,
 ) -> tuple[float, dict[str, Any]]:
     w = _weight_vector()
     va = continuous_vectors(a)
@@ -648,6 +653,14 @@ def score_group_a_weighted_manhattan(
     combined_num = likert_num + w_rel * rel_01
     combined_den = likert_den + w_rel
     manhattan_100 = 100.0 * (combined_num / combined_den) if combined_den > 0 else 0.0
+
+    if not axis_breakdown:
+        return manhattan_100, {
+            "manhattan_score_0_100": manhattan_100,
+            "likert_weight_sum": likert_den,
+            "religion_soft_weight": w_rel,
+            "religion_soft_score_0_100": rel_score,
+        }
 
     per_dim = [
         {
@@ -826,11 +839,15 @@ def compute_match(
     birth_year_b: int | None = None,
     partner_age_preference_a: list[str] | None = None,
     partner_age_preference_b: list[str] | None = None,
+    # 배치 매칭 후보 루프: 점수·하드만 필요 per-axis·긴 문구 생략으로 메모리·GC 부담 완화.
+    batch_candidate_pass: bool = False,
 ) -> dict[str, Any]:
     rel_score, rel_meta = religion_soft_score_0_100(a, b)
     w_rel = float(RELIGION_SOFT_WEIGHT)
 
-    m_score, m_report = score_group_a_weighted_manhattan(a, b, rel_score, w_rel)
+    m_score, m_report = score_group_a_weighted_manhattan(
+        a, b, rel_score, w_rel, axis_breakdown=not batch_candidate_pass
+    )
     c_score, c_report = score_group_a_weighted_cosine(a, b)
 
     w = _weight_vector()
@@ -882,6 +899,30 @@ def compute_match(
         }
         for h in hits
     ]
+
+    if batch_candidate_pass:
+        sem_v = int(survey_semantics().get("version", 1))
+        return {
+            "final_score": round(final_score, 2),
+            "match_status": match_status,
+            "group_a_score": round(group_a_score, 2),
+            "group_b_penalty": round(group_b_penalty, 2),
+            "match_report": {
+                "batch_candidate_pass_only": True,
+                "group_a": {"score_0_100": round(group_a_score, 2)},
+                "group_b": {
+                    "violations": violations_out,
+                    "violation_count": n_hits,
+                    "strict_mode": True,
+                    "total_penalty_applied": round(group_b_penalty, 2),
+                },
+                "semantics": {
+                    "survey_schema_version": sem_v,
+                    "soft_penalties": soft_entries,
+                    "soft_penalty_total": round(soft_total, 2),
+                },
+            },
+        }
 
     axes_ranked = rank_continuous_axes_for_db(m_report["per_dimension"])
     components_ranked = rank_group_a_components_for_db(m_score, c_score, rel_score)

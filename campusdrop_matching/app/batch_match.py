@@ -396,6 +396,7 @@ def run_batch_female_coverage_matching(
                 birth_year_b=birth_by_id.get(id_hi),
                 partner_age_preference_a=age_pref_by_id.get(id_lo),
                 partner_age_preference_b=age_pref_by_id.get(id_hi),
+                batch_candidate_pass=True,
             )
             if result["match_status"] != "ok":
                 continue

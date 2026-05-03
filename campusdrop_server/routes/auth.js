@@ -77,13 +77,13 @@ function meetingPatchFromLoginBody(body) {
  * /api/auth/kakao:
  *   post:
  *     tags: [Auth]
- *     summary: 카카오 로그인(인가 코드) — `Identity` 조회·생성 후 `uuid` 반환
+ *     summary: 카카오 로그인(인가 코드) — Identity 조회·생성 후 uuid 반환
  *     description: |
- *       카카오에서 받은 `code`로 토큰을 교환하고 회원번호(id)로 계정을 찾습니다.
- *       앱 사용자 식별용 UUID는 DB `Identity.id`이며 카카오의 숫자 회원번호는 `kakaoId`로 저장합니다.
- *       신규는 `privacyPolicyAgreed: true` 필수. 이후 학교 인증은 `send-code`/`verify-code`(이메일) 또는 `school-proof`(이미지)로 진행합니다.
- *       나에게 보내기 등 백그라운드 알림을 쓰려면 카카오 동의항목에서 메시지/리프레시 토큰 발급이 필요할 수 있습니다(있으면 DB `kakaoRefreshToken`에 저장).
- *       선택 필드 `meeting_time`(또는 `meetingTime`)·`meeting_place`(또는 `meetingPlace`)는 만남 일정·장소 문자열로 저장합니다. 생략 시 신규 가입에만 서버 기본값(`DEFAULT_*` 또는 예시 문구), 기존 유저는 본문으로 보낸 값만 덧씌웁니다.
+ *       카카오에서 받은 code로 토큰을 교환하고 회원번호(id)로 계정을 찾습니다.
+ *       앱 사용자 식별용 UUID는 DB Identity.id이며 카카오의 숫자 회원번호는 kakaoId로 저장합니다.
+ *       신규는 privacyPolicyAgreed true 필수. 이후 학교 인증은 send-code/verify-code(이메일) 또는 school-proof(이미지)로 진행합니다.
+ *       나에게 보내기 등 백그라운드 알림을 쓰려면 카카오 동의항목에서 메시지/리프레시 토큰 발급이 필요할 수 있습니다(있으면 DB kakaoRefreshToken에 저장).
+ *       선택 필드 meeting_time(또는 meetingTime), meeting_place(또는 meetingPlace)는 만남 일정·장소 문자열로 저장합니다. 생략 시 신규 가입에만 서버 기본값(DEFAULT_* 또는 예시 문구), 기존 유저는 본문으로 보낸 값만 덧씌웁니다.
  *     requestBody:
  *       required: true
  *       content:
@@ -255,7 +255,7 @@ router.post('/kakao', async (req, res) => {
  *     tags: [Auth]
  *     security:
  *       - UserUuidAuth: []
- *     summary: 세종대 이메일로 인증 코드 발송 — **카카오 로그인(`x-user-uuid`) 후** 학교 이메일 연동 시 사용
+ *     summary: 세종대 이메일로 인증 코드 발송 — 카카오 로그인(x-user-uuid 헤더) 후 학교 이메일 연동 시 사용
  *     requestBody:
  *       required: true
  *       content:
@@ -276,7 +276,7 @@ router.post('/kakao', async (req, res) => {
  *             schema:
  *               $ref: '#/components/schemas/ErrorMessage'
  *       401:
- *         description: 카카오 로그인 전 — `x-user-uuid` 없음
+ *         description: 카카오 로그인 전 — 헤더 x-user-uuid 없음
  *         content:
  *           application/json:
  *             schema:
@@ -343,8 +343,8 @@ router.post('/send-code', requireUserUuid, async (req, res) => {
  *     security:
  *       - UserUuidAuth: []
  *     summary: |
- *       **카카오 로그인(`x-user-uuid`)된 계정**에 학교 이메일(@sju.ac.kr)을 연결합니다. 최초 연결 시 `privacyPolicyAgreed: true` 필수.
- *       `linkUuid`는 현재 세션과 같을 때만 허용(호환용). 이메일이 다른 계정에 이미 있으면 거절합니다.
+ *       카카오 로그인(x-user-uuid)된 계정에 학교 이메일(@sju.ac.kr)을 연결합니다. 최초 연결 시 privacyPolicyAgreed true 필수.
+ *       linkUuid는 현재 세션과 같을 때만 허용(호환용). 이메일이 다른 계정에 이미 있으면 거절합니다.
  *     requestBody:
  *       required: true
  *       content:
@@ -365,7 +365,7 @@ router.post('/send-code', requireUserUuid, async (req, res) => {
  *             schema:
  *               $ref: '#/components/schemas/ErrorMessage'
  *       401:
- *         description: `x-user-uuid` 없음
+ *         description: 헤더 x-user-uuid 없음
  *         content:
  *           application/json:
  *             schema:
@@ -554,7 +554,7 @@ router.get('/pin', requireUserUuid, async (req, res) => {
  * /api/auth/me:
  *   get:
  *     tags: [Auth]
- *     summary: 현재 세션(`x-user-uuid`)의 서버 저장 프로필·이메일 요약
+ *     summary: 현재 세션(x-user-uuid 헤더)의 서버 저장 프로필·이메일 요약
  *     security:
  *       - UserUuidAuth: []
  *     responses:
@@ -603,7 +603,7 @@ router.get('/me', requireUserUuid, async (req, res) => {
  *   post:
  *     tags: [Auth]
  *     summary: |
- *       서버 무상태 세션 — 별도 토큰 폐기 없음. 클라이언트에서 `x-user-uuid`/쿠키 삭제용.
+ *       서버 무상태 세션 — 별도 토큰 폐기 없음. 클라이언트에서 헤더 x-user-uuid·쿠키 삭제용.
  *     responses:
  *       200:
  *         description: OK

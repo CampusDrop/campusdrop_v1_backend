@@ -13,7 +13,7 @@ function computeImageUuidAccessUntil(at = new Date()) {
 
 const IMAGE_ACCESS_EXPIRED = {
   error:
-    '이미지 가입 세션 유효 기간이 지났습니다. 학교 이메일(@sju.ac.kr) 인증 후 설문·매칭 기능을 이용해 주세요.',
+    '이미지 가입 세션 유효 기간이 지났습니다. 학교 이메일(@sju.ac.kr) 인증 또는 관리자 승인된 학교 증빙이 있어야 설문·매칭 기능을 이용할 수 있습니다.',
   code: 'IMAGE_UUID_ACCESS_EXPIRED',
 };
 

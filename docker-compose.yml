@@ -27,6 +27,9 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis_data:/data
+    # 호스트에서 Node(npm run dev)로 API만 띄울 때: REDIS_URL=redis://127.0.0.1:6379
+    ports:
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

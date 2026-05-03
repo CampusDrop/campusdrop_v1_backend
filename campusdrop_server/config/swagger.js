@@ -14,7 +14,11 @@ const swaggerDefinition = {
       description:
         '관리자 페이지용 API. 로그인은 DB `admins` 이메일·비밀번호, `POST /api/admin/login` 후 Bearer JWT',
     },
-    { name: 'Auth', description: '이메일 인증·세션·증빙·PIN 등' },
+    {
+      name: 'Auth',
+      description:
+        '카카오 로그인(`POST /api/auth/kakao`) 후 `x-user-uuid` 세션. 학교 소속은 이메일(`send-code`/`verify-code`) 또는 증빙 이미지(`school-proof`)로 확인',
+    },
     { name: 'Stats', description: '공개 랜딩용 통계(인증 불필요)' },
     { name: 'Landing', description: '랜딩 화면 공개 API(인증 불필요)' },
     {
@@ -30,7 +34,7 @@ const swaggerDefinition = {
         in: 'header',
         name: 'x-user-uuid',
         description:
-          '`POST /api/auth/verify-code` 응답의 `uuid`(= DB `Identity.id`). 기존 계정은 이메일 재인증으로 같은 `uuid`를 다시 받을 수 있음',
+          '`POST /api/auth/kakao`(또는 기존 세션) 응답의 `uuid`(= DB `Identity.id`). 카카오 로그인으로 발급',
       },
       AdminBearerAuth: {
         type: 'http',
@@ -59,6 +63,59 @@ const swaggerDefinition = {
           },
         },
       },
+      KakaoLoginRequest: {
+        type: 'object',
+        required: ['code', 'redirectUri'],
+        properties: {
+          code: { type: 'string', description: '카카오 인가 코드' },
+          redirectUri: {
+            type: 'string',
+            description: '카카오 로그인에 사용한 Redirect URI와 동일한 값',
+          },
+          redirect_uri: {
+            type: 'string',
+            description: '`redirectUri` 별칭',
+          },
+          privacyPolicyAgreed: {
+            type: 'boolean',
+            description: '신규 가입 시 필수 `true`',
+          },
+          meeting_time: {
+            type: 'string',
+            description: '만남 일정 문자열(`meetingTime`과 동일). 예: 이번 주 금요일 오후 6시',
+          },
+          meetingTime: {
+            type: 'string',
+            description: '`meeting_time` 별칭',
+          },
+          meeting_place: {
+            type: 'string',
+            description: '만남 장소(`meetingPlace`와 동일). 예: 세종대 후문 커피니',
+          },
+          meetingPlace: {
+            type: 'string',
+            description: '`meeting_place` 별칭',
+          },
+        },
+      },
+      KakaoLoginResponse: {
+        type: 'object',
+        required: ['verified', 'uuid'],
+        properties: {
+          verified: { type: 'boolean', example: true },
+          uuid: { type: 'string', format: 'uuid' },
+          schoolVerified: {
+            type: 'boolean',
+            description: '학교 이메일·승인된 증빙·유효한 이미지 세션 중 하나 충족',
+          },
+          meetingTime: { type: 'string', nullable: true, description: '저장된 만남 일정 라벨' },
+          meetingPlace: {
+            type: 'string',
+            nullable: true,
+            description: '저장된 만남 장소',
+          },
+        },
+      },
       VerifyCodeRequest: {
         type: 'object',
         required: ['email', 'code'],
@@ -72,18 +129,17 @@ const swaggerDefinition = {
           privacyPolicyAgreed: {
             type: 'boolean',
             description:
-              '개인정보처리방침 동의. **신규 이메일 가입** 또는 **`linkUuid`로 익명 계정에 이메일 연결** 시 반드시 `true`. 기존 계정 이메일 재인증만 할 때는 생략 가능.',
+              '개인정보처리방침 동의. **현재 카카오 세션에 학교 이메일을 처음 연결할 때** 반드시 `true`.',
           },
           linkUuid: {
             type: 'string',
             format: 'uuid',
-            description:
-              '이미 알고 있는 익명 `Identity.id`에 이메일을 붙일 때. `POST /api/auth/complete-anonymous-onboarding` 응답의 `uuid` 등.',
+            description: '호환용. 있으면 `x-user-uuid`와 동일해야 함',
           },
           profile: {
             type: 'object',
             description:
-              '선택. 신규 이메일(아직 Identity 없음)일 때만 — `Identity`·`Trait.gender`에 반영 후 설문은 `/api/survey/submit`',
+              '선택. 이메일 연결 시 `Identity`·`Trait.gender`에 반영',
             properties: {
               studentId: { type: 'string' },
               birthYear: { type: 'string' },
@@ -114,8 +170,7 @@ const swaggerDefinition = {
           uuid: {
             type: 'string',
             format: 'uuid',
-            description:
-              '기존 계정 복구·linkUuid 연결·**신규 이메일이면 verify-code 직후 즉시 생성된** `Identity.id`. 이후 `x-user-uuid` 헤더',
+            description: '현재 카카오 세션 `Identity.id`. 이후 `x-user-uuid` 헤더',
           },
           registrationToken: {
             type: 'string',
@@ -349,6 +404,10 @@ const swaggerDefinition = {
           kakaoLinked: {
             type: 'boolean',
             description: '`kakaoId`가 있으면 true',
+          },
+          schoolVerified: {
+            type: 'boolean',
+            description: '학교 이메일(@sju.ac.kr)·승인된 증빙·유효한 이미지 가입 세션',
           },
           privacyPolicyAgreed: {
             type: 'boolean',

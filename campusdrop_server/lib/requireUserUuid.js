@@ -4,7 +4,7 @@ const { writeAccessLog } = require('./accessLog');
 const UUID_HEADER = 'x-user-uuid';
 
 const AUTH_EXPIRED = {
-  error: '인증이 만료되었습니다. 다시 이메일 인증을 해주세요.',
+  error: '인증이 만료되었습니다. 카카오 로그인을 다시 진행해 주세요.',
 };
 
 /**

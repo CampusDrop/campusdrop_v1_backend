@@ -9,27 +9,9 @@ const { validateSurveyAvailabilityForCurrentWindow } = require('../lib/surveyAva
 const { upsertWeeklySurveySubmission } = require('../lib/weeklySurveySubmission');
 const { writeAccessLog } = require('../lib/accessLog');
 const { storePinForIdentity } = require('../lib/pinSession');
+const { surveySchoolAccessOk, SURVEY_ACCESS_DENIED } = require('../lib/surveyAccess');
 
 const router = express.Router();
-
-const SURVEY_ACCESS_DENIED = {
-  error:
-    '설문은 학교 이메일(@sju.ac.kr) 인증을 완료한 뒤 제출하거나, 이미지 가입 세션 유효 기간(`imageUuidAccessUntil`) 내에 제출해 주세요.',
-};
-
-/**
- * `POST /submit`·`GET /me` 공통: 이메일 연동 또는 유효한 이미지 UUID 세션.
- * @param {{ email?: string | null; imageUuidAccessUntil?: Date | string | null }} user
- */
-function surveyEmailOrImageSessionOk(user) {
-  const email = user && user.email != null ? String(user.email).trim() : '';
-  const imageUntil = user?.imageUuidAccessUntil;
-  const imageSessionOk =
-    imageUntil &&
-    !Number.isNaN(new Date(imageUntil).getTime()) &&
-    Date.now() < new Date(imageUntil).getTime();
-  return Boolean(email || imageSessionOk);
-}
 
 /**
  * @openapi
@@ -39,7 +21,7 @@ function surveyEmailOrImageSessionOk(user) {
  *     summary: 현재 세션(Identity.id)에 저장된 설문 JSON 조회
  *     description: |
  *       `Trait.surveyData`를 그대로 반환합니다. 아직 저장 전이면 `hasSurvey` false·`surveyData` null.
- *       접근 조건은 `POST /api/survey/submit`과 동일(학교 이메일 또는 이미지 가입 세션 유효).
+ *       접근 조건은 `POST /api/survey/submit`과 동일(학교 이메일·승인된 증빙·또는 유효한 이미지 가입 세션).
  *     security:
  *       - UserUuidAuth: []
  *     responses:
@@ -67,7 +49,7 @@ function surveyEmailOrImageSessionOk(user) {
  *               $ref: '#/components/schemas/ErrorMessage'
  */
 router.get('/me', async (req, res) => {
-  if (!surveyEmailOrImageSessionOk(req.user)) {
+  if (!surveySchoolAccessOk(req.user)) {
     return res.status(403).json(SURVEY_ACCESS_DENIED);
   }
 
@@ -145,7 +127,7 @@ router.get('/me', async (req, res) => {
  *               $ref: '#/components/schemas/ErrorMessage'
  *       403:
  *         description: |
- *           이메일 없고 이미지 가입 세션(`imageUuidAccessUntil`)도 만료·없음. 또는 설문·매칭 라우트에서 세션 만료(`IMAGE_UUID_ACCESS_EXPIRED`)
+ *           학교 이메일·승인된 증빙·유효한 이미지 가입 세션 없음. 또는 설문·매칭 라우트에서 `IMAGE_UUID_ACCESS_EXPIRED`
  *         content:
  *           application/json:
  *             schema:
@@ -164,7 +146,7 @@ router.get('/me', async (req, res) => {
  *               $ref: '#/components/schemas/ErrorMessage'
  */
 router.post('/submit', async (req, res) => {
-  if (!surveyEmailOrImageSessionOk(req.user)) {
+  if (!surveySchoolAccessOk(req.user)) {
     return res.status(403).json(SURVEY_ACCESS_DENIED);
   }
 

@@ -7,6 +7,8 @@ const {
   createSchoolProofUploader,
   schoolProofMaxBytes,
 } = require('../lib/schoolProofMulter');
+const { isSjuAcKrEmail, normalizeEmail } = require('../lib/sjuEmail');
+const { computeImageUuidAccessUntil } = require('../lib/imageUuidAccess');
 
 const router = express.Router();
 const upload = createSchoolProofUploader();
@@ -40,9 +42,8 @@ function handleMulterSingle(req, res, next) {
  *   post:
  *     tags: [Auth]
  *     summary: |
- *       학교 소속 증빙 이미지 **추가** 제출 (pending). **`x-user-uuid` 필수** — 익명이 아닙니다.
- *       **최초 이미지 1차 제출**은 반드시 `POST /api/auth/complete-anonymous-onboarding`(multipart, 이미지 필수)로 하고,
- *       이후 교체·재제출·이메일 가입자의 증빙만 올릴 때 이 엔드포인트를 사용합니다. (`complete-anonymous`와 통합 폐기 예정 없음)
+ *       학교 소속 증빙 이미지 제출 (pending). **`x-user-uuid` 필수** — 카카오 로그인 후 사용.
+ *       학교 이메일이 없으면 제출 시 `imageUuidAccessUntil`(매칭 주 종료)까지 설문·매칭 임시 접근이 열릴 수 있습니다. 관리자 승인 시 `schoolProofVerifiedAt`로 확정됩니다.
  *     security:
  *       - UserUuidAuth: []
  *     requestBody:
@@ -99,6 +100,27 @@ router.post('/school-proof', requireUserUuid, handleMulterSingle, async (req, re
       },
       select: { id: true, status: true, createdAt: true },
     });
+
+    const idRow = await prisma.identity.findUnique({
+      where: { id: req.user.id },
+      select: { email: true, schoolProofVerifiedAt: true, imageUuidAccessUntil: true },
+    });
+    const em = idRow?.email != null ? normalizeEmail(String(idRow.email)) : '';
+    const hasSju = Boolean(em && isSjuAcKrEmail(em));
+    if (!hasSju && !idRow?.schoolProofVerifiedAt) {
+      const rawUntil = idRow?.imageUuidAccessUntil;
+      const untilMs =
+        rawUntil && !Number.isNaN(new Date(rawUntil).getTime())
+          ? new Date(rawUntil).getTime()
+          : 0;
+      if (untilMs < Date.now()) {
+        await prisma.identity.update({
+          where: { id: req.user.id },
+          data: { imageUuidAccessUntil: computeImageUuidAccessUntil() },
+        });
+      }
+    }
+
     return res.status(201).json({
       message: '제출이 저장되었습니다. 관리자 검토 후 승인되면 이미지 인증이 완료됩니다.',
       submission: created,

@@ -15,6 +15,8 @@ const { requireUserUuid } = require('../lib/requireUserUuid');
 const { storePinForIdentity } = require('../lib/pinSession');
 const { traitGenderLabelKo } = require('../lib/genderPolicy');
 const { parsePrivacyPolicyAgreed } = require('../lib/privacyPolicyConsent');
+const { exchangeKakaoCode, fetchKakaoUserId } = require('../lib/kakaoOAuth');
+const { userHasSchoolVerification } = require('../lib/surveyAccess');
 
 const router = express.Router();
 
@@ -34,12 +36,226 @@ function fixedVerificationCodeFromEnv() {
   return String(process.env.AUTH_FIXED_VERIFICATION_CODE || '').trim();
 }
 
+function meetingSeedFromEnv() {
+  return {
+    meetingTime: String(process.env.DEFAULT_MEETING_TIME || '이번 주 금요일 오후 6시')
+      .trim()
+      .slice(0, 500),
+    meetingPlace: String(process.env.DEFAULT_MEETING_PLACE || '세종대 후문 커피니')
+      .trim()
+      .slice(0, 500),
+  };
+}
+
+/** @param {Record<string, unknown> | undefined} body */
+function meetingPatchFromLoginBody(body) {
+  const b = body && typeof body === 'object' ? body : {};
+  const rawMt =
+    typeof b.meeting_time === 'string'
+      ? b.meeting_time
+      : typeof b.meetingTime === 'string'
+        ? b.meetingTime
+        : '';
+  const rawMp =
+    typeof b.meeting_place === 'string'
+      ? b.meeting_place
+      : typeof b.meetingPlace === 'string'
+        ? b.meetingPlace
+        : '';
+  const patch = {};
+  if (rawMt.trim()) {
+    patch.meetingTime = rawMt.trim().slice(0, 500);
+  }
+  if (rawMp.trim()) {
+    patch.meetingPlace = rawMp.trim().slice(0, 500);
+  }
+  return patch;
+}
+
+/**
+ * @openapi
+ * /api/auth/kakao:
+ *   post:
+ *     tags: [Auth]
+ *     summary: 카카오 로그인(인가 코드) — `Identity` 조회·생성 후 `uuid` 반환
+ *     description: |
+ *       카카오에서 받은 `code`로 토큰을 교환하고 회원번호(id)로 계정을 찾습니다.
+ *       앱 사용자 식별용 UUID는 DB `Identity.id`이며 카카오의 숫자 회원번호는 `kakaoId`로 저장합니다.
+ *       신규는 `privacyPolicyAgreed: true` 필수. 이후 학교 인증은 `send-code`/`verify-code`(이메일) 또는 `school-proof`(이미지)로 진행합니다.
+ *       나에게 보내기 등 백그라운드 알림을 쓰려면 카카오 동의항목에서 메시지/리프레시 토큰 발급이 필요할 수 있습니다(있으면 DB `kakaoRefreshToken`에 저장).
+ *       선택 필드 `meeting_time`(또는 `meetingTime`)·`meeting_place`(또는 `meetingPlace`)는 만남 일정·장소 문자열로 저장합니다. 생략 시 신규 가입에만 서버 기본값(`DEFAULT_*` 또는 예시 문구), 기존 유저는 본문으로 보낸 값만 덧씌웁니다.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/KakaoLoginRequest'
+ *     responses:
+ *       200:
+ *         description: 세션 UUID 발급
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/KakaoLoginResponse'
+ *       400:
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorMessage'
+ *       409:
+ *         description: kakaoId 충돌 등
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorMessage'
+ *       502:
+ *         description: 카카오 API 오류
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorMessage'
+ *       503:
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorMessage'
+ */
+router.post('/kakao', async (req, res) => {
+  const { code, redirectUri, redirect_uri: redirectSnake } = req.body ?? {};
+  const redirectRaw = redirectUri !== undefined && redirectUri !== null ? redirectUri : redirectSnake;
+  const codeStr = typeof code === 'string' ? code.trim() : '';
+  const redir = typeof redirectRaw === 'string' ? redirectRaw.trim() : '';
+
+  if (!codeStr) {
+    return res.status(400).json({ error: 'code가 필요합니다.' });
+  }
+  if (!redir) {
+    return res.status(400).json({ error: 'redirectUri가 필요합니다. (카카오 로그인에 사용한 값과 동일)' });
+  }
+
+  let accessToken;
+  /** @type {string | null} */
+  let kakaoRefreshTokenStored = null;
+  try {
+    const tokenRes = await exchangeKakaoCode({ code: codeStr, redirectUri: redir });
+    accessToken = tokenRes.access_token;
+    const rtRaw = tokenRes.refresh_token;
+    if (typeof rtRaw === 'string' && rtRaw.trim()) {
+      kakaoRefreshTokenStored = rtRaw.trim();
+    }
+  } catch (err) {
+    if (err && err.code === 'KAKAO_CONFIG') {
+      return res.status(503).json({
+        error: '카카오 로그인 설정이 없습니다. KAKAO_REST_API_KEY를 확인해 주세요.',
+      });
+    }
+    console.error('kakao token exchange:', err && err.kakaoStatus, err && err.kakaoBody);
+    return res.status(502).json({ error: '카카오 로그인 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.' });
+  }
+
+  let kakaoUserId;
+  try {
+    kakaoUserId = await fetchKakaoUserId(accessToken);
+  } catch (err) {
+    console.error('kakao user/me:', err && err.kakaoStatus, err && err.kakaoBody);
+    return res.status(502).json({ error: '카카오 사용자 정보를 가져오지 못했습니다.' });
+  }
+
+  try {
+    const existing = await prisma.identity.findUnique({
+      where: { kakaoId: kakaoUserId },
+      include: { trait: true },
+    });
+
+    const meetingPatch = meetingPatchFromLoginBody(req.body);
+
+    if (existing) {
+      if (existing.blockedAt) {
+        return res.status(403).json({
+          error: '이 계정은 이용이 제한되었습니다. 문의가 필요하면 운영팀에 연락해 주세요.',
+        });
+      }
+
+      const data = { ...meetingPatch };
+      if (kakaoRefreshTokenStored) {
+        data.kakaoRefreshToken = kakaoRefreshTokenStored;
+      }
+      if (Object.keys(data).length > 0) {
+        await prisma.identity.update({
+          where: { id: existing.id },
+          data,
+        });
+      }
+
+      return res.status(200).json({
+        verified: true,
+        uuid: existing.id,
+        schoolVerified: userHasSchoolVerification(existing),
+        meetingTime: meetingPatch.meetingTime ?? existing.meetingTime ?? null,
+        meetingPlace: meetingPatch.meetingPlace ?? existing.meetingPlace ?? null,
+      });
+    }
+
+    const pp = parsePrivacyPolicyAgreed(req.body?.privacyPolicyAgreed, { required: true });
+    if (!pp.ok) {
+      return res.status(400).json({ error: pp.error });
+    }
+    if (pp.value !== true) {
+      return res.status(400).json({
+        error: '개인정보처리방침에 동의해야 카카오로 가입할 수 있습니다.',
+      });
+    }
+
+    const placeholder = `__kakao__:${kakaoUserId}@internal.invalid`;
+    const emailHash = await hashEmailForStorage(placeholder);
+
+    const seed = meetingSeedFromEnv();
+    const mergedMeeting = { ...seed, ...meetingPatch };
+
+    const created = await prisma.identity.create({
+      data: {
+        kakaoId: kakaoUserId,
+        kakaoRefreshToken: kakaoRefreshTokenStored,
+        email: null,
+        emailHash,
+        privacyPolicyAgreed: true,
+        meetingTime: mergedMeeting.meetingTime,
+        meetingPlace: mergedMeeting.meetingPlace,
+        trait: { create: { gender: null } },
+      },
+      include: { trait: true },
+    });
+
+    return res.status(200).json({
+      verified: true,
+      uuid: created.id,
+      schoolVerified: userHasSchoolVerification(created),
+      meetingTime: created.meetingTime,
+      meetingPlace: created.meetingPlace,
+    });
+  } catch (err) {
+    console.error('kakao identity upsert:', err);
+    if (err instanceof PrismaClientInitializationError) {
+      return res.status(503).json({
+        error:
+          '데이터베이스에 연결할 수 없습니다. .env의 DATABASE_URL을 확인한 뒤 서버를 재시작해 주세요.',
+      });
+    }
+    if (err && typeof err === 'object' && 'code' in err && err.code === 'P2002') {
+      return res.status(409).json({ error: '이미 연결된 카카오 계정입니다. 다시 로그인해 주세요.' });
+    }
+    return res.status(500).json({ error: '계정 처리 중 오류가 발생했습니다.' });
+  }
+});
+
 /**
  * @openapi
  * /api/auth/send-code:
  *   post:
  *     tags: [Auth]
- *     summary: 세종대 이메일로 인증 코드 발송 (AUTH_FIXED_VERIFICATION_CODE 설정 시 메일 미발송)
+ *     security:
+ *       - UserUuidAuth: []
+ *     summary: 세종대 이메일로 인증 코드 발송 — **카카오 로그인(`x-user-uuid`) 후** 학교 이메일 연동 시 사용
  *     requestBody:
  *       required: true
  *       content:
@@ -59,6 +275,12 @@ function fixedVerificationCodeFromEnv() {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorMessage'
+ *       401:
+ *         description: 카카오 로그인 전 — `x-user-uuid` 없음
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorMessage'
  *       500:
  *         description: SMTP 실패(메모리 코드 제거)
  *         content:
@@ -66,7 +288,7 @@ function fixedVerificationCodeFromEnv() {
  *             schema:
  *               $ref: '#/components/schemas/ErrorMessage'
  */
-router.post('/send-code', async (req, res) => {
+router.post('/send-code', requireUserUuid, async (req, res) => {
   const { email } = req.body ?? {};
 
   if (email === undefined || email === null || email === '') {
@@ -118,10 +340,11 @@ router.post('/send-code', async (req, res) => {
  * /api/auth/verify-code:
  *   post:
  *     tags: [Auth]
+ *     security:
+ *       - UserUuidAuth: []
  *     summary: |
- *       이메일·코드 검증. DB에 해당 이메일 계정이 이미 있으면 `uuid`만 반환해 세션을 복구합니다.
- *       아직 `Identity`가 없으면 **즉시** `Identity`+빈 `Trait`을 만들고 `uuid`를 반환합니다(선택 `profile`: studentId, birthYear, gender). 신규 가입·`linkUuid` 이메일 연결 시 `privacyPolicyAgreed: true` 필수.
- *       설문은 이후 `POST /api/survey/submit`으로 저장합니다. `registrationToken`·`complete-registration`은 구 클라이언트용으로만 유지됩니다.
+ *       **카카오 로그인(`x-user-uuid`)된 계정**에 학교 이메일(@sju.ac.kr)을 연결합니다. 최초 연결 시 `privacyPolicyAgreed: true` 필수.
+ *       `linkUuid`는 현재 세션과 같을 때만 허용(호환용). 이메일이 다른 계정에 이미 있으면 거절합니다.
  *     requestBody:
  *       required: true
  *       content:
@@ -141,6 +364,12 @@ router.post('/send-code', async (req, res) => {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorMessage'
+ *       401:
+ *         description: `x-user-uuid` 없음
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorMessage'
  *       500:
  *         description: Identity 처리 오류
  *         content:
@@ -148,8 +377,9 @@ router.post('/send-code', async (req, res) => {
  *             schema:
  *               $ref: '#/components/schemas/ErrorMessage'
  */
-router.post('/verify-code', async (req, res) => {
+router.post('/verify-code', requireUserUuid, async (req, res) => {
   const { email, code, linkUuid } = req.body ?? {};
+  const sessionIdentityId = req.user.id;
 
   if (email === undefined || email === null || email === '') {
     return res.status(400).json({ error: 'email이 필요합니다.' });
@@ -168,6 +398,41 @@ router.post('/verify-code', async (req, res) => {
     });
   }
 
+  const linkRaw =
+    linkUuid !== undefined && linkUuid !== null && linkUuid !== ''
+      ? String(linkUuid).trim()
+      : '';
+  if (linkRaw && !isUuidString(linkRaw)) {
+    return res.status(400).json({ error: 'linkUuid는 유효한 UUID 형식이어야 합니다.' });
+  }
+  if (linkRaw && linkRaw !== sessionIdentityId) {
+    return res.status(400).json({ error: 'linkUuid는 현재 로그인한 계정(`x-user-uuid`)과 같아야 합니다.' });
+  }
+
+  const currentEmail = req.user.email != null ? normalizeEmail(String(req.user.email)) : '';
+  if (currentEmail) {
+    if (currentEmail === normalized) {
+      const resultSame = verifyAndConsume(normalized, code);
+      if (!resultSame.ok) {
+        if (resultSame.reason === 'expired') {
+          return res.status(400).json({
+            error: '인증 번호가 만료되었습니다. 다시 요청해 주세요.',
+          });
+        }
+        if (resultSame.reason === 'not_found') {
+          return res.status(400).json({
+            error: '유효한 인증 요청이 없습니다. 인증 번호를 다시 요청해 주세요.',
+          });
+        }
+        return res.status(400).json({ error: '인증 번호가 올바르지 않습니다.' });
+      }
+      return res.status(200).json({ verified: true, uuid: sessionIdentityId });
+    }
+    return res.status(400).json({
+      error: '이 계정에는 이미 다른 학교 이메일이 연결되어 있습니다.',
+    });
+  }
+
   const result = verifyAndConsume(normalized, code);
   if (!result.ok) {
     if (result.reason === 'expired') {
@@ -183,102 +448,47 @@ router.post('/verify-code', async (req, res) => {
     return res.status(400).json({ error: '인증 번호가 올바르지 않습니다.' });
   }
 
-  const linkRaw =
-    linkUuid !== undefined && linkUuid !== null && linkUuid !== ''
-      ? String(linkUuid).trim()
-      : '';
-  if (linkRaw && !isUuidString(linkRaw)) {
-    return res.status(400).json({ error: 'linkUuid는 유효한 UUID 형식이어야 합니다.' });
-  }
-  const linkId = linkRaw && isUuidString(linkRaw) ? linkRaw : null;
-
-  let sessionId = null;
   try {
-    if (linkId) {
-      const ppLink = parsePrivacyPolicyAgreed(req.body?.privacyPolicyAgreed, { required: true });
-      if (!ppLink.ok) {
-        return res.status(400).json({ error: ppLink.error });
-      }
-      if (ppLink.value !== true) {
-        return res.status(400).json({
-          error: '개인정보처리방침에 동의해야 학교 이메일을 연결할 수 있습니다.',
-        });
-      }
-      const anon = await prisma.identity.findUnique({
-        where: { id: linkId },
-        select: { id: true, email: true, blockedAt: true },
+    const emailOwnerId = await findIdentityIdByNormalizedEmail(prisma, normalized);
+    if (emailOwnerId && emailOwnerId !== sessionIdentityId) {
+      return res.status(400).json({
+        error: '해당 학교 이메일은 다른 계정에서 이미 사용 중입니다. 해당 카카오 계정으로 로그인해 주세요.',
       });
-      if (!anon) {
-        return res.status(400).json({ error: '연결할 세션(UUID)을 찾을 수 없습니다.' });
-      }
-      if (anon.blockedAt) {
-        return res.status(403).json({
-          error: '이 계정은 이용이 제한되었습니다. 문의가 필요하면 운영팀에 연락해 주세요.',
-        });
-      }
-      if (anon.email) {
-        return res.status(400).json({
-          error: '이 세션에는 이미 이메일이 연결되어 있습니다. linkUuid 없이 인증해 주세요.',
-        });
-      }
-      const emailOwnerId = await findIdentityIdByNormalizedEmail(prisma, normalized);
-      if (emailOwnerId && emailOwnerId !== linkId) {
-        return res.status(400).json({
-          error: '해당 학교 이메일은 다른 계정에서 이미 사용 중입니다. 해당 계정으로 로그인해 주세요.',
-        });
-      }
-      const emailHash = await hashEmailForStorage(normalized);
-      await prisma.identity.update({
-        where: { id: linkId },
-        data: {
-          email: normalized,
-          emailHash,
-          imageUuidAccessUntil: null,
-          privacyPolicyAgreed: true,
-        },
-      });
-      sessionId = linkId;
-    } else {
-      const existingId = await findIdentityIdByNormalizedEmail(prisma, normalized);
-      if (existingId) {
-        sessionId = existingId;
-        await prisma.identity.update({
-          where: { id: existingId },
-          data: { email: normalized, imageUuidAccessUntil: null },
-        });
-      } else {
-        const ppNew = parsePrivacyPolicyAgreed(req.body?.privacyPolicyAgreed, { required: true });
-        if (!ppNew.ok) {
-          return res.status(400).json({ error: ppNew.error });
-        }
-        if (ppNew.value !== true) {
-          return res.status(400).json({
-            error: '개인정보처리방침에 동의해야 가입할 수 있습니다.',
-          });
-        }
-        const prof = parseSignupProfile(req.body?.profile);
-        if (!prof.ok) {
-          return res.status(400).json({ error: prof.error });
-        }
-        const emailHash = await hashEmailForStorage(normalized);
-        const created = await prisma.identity.create({
-          data: {
-            email: normalized,
-            emailHash,
-            privacyPolicyAgreed: true,
-            ...(prof.studentId ? { studentId: prof.studentId } : {}),
-            ...(prof.birthYear ? { birthYear: prof.birthYear } : {}),
-            trait: {
-              create: {
-                gender: prof.genderTrait,
-              },
-            },
-          },
-          select: { id: true },
-        });
-        sessionId = created.id;
-      }
     }
+
+    const ppLink = parsePrivacyPolicyAgreed(req.body?.privacyPolicyAgreed, { required: true });
+    if (!ppLink.ok) {
+      return res.status(400).json({ error: ppLink.error });
+    }
+    if (ppLink.value !== true) {
+      return res.status(400).json({
+        error: '개인정보처리방침에 동의해야 학교 이메일을 연결할 수 있습니다.',
+      });
+    }
+
+    const prof = parseSignupProfile(req.body?.profile);
+    if (!prof.ok) {
+      return res.status(400).json({ error: prof.error });
+    }
+
+    const emailHash = await hashEmailForStorage(normalized);
+    const data = {
+      email: normalized,
+      emailHash,
+      imageUuidAccessUntil: null,
+      privacyPolicyAgreed: true,
+    };
+    if (prof.studentId) data.studentId = prof.studentId;
+    if (prof.birthYear) data.birthYear = prof.birthYear;
+    if (prof.department) data.department = prof.department;
+    if (prof.genderTrait != null) {
+      data.trait = { update: { gender: prof.genderTrait } };
+    }
+
+    await prisma.identity.update({
+      where: { id: sessionIdentityId },
+      data,
+    });
   } catch (err) {
     console.error('verify-code identity error:', err);
     if (err instanceof PrismaClientInitializationError) {
@@ -290,7 +500,7 @@ router.post('/verify-code', async (req, res) => {
     return res.status(500).json({ error: '인증 처리 중 오류가 발생했습니다.' });
   }
 
-  return res.status(200).json({ verified: true, uuid: sessionId });
+  return res.status(200).json({ verified: true, uuid: sessionIdentityId });
 });
 
 /**
@@ -377,6 +587,7 @@ router.get('/me', requireUserUuid, async (req, res) => {
     email: u.email ?? null,
     kakaoLinkPin: u.kakaoLinkPin ?? null,
     kakaoLinked: Boolean(u.kakaoId && String(u.kakaoId).trim()),
+    schoolVerified: userHasSchoolVerification(u),
     profile,
     participantMeta: { profile: { ...profile } },
     privacyPolicyAgreed: Boolean(u.privacyPolicyAgreed),

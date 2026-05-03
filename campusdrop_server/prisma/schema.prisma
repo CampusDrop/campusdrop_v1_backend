@@ -16,7 +16,9 @@ model Identity {
   email     String?  @unique
   /// 정규화된 이메일 문자열에 대한 bcrypt 해시(솔트 포함). 로그인 시 `bcrypt.compare`로만 대조합니다.
   emailHash String
-  kakaoId   String?
+  kakaoId   String?  @unique
+  /// 카카오 OAuth 리프레시 토큰(있을 때만). `talk_message` 등 동의 시 로그인 응답에 포함되며, 주기 알림 스케줄러에서 갱신·나에게 보내기에 사용합니다.
+  kakaoRefreshToken String? @map("kakao_refresh_token")
   /// 카카오 챗봇 연동용 4자리 PIN. 다른 `Identity`와 중복 불가. 재요청 시 동일 값 유지, 연동 성공 시 null.
   kakaoLinkPin String? @unique @map("kakao_link_pin")
   /// 관리자 차단 시각. null이면 정상 이용 가능.
@@ -31,6 +33,10 @@ model Identity {
   department String?
   /// 가입·이메일 연결·온보딩 시 수집. 구 가입자 마이그레이션 후 기본값 false일 수 있음.
   privacyPolicyAgreed Boolean @default(false) @map("privacy_policy_agreed")
+  /// 만남 일정 라벨(자유 문자열). 알림에서는 `오전/오후 n시` 조각 우선 추출.
+  meetingTime String? @map("meeting_time")
+  /// 만남 장소(자유 문자열). 알림에서는 마지막 어절을 대괄호 안 표기에 사용합니다.
+  meetingPlace String? @map("meeting_place")
   createdAt DateTime @default(now())
   trait     Trait?
   weeklySurveySubmissions WeeklySurveySubmission[]

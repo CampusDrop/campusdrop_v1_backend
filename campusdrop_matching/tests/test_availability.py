@@ -153,8 +153,8 @@ def test_batch_excludes_time_incompatible_pair() -> None:
     slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     slot_b = AvailabilitySlot(date="2026-04-22", time_slot="11:00-12:00")
     users = [
-        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot]),
-        ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot_b]),
+        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot], None),
+        ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot_b], None),
     ]
     pairs = run_batch_greedy_unique_pairs(users, set())
     assert pairs == []
@@ -165,8 +165,8 @@ def test_batch_pair_with_overlap() -> None:
     f = _u()
     slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     users = [
-        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot]),
-        ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot]),
+        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot], None),
+        ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot], None),
     ]
     pairs = run_batch_greedy_unique_pairs(users, set())
     assert len(pairs) == 1
@@ -182,10 +182,10 @@ def test_batch_protects_female_with_sparse_time_candidates() -> None:
     male_backup = _u(energy=4, weekend=4, pattern=4, trend=4, contact=4)
 
     users = [
-        ("female-flexible", female_flexible, "female", [shared, backup]),
-        ("female-sparse", female_sparse, "female", [shared]),
-        ("male-best", male_best_for_flexible, "male", [shared]),
-        ("male-backup", male_backup, "male", [backup]),
+        ("female-flexible", female_flexible, "female", [shared, backup], None),
+        ("female-sparse", female_sparse, "female", [shared], None),
+        ("male-best", male_best_for_flexible, "male", [shared], None),
+        ("male-backup", male_backup, "male", [backup], None),
     ]
 
     result = run_batch_female_coverage_matching(users, set())
@@ -205,10 +205,10 @@ def test_batch_protects_female_with_sparse_time_candidates() -> None:
 def test_batch_allows_up_to_two_pairs_in_same_slot() -> None:
     only_slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     users = [
-        ("female-a", _u(), "female", [only_slot]),
-        ("female-b", _u(), "female", [only_slot]),
-        ("male-a", _u(), "male", [only_slot]),
-        ("male-b", _u(), "male", [only_slot]),
+        ("female-a", _u(), "female", [only_slot], None),
+        ("female-b", _u(), "female", [only_slot], None),
+        ("male-a", _u(), "male", [only_slot], None),
+        ("male-b", _u(), "male", [only_slot], None),
     ]
 
     result = run_batch_female_coverage_matching(users, set())
@@ -220,12 +220,12 @@ def test_batch_allows_up_to_two_pairs_in_same_slot() -> None:
 def test_batch_does_not_schedule_three_pairs_in_same_slot() -> None:
     only_slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     users = [
-        ("female-a", _u(), "female", [only_slot]),
-        ("female-b", _u(), "female", [only_slot]),
-        ("female-c", _u(), "female", [only_slot]),
-        ("male-a", _u(), "male", [only_slot]),
-        ("male-b", _u(), "male", [only_slot]),
-        ("male-c", _u(), "male", [only_slot]),
+        ("female-a", _u(), "female", [only_slot], None),
+        ("female-b", _u(), "female", [only_slot], None),
+        ("female-c", _u(), "female", [only_slot], None),
+        ("male-a", _u(), "male", [only_slot], None),
+        ("male-b", _u(), "male", [only_slot], None),
+        ("male-c", _u(), "male", [only_slot], None),
     ]
 
     result = run_batch_female_coverage_matching(users, set())
@@ -244,8 +244,8 @@ def test_batch_large_candidate_pool_uses_slot_safe_fallback() -> None:
     ]
     users = []
     for i in range(24):
-        users.append((f"female-{i:02d}", _u(), "female", slots))
-        users.append((f"male-{i:02d}", _u(), "male", slots))
+        users.append((f"female-{i:02d}", _u(), "female", slots, None))
+        users.append((f"male-{i:02d}", _u(), "male", slots, None))
 
     result = run_batch_female_coverage_matching(users, set())
     slot_keys = [
@@ -261,8 +261,8 @@ def test_batch_large_candidate_pool_uses_slot_safe_fallback() -> None:
 def test_batch_forbidden_pairs_are_excluded() -> None:
     slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     users = [
-        ("female-a", _u(), "female", [slot]),
-        ("male-a", _u(), "male", [slot]),
+        ("female-a", _u(), "female", [slot], None),
+        ("male-a", _u(), "male", [slot], None),
     ]
 
     result = run_batch_female_coverage_matching(users, {"female-a|male-a"})
@@ -274,8 +274,8 @@ def test_batch_forbidden_pairs_are_excluded() -> None:
 
 def test_batch_reports_female_without_any_time_candidate() -> None:
     users = [
-        ("female-a", _u(), "female", [AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")]),
-        ("male-a", _u(), "male", [AvailabilitySlot(date="2026-04-22", time_slot="11:00-12:00")]),
+        ("female-a", _u(), "female", [AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")], None),
+        ("male-a", _u(), "male", [AvailabilitySlot(date="2026-04-22", time_slot="11:00-12:00")], None),
     ]
 
     result = run_batch_female_coverage_matching(users, set())
@@ -284,3 +284,45 @@ def test_batch_reports_female_without_any_time_candidate() -> None:
     assert len(result.unmatched_females) == 1
     assert result.unmatched_females[0].user_id == "female-a"
     assert result.unmatched_females[0].reason == "no_time_candidates"
+
+
+def test_compute_match_same_department_violates() -> None:
+    ua = _u()
+    ub = _u()
+    out = compute_match(ua, ub, department_a="컴퓨터공학과", department_b="컴퓨터공학과")
+    assert out["match_status"] == "violated"
+    rules = {v["rule"] for v in out["match_report"]["group_b"]["violations"]}
+    assert "same_department" in rules
+
+
+def test_compute_match_different_department_ok() -> None:
+    ua = _u()
+    ub = _u()
+    out = compute_match(ua, ub, department_a="컴퓨터공학과", department_b="경영학부")
+    assert out["match_status"] == "ok"
+
+
+def test_batch_excludes_same_department() -> None:
+    dept = "수학통계학과"
+    m = _u()
+    f = _u()
+    slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
+    users = [
+        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot], dept),
+        ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot], dept),
+    ]
+    pairs = run_batch_greedy_unique_pairs(users, set())
+    assert pairs == []
+
+
+def test_batch_allows_when_department_unknown() -> None:
+    """한쪽이라도 학과가 비어(None)면 동일 학과 하드 규칙을 쓰지 않는다."""
+    m = _u()
+    f = _u()
+    slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
+    users = [
+        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", m, "male", [slot], None),
+        ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f, "female", [slot], "컴퓨터공학과"),
+    ]
+    pairs = run_batch_greedy_unique_pairs(users, set())
+    assert len(pairs) == 1

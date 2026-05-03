@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { prisma } = require('./prisma');
+const { normalizeDepartment } = require('./departments');
 const { surveyDataToLifestyleUser } = require('./surveyToLifestyleUser');
 const { surveyDataToAvailabilitySlots } = require('./surveyAvailabilitySlots');
 const { getMatchingBatchMatchUrl } = require('./resolveMatchingServiceUrl');
@@ -149,6 +150,7 @@ async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
       user_id: t.id,
       gender: normalizeTraitGender(t.gender),
       profile: surveyDataToLifestyleUser(/** @type {Record<string, unknown>} */ (t.surveyData)),
+      department: normalizeDepartment(t.identity?.department),
       availability: surveyDataToAvailabilitySlots(/** @type {Record<string, unknown>} */ (t.surveyData)),
     })),
     forbidden_pairs: mergedForbidden,

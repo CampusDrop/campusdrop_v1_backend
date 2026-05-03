@@ -138,6 +138,9 @@ class CalculateMatchRequest(BaseModel):
     # 둘 다 생략(None)이면 기존과 같이 시간 겹침을 보지 않음. 둘 다 주어지면 `compute_match`에서 하드 검사.
     availability_a: list[AvailabilitySlot] | None = None
     availability_b: list[AvailabilitySlot] | None = None
+    # Node `normalizeDepartment` 통과 학과명만 의미 있음. 둘 다 비어있지 않고 동일하면 하드 위반(same_department).
+    department_a: str | None = None
+    department_b: str | None = None
 
 
 class CalculateMatchResponse(BaseModel):
@@ -156,6 +159,8 @@ class BatchMatchUserEntry(BaseModel):
     user_id: str
     profile: LifestyleUser
     gender: Literal["male", "female"] | None = None
+    # Node `Identity.department` → `normalizeDepartment` 결과. 미입력·비목록 학과면 None → 학과 규칙 미적용.
+    department: str | None = None
     # Node가 `Trait.surveyData`에서 추출해 전달. 키 생략 시 [] — 구버전 호출자는 시간 제약 없음(양쪽 []).
     availability: list[AvailabilitySlot] = Field(default_factory=list)
 

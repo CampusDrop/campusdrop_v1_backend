@@ -111,6 +111,14 @@ def rank_group_a_components_for_db(
     return parts
 
 
+def _canonical_department(value: Any) -> str | None:
+    """양쪽 모두 신뢰 가능한 학과 문자열일 때만 동일 학과 차단을 적용한다."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s or None
+
+
 def _norm_str(v: Any) -> str:
     if v is None:
         return ""
@@ -316,8 +324,24 @@ def collect_hard_violations(
     *,
     availability_a: list[AvailabilitySlot] | None = None,
     availability_b: list[AvailabilitySlot] | None = None,
+    department_a: str | None = None,
+    department_b: str | None = None,
 ) -> list[HardHit]:
     hits: list[HardHit] = []
+
+    da = _canonical_department(department_a)
+    db = _canonical_department(department_b)
+    if da is not None and db is not None and da == db:
+        hits.append(
+            HardHit(
+                viewer="A",
+                candidate="B",
+                rule="same_department",
+                constraint_field="department",
+                state_field="department",
+                detail=f"두 사용자의 학과가 동일합니다({da}). 같은 학과끼리는 매칭되지 않습니다.",
+            )
+        )
 
     def check(viewer: LifestyleUser, cand: LifestyleUser, v_lit: Literal["A", "B"], c_lit: Literal["A", "B"]) -> None:
         mpv = get_match_profile(viewer)
@@ -577,6 +601,7 @@ def _rule_label_ko(rule: str) -> str:
         "religion_religious_partner_required": "종교(파트너 종교 필요)",
         "pref_cc": "기타(pref_cc)",
         "availability_mismatch": "만남 가능 시간",
+        "same_department": "동일 학과",
     }.get(rule, rule)
 
 
@@ -602,6 +627,8 @@ def build_summary_text(
             s1 = "기타(pref_cc) 조건과 상대(cc) 정보가 맞지 않아 매칭이 권장되지 않습니다."
         elif "availability_mismatch" in rules:
             s1 = "만남 가능 시간이 겹치지 않거나 한쪽만 일정이 있어 동시 만남이 어렵습니다."
+        elif "same_department" in rules:
+            s1 = "같은 학과끼리는 매칭되지 않는 정책에 해당합니다."
         else:
             s1 = "상호 배타적인 하드 필터가 감지되어 매칭이 권장되지 않습니다."
         if len(violations) > 1:
@@ -683,6 +710,8 @@ def compute_match(
     *,
     availability_a: list[AvailabilitySlot] | None = None,
     availability_b: list[AvailabilitySlot] | None = None,
+    department_a: str | None = None,
+    department_b: str | None = None,
 ) -> dict[str, Any]:
     rel_score, rel_meta = religion_soft_score_0_100(a, b)
     w_rel = float(RELIGION_SOFT_WEIGHT)
@@ -704,6 +733,8 @@ def compute_match(
         b,
         availability_a=availability_a,
         availability_b=availability_b,
+        department_a=department_a,
+        department_b=department_b,
     )
     n_hits = len(hits)
 

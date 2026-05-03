@@ -338,7 +338,7 @@ def _best_weighted_selection(edges: list[_CandidateEdge], target_count: int) -> 
 
 
 def run_batch_female_coverage_matching(
-    users: list[tuple[str, LifestyleUser, str | None, list[AvailabilitySlot]]],
+    users: list[tuple[str, LifestyleUser, str | None, list[AvailabilitySlot], str | None]],
     forbidden_keys: set[str],
 ) -> _BatchMatchResult:
     """
@@ -358,10 +358,11 @@ def run_batch_female_coverage_matching(
     if n < 2:
         return _BatchMatchResult(pairs=[], unmatched_females=[], match_summary={"matched_count": 0, "target_count": 0})
 
-    by_id: dict[str, LifestyleUser] = {uid: prof for uid, prof, _, _ in users}
-    gender_by_id: dict[str, str | None] = {uid: g for uid, _, g, _ in users}
-    avail_by_id: dict[str, list[AvailabilitySlot]] = {uid: av for uid, _, _, av in users}
-    ids = [uid for uid, _, _, _ in users]
+    by_id: dict[str, LifestyleUser] = {uid: prof for uid, prof, _, _, _ in users}
+    gender_by_id: dict[str, str | None] = {uid: g for uid, _, g, _, _ in users}
+    avail_by_id: dict[str, list[AvailabilitySlot]] = {uid: av for uid, _, _, av, _ in users}
+    dept_by_id: dict[str, str | None] = {uid: dep for uid, _, _, _, dep in users}
+    ids = [uid for uid, _, _, _, _ in users]
     female_ids = sorted(uid for uid in ids if gender_by_id.get(uid) == "female")
     time_candidate_counts: dict[str, int] = {uid: 0 for uid in female_ids}
     match_candidate_counts: dict[str, int] = {uid: 0 for uid in female_ids}
@@ -386,6 +387,8 @@ def run_batch_female_coverage_matching(
                 ub,
                 availability_a=avail_by_id[id_lo],
                 availability_b=avail_by_id[id_hi],
+                department_a=dept_by_id.get(id_lo),
+                department_b=dept_by_id.get(id_hi),
             )
             if result["match_status"] != "ok":
                 continue
@@ -487,7 +490,7 @@ def run_batch_female_coverage_matching(
 
 
 def run_batch_greedy_unique_pairs(
-    users: list[tuple[str, LifestyleUser, str | None, list[AvailabilitySlot]]],
+    users: list[tuple[str, LifestyleUser, str | None, list[AvailabilitySlot], str | None]],
     forbidden_keys: set[str],
 ) -> list[BatchMatchPair]:
     """Backward-compatible wrapper for tests/importers; implementation is no longer greedy."""
@@ -495,10 +498,10 @@ def run_batch_greedy_unique_pairs(
 
 
 def batch_match_endpoint(body: BatchMatchRequest) -> BatchMatchResponse:
-    entries: list[tuple[str, LifestyleUser, str | None, list[AvailabilitySlot]]] = []
+    entries: list[tuple[str, LifestyleUser, str | None, list[AvailabilitySlot], str | None]] = []
     for u in body.users:
         g = u.gender if u.gender in ("male", "female") else None
-        entries.append((u.user_id, u.profile, g, u.availability))
+        entries.append((u.user_id, u.profile, g, u.availability, u.department))
     forbidden_keys = _forbidden_pair_key_set(body)
     result = run_batch_female_coverage_matching(entries, forbidden_keys)
     return BatchMatchResponse(

@@ -38,6 +38,8 @@ def calculate_match(body: CalculateMatchRequest) -> CalculateMatchResponse:
         body.user_B,
         availability_a=body.availability_a,
         availability_b=body.availability_b,
+        department_a=body.department_a,
+        department_b=body.department_b,
     )
     return CalculateMatchResponse.model_validate(result)
 

@@ -124,6 +124,9 @@ router.get('/test', async (req, res) => {
     const comparisons = [];
 
     for (const { user_A: ua, user_B: ub } of pairs) {
+      const ga = normalizeTraitGender(ua.gender);
+      const gb = normalizeTraitGender(ub.gender);
+      /** @type {Record<string, unknown>} */
       const body = {
         user_A: surveyDataToLifestyleUser(/** @type {Record<string, unknown>} */ (ua.surveyData)),
         user_B: surveyDataToLifestyleUser(/** @type {Record<string, unknown>} */ (ub.surveyData)),
@@ -132,6 +135,8 @@ router.get('/test', async (req, res) => {
         hard_filter_policy: 'fail',
         penalty_per_hard_violation: 30,
       };
+      if (ga === 'female' || ga === 'male') body.gender_a = ga;
+      if (gb === 'female' || gb === 'male') body.gender_b = gb;
 
       const py = await postCalculateMatch(body);
 

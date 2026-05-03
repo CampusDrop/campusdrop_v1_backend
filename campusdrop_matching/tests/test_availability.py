@@ -347,7 +347,7 @@ def test_age_gap_three_years_allowed() -> None:
 
 
 def test_partner_age_pref_requires_older_when_partner_older() -> None:
-    """A(2003)보다 B(2000)가 연상이면 A는 OLDER를 허용해야 한다."""
+    """여성(A) 출생연·선호 하드: 연상 후보라면 OLDER 허용이 있어야 한다."""
     ua = _u()
     ub = _u()
     out = compute_match(
@@ -356,6 +356,8 @@ def test_partner_age_pref_requires_older_when_partner_older() -> None:
         birth_year_a=2003,
         birth_year_b=2000,
         partner_age_preference_a=["YOUNGER", "SAME_AGE"],
+        gender_a="female",
+        gender_b="male",
     )
     assert out["match_status"] == "violated"
     assert any(
@@ -363,8 +365,8 @@ def test_partner_age_pref_requires_older_when_partner_older() -> None:
     )
 
 
-def test_partner_age_pref_b_side_when_partner_younger() -> None:
-    """B(2000)이 A(2003)를 연하로 보므로 B는 YOUNGER를 허용해야 한다."""
+def test_partner_age_pref_male_viewer_ignored() -> None:
+    """남성 출생연·연상연하 선택은 매칭 하드 규칙에 쓰이지 않는다."""
     ua = _u()
     ub = _u()
     out = compute_match(
@@ -372,7 +374,25 @@ def test_partner_age_pref_b_side_when_partner_younger() -> None:
         ub,
         birth_year_a=2003,
         birth_year_b=2000,
-        partner_age_preference_b=["OLDER", "SAME_AGE"],
+        partner_age_preference_a=["YOUNGER", "SAME_AGE"],
+        gender_a="male",
+        gender_b="female",
+    )
+    assert out["match_status"] == "ok"
+
+
+def test_partner_age_pref_female_b_screened() -> None:
+    """여성(B)에게만 연상·연하 선택 하드 규칙을 적용한다."""
+    ua = _u()
+    ub = _u()
+    out = compute_match(
+        ua,
+        ub,
+        birth_year_a=2000,
+        birth_year_b=2003,
+        partner_age_preference_b=["YOUNGER", "SAME_AGE"],
+        gender_a="male",
+        gender_b="female",
     )
     assert out["match_status"] == "violated"
     assert any(

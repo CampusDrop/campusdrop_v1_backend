@@ -794,6 +794,8 @@ router.get('/matches/slot-candidates', async (req, res) => {
             birth_year_b: candBirthYear,
             partner_age_preference_a: baseAgePrefs,
             partner_age_preference_b: candAgePrefs,
+            gender_a: 'female',
+            gender_b: 'male',
           }
         : {
             user_A: candidateProfile,
@@ -804,6 +806,8 @@ router.get('/matches/slot-candidates', async (req, res) => {
             birth_year_b: baseBirthYear,
             partner_age_preference_a: candAgePrefs,
             partner_age_preference_b: baseAgePrefs,
+            gender_a: 'male',
+            gender_b: 'female',
           };
 
       const py = await postCalculateMatch(body);

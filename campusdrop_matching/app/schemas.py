@@ -145,6 +145,9 @@ class CalculateMatchRequest(BaseModel):
     birth_year_b: int | None = None
     partner_age_preference_a: list[str] | None = None
     partner_age_preference_b: list[str] | None = None
+    # 연상·연하 하드 규칙은 해당 위치 사용자가 여성일 때만 적용(남성 survey 선호 무시).
+    gender_a: Literal["male", "female"] | None = None
+    gender_b: Literal["male", "female"] | None = None
 
 
 class CalculateMatchResponse(BaseModel):

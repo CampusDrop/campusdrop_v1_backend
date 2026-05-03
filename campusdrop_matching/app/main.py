@@ -46,6 +46,8 @@ def calculate_match(body: CalculateMatchRequest) -> CalculateMatchResponse:
         birth_year_b=body.birth_year_b,
         partner_age_preference_a=body.partner_age_preference_a,
         partner_age_preference_b=body.partner_age_preference_b,
+        gender_a=body.gender_a,
+        gender_b=body.gender_b,
     )
     return CalculateMatchResponse.model_validate(result)
 

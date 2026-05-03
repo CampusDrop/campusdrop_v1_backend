@@ -382,7 +382,10 @@ def collect_hard_violations(
     birth_year_b: int | None = None,
     partner_age_preference_a: list[str] | None = None,
     partner_age_preference_b: list[str] | None = None,
+    gender_a: Literal["male", "female"] | None = None,
+    gender_b: Literal["male", "female"] | None = None,
 ) -> list[HardHit]:
+    # partner_age_preference 하드: 해당 위치 사용자 gender가 female일 때만 적용.
     hits: list[HardHit] = []
 
     da = _canonical_department(department_a)
@@ -417,7 +420,7 @@ def collect_hard_violations(
                 )
             )
         prefs_a = _normalize_partner_age_preferences(partner_age_preference_a)
-        if not _viewer_accepts_partner_birth_year(ya, yb, prefs_a):
+        if gender_a == "female" and not _viewer_accepts_partner_birth_year(ya, yb, prefs_a):
             hits.append(
                 HardHit(
                     viewer="A",
@@ -432,7 +435,7 @@ def collect_hard_violations(
                 )
             )
         prefs_b = _normalize_partner_age_preferences(partner_age_preference_b)
-        if not _viewer_accepts_partner_birth_year(yb, ya, prefs_b):
+        if gender_b == "female" and not _viewer_accepts_partner_birth_year(yb, ya, prefs_b):
             hits.append(
                 HardHit(
                     viewer="B",
@@ -839,6 +842,8 @@ def compute_match(
     birth_year_b: int | None = None,
     partner_age_preference_a: list[str] | None = None,
     partner_age_preference_b: list[str] | None = None,
+    gender_a: Literal["male", "female"] | None = None,
+    gender_b: Literal["male", "female"] | None = None,
     # 배치 매칭 후보 루프: 점수·하드만 필요 per-axis·긴 문구 생략으로 메모리·GC 부담 완화.
     batch_candidate_pass: bool = False,
 ) -> dict[str, Any]:
@@ -853,6 +858,8 @@ def compute_match(
         birth_year_b=birth_year_b,
         partner_age_preference_a=partner_age_preference_a,
         partner_age_preference_b=partner_age_preference_b,
+        gender_a=gender_a,
+        gender_b=gender_b,
     )
     n_hits = len(hits)
 

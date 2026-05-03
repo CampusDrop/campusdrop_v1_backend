@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal
 
 from app.availability import availability_pair_compatible_for_matching, overlapping_slot_keys, slot_key_to_availability_slot
 from app.matching import compute_match
@@ -14,6 +14,11 @@ from app.schemas import (
     BatchUnmatchedFemale,
     LifestyleUser,
 )
+
+
+def _batch_gender(g: str | None) -> Literal["male", "female"] | None:
+    return g if g in ("male", "female") else None
+
 
 _MAX_EXACT_SLOT_OPTIMIZATION_EDGES = 220
 _MAX_EXACT_SLOT_OPTIMIZATION_FEMALES = 18
@@ -351,6 +356,7 @@ def run_batch_female_coverage_matching(
     남성·여성 쌍만 점수 계산(이성 매칭 최우선).
     `compute_match` 하드필터를 통과한 후보만 사용한다.
     겹치는 슬롯이 여러 개여도 쌍당 후보 간선은 `_MAX_OVERLAPPING_SLOT_KEYS_PER_PAIR`개만 둔다(정렬된 키 앞쪽).
+    phase6 연상·연하 선호 하드는 참가자 `gender`가 female인 쪽에만 적용한다.
 
     최적화 우선순위:
     1. 매칭 가능한 여성 수 최대화
@@ -402,6 +408,8 @@ def run_batch_female_coverage_matching(
                 birth_year_b=birth_by_id.get(id_hi),
                 partner_age_preference_a=age_pref_by_id.get(id_lo),
                 partner_age_preference_b=age_pref_by_id.get(id_hi),
+                gender_a=_batch_gender(gender_by_id.get(id_lo)),
+                gender_b=_batch_gender(gender_by_id.get(id_hi)),
                 batch_candidate_pass=True,
             )
             if result["match_status"] != "ok":
@@ -449,6 +457,8 @@ def run_batch_female_coverage_matching(
             birth_year_b=birth_by_id.get(hi),
             partner_age_preference_a=age_pref_by_id.get(lo),
             partner_age_preference_b=age_pref_by_id.get(hi),
+            gender_a=_batch_gender(gender_by_id.get(lo)),
+            gender_b=_batch_gender(gender_by_id.get(hi)),
         )
         report_raw = final_match.get("match_report")
         report = report_raw if isinstance(report_raw, dict) else None

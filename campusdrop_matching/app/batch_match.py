@@ -30,7 +30,6 @@ class _CandidateEdge:
     female_score: float
     male_score: float
     slot_key: str | None
-    match_report: dict[str, Any] | None
 
 
 @dataclass(frozen=True)
@@ -418,7 +417,6 @@ def run_batch_female_coverage_matching(
                         female_score=female_score,
                         male_score=male_score,
                         slot_key=slot_key,
-                        match_report=result.get("match_report") if isinstance(result.get("match_report"), dict) else None,
                     )
                 )
 
@@ -430,7 +428,22 @@ def run_batch_female_coverage_matching(
 
     pairs: list[BatchMatchPair] = []
     for edge in selected_edges:
-        report = edge.match_report
+        lo, hi = edge.user_a_id, edge.user_b_id
+        final_match = compute_match(
+            by_id[lo],
+            by_id[hi],
+            availability_a=avail_by_id[lo],
+            availability_b=avail_by_id[hi],
+            department_a=dept_by_id.get(lo),
+            department_b=dept_by_id.get(hi),
+            birth_year_a=birth_by_id.get(lo),
+            birth_year_b=birth_by_id.get(hi),
+            partner_age_preference_a=age_pref_by_id.get(lo),
+            partner_age_preference_b=age_pref_by_id.get(hi),
+        )
+        report_raw = final_match.get("match_report")
+        report = report_raw if isinstance(report_raw, dict) else None
+
         matched_slot = slot_key_to_availability_slot(edge.slot_key) if edge.slot_key is not None else None
         matched_slot_payload = matched_slot.model_dump() if matched_slot is not None else None
         if isinstance(report, dict):

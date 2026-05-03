@@ -383,6 +383,9 @@ def run_batch_female_coverage_matching(
                 time_candidate_counts[female_id] += 1
             if _pair_key(id_lo, id_hi) in forbidden_keys:
                 continue
+            if not availability_pair_compatible_for_matching(avail_by_id[female_id], avail_by_id[male_id]):
+                continue
+
             ua, ub = by_id[id_lo], by_id[id_hi]
             # viewer/candidate 고정: UUID 오름차순을 항상 (A, B)로 두어 쌍별 점수 정의를 일관되게 한다.
             result = compute_match(

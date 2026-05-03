@@ -842,6 +842,132 @@ def compute_match(
     # 배치 매칭 후보 루프: 점수·하드만 필요 per-axis·긴 문구 생략으로 메모리·GC 부담 완화.
     batch_candidate_pass: bool = False,
 ) -> dict[str, Any]:
+    hits = collect_hard_violations(
+        a,
+        b,
+        availability_a=availability_a,
+        availability_b=availability_b,
+        department_a=department_a,
+        department_b=department_b,
+        birth_year_a=birth_year_a,
+        birth_year_b=birth_year_b,
+        partner_age_preference_a=partner_age_preference_a,
+        partner_age_preference_b=partner_age_preference_b,
+    )
+    n_hits = len(hits)
+
+    violations_out = [
+        {
+            "viewer": h.viewer,
+            "candidate": h.candidate,
+            "rule": h.rule,
+            "constraint_field": h.constraint_field,
+            "state_field": h.state_field,
+            "detail": h.detail,
+        }
+        for h in hits
+    ]
+
+    if n_hits > 0:
+        match_status: Literal["ok", "violated"] = "violated"
+        final_score = 0.0
+        group_b_penalty = 100.0
+        group_a_score = 0.0
+        soft_entries: list[dict[str, Any]] = []
+        soft_total = 0.0
+
+        if batch_candidate_pass:
+            sem_v = int(survey_semantics().get("version", 1))
+            return {
+                "final_score": round(final_score, 2),
+                "match_status": match_status,
+                "group_a_score": round(group_a_score, 2),
+                "group_b_penalty": round(group_b_penalty, 2),
+                "match_report": {
+                    "batch_candidate_pass_only": True,
+                    "group_a": {"score_0_100": round(group_a_score, 2)},
+                    "group_b": {
+                        "violations": violations_out,
+                        "violation_count": n_hits,
+                        "strict_mode": True,
+                        "total_penalty_applied": round(group_b_penalty, 2),
+                    },
+                    "semantics": {
+                        "survey_schema_version": sem_v,
+                        "soft_penalties": soft_entries,
+                        "soft_penalty_total": round(soft_total, 2),
+                    },
+                },
+            }
+
+        w_rel = float(RELIGION_SOFT_WEIGHT)
+        w_sum = float(np.sum(_weight_vector()))
+        match_report_v: dict[str, Any] = {
+            "summary_text": "",
+            "continuous_axes_ranked_desc": [],
+            "group_a_component_scores_ranked_desc": [],
+            "group_a": {
+                "score_0_100": 0.0,
+                "likert_component_0_100": 0.0,
+                "blend": "mean(weighted_manhattan_with_religion_soft, weighted_cosine_likert_only)",
+                "continuous_weights": {k: float(CONTINUOUS_WEIGHTS.get(k, 1.0)) for k in CONTINUOUS_KEYS},
+                "religion_soft": {
+                    "weight": w_rel,
+                    "score_0_100": 0.0,
+                    "note": "하드 필터 위반으로 연속형·종교 소프트 점수를 계산하지 않았습니다.",
+                },
+                "manhattan": {
+                    "manhattan_score_0_100": 0.0,
+                    "likert_weight_sum": w_sum,
+                    "religion_soft_weight": w_rel,
+                    "religion_soft_score_0_100": 0.0,
+                },
+                "cosine": {
+                    "cosine_similarity": 0.0,
+                    "cosine_score_0_100": 0.0,
+                    "centering": 3.0,
+                    "weights": "sqrt(weight) per axis",
+                    "complementary_axes_flipped_for_B": sorted(_COMPLEMENTARY_LIKERT_KEYS),
+                },
+                "manhattan_per_dimension": [],
+                "best_aligned": [],
+                "worst_aligned": [],
+            },
+            "group_b": {
+                "violations": violations_out,
+                "violation_count": n_hits,
+                "strict_mode": True,
+                "total_penalty_applied": round(group_b_penalty, 2),
+            },
+            "highlights": {
+                "top_match_axes": [],
+                "largest_gaps": [],
+                "top_axes_by_match_score": [],
+                "bottom_axes_by_match_score": [],
+            },
+            "semantics": {
+                "survey_schema_version": int(survey_semantics().get("version", 1)),
+                "soft_penalties": soft_entries,
+                "soft_penalty_total": round(soft_total, 2),
+            },
+        }
+        match_report_v["summary_text"] = build_summary_text(
+            match_status, final_score, group_a_score, violations_out, [], []
+        )
+        reasons_list_v, reasons_nl_v, reasons_1l_v = build_numbered_reasons_ko(
+            match_status, final_score, violations_out, [], []
+        )
+        match_report_v["reasons_numbered_ko"] = reasons_list_v
+        match_report_v["reasons_joined_ko"] = reasons_nl_v
+        match_report_v["reasons_one_line_ko"] = reasons_1l_v
+        return {
+            "final_score": round(final_score, 2),
+            "match_status": match_status,
+            "group_a_score": round(group_a_score, 2),
+            "group_b_penalty": round(group_b_penalty, 2),
+            "match_report": match_report_v,
+        }
+
     rel_score, rel_meta = religion_soft_score_0_100(a, b)
     w_rel = float(RELIGION_SOFT_WEIGHT)
 
@@ -859,46 +985,13 @@ def compute_match(
     group_a_likert_only = float((likert_manhattan_only + c_score) / 2.0)
     group_a_score = float((m_score + c_score) / 2.0)
 
-    hits = collect_hard_violations(
-        a,
-        b,
-        availability_a=availability_a,
-        availability_b=availability_b,
-        department_a=department_a,
-        department_b=department_b,
-        birth_year_a=birth_year_a,
-        birth_year_b=birth_year_b,
-        partner_age_preference_a=partner_age_preference_a,
-        partner_age_preference_b=partner_age_preference_b,
-    )
-    n_hits = len(hits)
-
-    soft_entries: list[dict[str, Any]] = []
-    if n_hits == 0:
-        soft_entries = collect_soft_penalty_entries(a, b)
+    soft_entries = collect_soft_penalty_entries(a, b)
     soft_total = sum(float(e["points"]) for e in soft_entries)
 
-    if n_hits > 0:
-        match_status: Literal["ok", "violated"] = "violated"
-        final_score = 0.0
-        group_b_penalty = 100.0
-    else:
-        match_status = "ok"
-        base_score = max(0.0, min(100.0, group_a_score))
-        final_score = max(0.0, min(100.0, base_score - soft_total))
-        group_b_penalty = 0.0
-
-    violations_out = [
-        {
-            "viewer": h.viewer,
-            "candidate": h.candidate,
-            "rule": h.rule,
-            "constraint_field": h.constraint_field,
-            "state_field": h.state_field,
-            "detail": h.detail,
-        }
-        for h in hits
-    ]
+    match_status = "ok"
+    base_score = max(0.0, min(100.0, group_a_score))
+    final_score = max(0.0, min(100.0, base_score - soft_total))
+    group_b_penalty = 0.0
 
     if batch_candidate_pass:
         sem_v = int(survey_semantics().get("version", 1))
@@ -979,7 +1072,7 @@ def compute_match(
         axes_ranked,
         components_ranked,
     )
-    if match_status == "ok" and soft_entries:
+    if soft_entries:
         idx = len(reasons_list) + 1
         extra_body = (
             f"선호(소프트) 조정 {len(soft_entries)}건, 합계 {soft_total:.1f}점 감점 "

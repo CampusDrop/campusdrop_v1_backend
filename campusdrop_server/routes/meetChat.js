@@ -3,9 +3,10 @@
 const express = require('express');
 const { prisma } = require('../lib/prisma');
 const { requireUserUuid } = require('../lib/requireUserUuid');
-const { verifyMeetChatQrToken, meetChatQrSecret } = require('../lib/meetChatQr');
+const { verifyMeetChatQrToken, meetChatQrSecret, signMeetChatQrToken } = require('../lib/meetChatQr');
 const { resolveMeetingStartsAt } = require('../lib/meetingStartsAtDerive');
 const { getChatWindow, isWithinUserChatWindow, formatMeetChatRoomTitle } = require('../lib/meetChatRoom');
+const { findUserMatchingInPeriod, getMatchingPeriodStart } = require('../lib/matchPolicy');
 
 const router = express.Router();
 
@@ -118,6 +119,75 @@ router.get('/access', requireUserUuid, async (req, res) => {
     chatWindowEnd: windowEnd.toISOString(),
     canUseChat: inWindow,
   });
+});
+
+/**
+ * @openapi
+ * /api/meet-chat/my-qr-token:
+ *   get:
+ *     tags: [MeetChat]
+ *     summary: 로그인 유저 본인 매칭용 채팅 QR JWT 발급
+ *     description: |
+ *       물리 QR 없이 앱에서 `/meet/chat` 등으로 진입할 때 사용합니다.
+ *       `matchingId` 생략 시 이번 매칭 운영 주(`getMatchingPeriodStart`) 기준 본인 짝 1건에 대해 발급합니다.
+ *       `matchingId` 지정 시 해당 매칭의 참가자(A/B)인 경우에만 발급합니다.
+ *     security:
+ *       - UserUuidAuth: []
+ */
+router.get('/my-qr-token', requireUserUuid, async (req, res) => {
+  if (!meetChatQrSecret()) {
+    return qrDisabledResponse(res);
+  }
+
+  const uid = req.user.id;
+  const midRaw = req.query.matchingId ?? req.query.matching_id;
+  const midOpt = typeof midRaw === 'string' ? midRaw.trim() : '';
+
+  /** @type {{ id: string } | null} */
+  let row = null;
+  /** @type {string} */
+  let matchingId;
+
+  if (midOpt) {
+    if (!isUuid(midOpt)) {
+      return res.status(400).json({ error: 'matchingId는 유효한 UUID여야 합니다.' });
+    }
+    try {
+      row = await prisma.matching.findUnique({
+        where: { id: midOpt },
+        select: { id: true, userAId: true, userBId: true },
+      });
+    } catch (err) {
+      console.error('meetChat /my-qr-token load:', err);
+      return res.status(500).json({ error: '매칭 정보를 불러오지 못했습니다.' });
+    }
+    if (!row) {
+      return res.status(404).json({ error: '매칭을 찾을 수 없습니다.' });
+    }
+    if (row.userAId !== uid && row.userBId !== uid) {
+      return res.status(403).json({ error: '이 매칭의 참가자가 아닙니다.' });
+    }
+    matchingId = row.id;
+  } else {
+    const periodStart = getMatchingPeriodStart();
+    try {
+      row = await findUserMatchingInPeriod(prisma, uid, periodStart);
+    } catch (err) {
+      console.error('meetChat /my-qr-token period match:', err);
+      return res.status(500).json({ error: '매칭 정보를 불러오지 못했습니다.' });
+    }
+    if (!row) {
+      return res.status(404).json({ error: '이번 주기에 매칭이 없습니다.' });
+    }
+    matchingId = row.id;
+  }
+
+  const qrToken = signMeetChatQrToken(matchingId);
+  if (!qrToken) {
+    return res.status(503).json({ error: 'QR 토큰을 생성하지 못했습니다.' });
+  }
+
+  return res.status(200).json({ matchingId, qrToken });
 });
 
 /**

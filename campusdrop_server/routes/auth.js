@@ -574,11 +574,13 @@ router.get('/me', requireUserUuid, async (req, res) => {
   const u = req.user;
   const studentId = u.studentId != null ? String(u.studentId).trim() : null;
   const birthYear = u.birthYear != null ? String(u.birthYear).trim() : null;
+  const department = u.department != null ? String(u.department).trim() : null;
   const genderTrait = u.trait?.gender != null ? String(u.trait.gender).trim() : null;
   const genderLabel = traitGenderLabelKo(u.trait?.gender) || null;
   const profile = {
     studentId: studentId || null,
     birthYear: birthYear || null,
+    department: department || null,
     gender: genderLabel,
     genderTrait: genderTrait || null,
   };

@@ -418,6 +418,11 @@ const swaggerDefinition = {
             properties: {
               studentId: { type: 'string', nullable: true },
               birthYear: { type: 'string', nullable: true },
+              department: {
+                type: 'string',
+                nullable: true,
+                description: '`Identity.department` (등록된 학과 문자열 또는 null)',
+              },
               gender: { type: 'string', nullable: true, description: '설문 UI 정렬용 한글(남성/여성). 없으면 null' },
               genderTrait: {
                 type: 'string',

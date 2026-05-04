@@ -1,5 +1,9 @@
 # 통합 배포: repo 루트(campusdrop_backend)에서 실행
 # cp .env.example .env 후 값 수정 → docker compose up -d --build
+#
+# Python 매칭 API(`matching`)는 기본 스택에서 빠짐. 필요 시:
+#   docker compose --profile matching up -d
+# 매칭 없이 두면 /api/match·배치 등 Python 호출은 실패할 수 있음.
 
 services:
   db:
@@ -37,6 +41,8 @@ services:
       retries: 10
 
   matching:
+    profiles:
+      - matching
     build:
       context: .
       dockerfile: campusdrop_matching/Dockerfile
@@ -83,8 +89,6 @@ services:
       db:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      matching:
         condition: service_healthy
 
 volumes:

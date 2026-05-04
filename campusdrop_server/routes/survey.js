@@ -14,14 +14,51 @@ const { surveySchoolAccessOk, SURVEY_ACCESS_DENIED } = require('../lib/surveyAcc
 const router = express.Router();
 
 /**
+ * `Trait` 한 행 → `GET /api/survey/me` JSON 본문.
+ * @param {string} userId `Identity.id` (= `Trait.id`)
+ * @param {{
+ *   surveyData: unknown;
+ *   gender: string | null;
+ *   surveySubmittedAt: Date | string | null;
+ *   updatedAt: Date | string;
+ * } | null} row
+ */
+function surveyMePayloadFromTraitRow(userId, row) {
+  const hasSurvey = Boolean(
+    row &&
+      row.surveyData !== null &&
+      row.surveyData !== undefined &&
+      typeof row.surveyData === 'object',
+  );
+  return {
+    userId,
+    hasSurvey,
+    surveyData: hasSurvey ? row.surveyData : null,
+    gender: row?.gender ?? null,
+    surveySubmittedAt: row?.surveySubmittedAt
+      ? new Date(row.surveySubmittedAt).toISOString()
+      : null,
+    updatedAt: row?.updatedAt ? new Date(row.updatedAt).toISOString() : null,
+  };
+}
+
+/**
  * @openapi
  * /api/survey/me:
  *   get:
  *     tags: [Survey]
- *     summary: 현재 세션(Identity.id)에 저장된 설문 JSON 조회
+ *     summary: 현재 세션에 저장된 설문 본문(`Trait.surveyData`) 조회
  *     description: |
- *       `Trait.surveyData`를 그대로 반환합니다. 아직 저장 전이면 `hasSurvey` false·`surveyData` null.
- *       접근 조건은 `POST /api/survey/submit`과 동일(학교 이메일·승인된 증빙·또는 유효한 이미지 가입 세션).
+ *       **인증:** `x-user-uuid` (미들웨어 `requireUserUuid`).
+ *
+ *       **응답 요약**
+ *       - `hasSurvey` / `surveyData`: `Trait.surveyData`가 객체로 있으면 저장됨으로 간주. 없으면 `hasSurvey` false, `surveyData` null.
+ *       - `gender`: `Trait.gender` (저장된 설문 기준).
+ *       - `surveySubmittedAt`, `updatedAt`: ISO 8601 문자열 또는 null.
+ *
+ *       **403:** 학교 소속 미충족(`surveySchoolAccessOk` false)이거나, 이메일·증빙 없이 `imageUuidAccessUntil`만 쓰는 계정에서 그 기한 만료 시 `IMAGE_UUID_ACCESS_EXPIRED` 등.
+ *
+ *       설문 **제출 가능 기간·날짜 선택지**는 인증 없이 `GET /api/survey/availability-window` 참고.
  *     security:
  *       - UserUuidAuth: []
  *     responses:
@@ -59,12 +96,7 @@ router.get('/me', async (req, res) => {
       select: { surveyData: true, gender: true, surveySubmittedAt: true, updatedAt: true },
     });
 
-    const hasSurvey = Boolean(
-      row &&
-        row.surveyData !== null &&
-        row.surveyData !== undefined &&
-        typeof row.surveyData === 'object',
-    );
+    const body = surveyMePayloadFromTraitRow(req.user.id, row);
 
     await writeAccessLog({
       actorType: 'user_session',
@@ -73,19 +105,10 @@ router.get('/me', async (req, res) => {
       resource: 'GET /api/survey/me',
       ip: req.ip || null,
       userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
-      metadata: { hasSurvey },
+      metadata: { hasSurvey: body.hasSurvey },
     });
 
-    return res.status(200).json({
-      userId: req.user.id,
-      hasSurvey,
-      surveyData: hasSurvey ? row.surveyData : null,
-      gender: row?.gender ?? null,
-      surveySubmittedAt: row?.surveySubmittedAt
-        ? new Date(row.surveySubmittedAt).toISOString()
-        : null,
-      updatedAt: row?.updatedAt ? new Date(row.updatedAt).toISOString() : null,
-    });
+    return res.status(200).json(body);
   } catch (err) {
     console.error('survey GET /me error:', err);
     return res.status(500).json({ error: '설문 조회 중 오류가 발생했습니다.' });

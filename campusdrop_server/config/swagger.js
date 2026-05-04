@@ -321,6 +321,51 @@ const swaggerDefinition = {
           },
         },
       },
+      MatchWeekStatusResponse: {
+        type: 'object',
+        properties: {
+          periodStart: { type: 'string', format: 'date-time', description: '운영 주 시작(`match/request`와 동일)' },
+          periodEnd: { type: 'string', format: 'date-time', description: '운영 주 끝' },
+          millisecondsUntilPeriodEnd: {
+            type: 'integer',
+            minimum: 0,
+            description: '운영 주 종료까지 남은 ms(서버 시각 기준)',
+          },
+          meetingTargetPeriodStart: {
+            type: 'string',
+            format: 'date-time',
+            description: '이번 신청으로 적용되는 만남 대상 주 시작',
+          },
+          meetingTargetPeriodEnd: { type: 'string', format: 'date-time' },
+          submissionWindow: { type: 'object', additionalProperties: true },
+          weeklySurveySubmittedForTargetWeek: {
+            type: 'boolean',
+            description: '`WeeklySurveySubmission`이 대상 만남 주에 존재하면 true',
+          },
+          activeMatchingThisPeriod: {
+            type: 'object',
+            nullable: true,
+            description: '현재 운영 주에 저장된 짝(없으면 null)',
+            properties: {
+              matchingId: { type: 'string', format: 'uuid' },
+              partnerId: { type: 'string', format: 'uuid' },
+              score: { type: 'number' },
+              matchedAt: { type: 'string', format: 'date-time' },
+              meetingStartsAt: { type: 'string', format: 'date-time', nullable: true },
+              periodStartStored: { type: 'string', format: 'date-time', nullable: true },
+            },
+          },
+          readyToCallMatchRequest: {
+            type: 'boolean',
+            description: '`POST /api/match/request`의 사전 조건(설문·성별·주간 제출) 충족 여부. 후보 풀 부족 등은 호출 전까지 알 수 없음',
+          },
+          matchRequestPrecheckMessages: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '`readyToCallMatchRequest`가 false일 때 사용자에게 보여줄 문구들',
+          },
+        },
+      },
       KakaoSkillResponse: {
         type: 'object',
         description: '카카오 i 오픈빌더 스킬 응답 v2.0',

@@ -176,6 +176,40 @@ async function deleteMatchingsForUsersInPeriod(prisma, periodStart, userIds) {
   });
 }
 
+/**
+ * 현재 매칭 운영 주(`periodStart` ~)에 사용자가 포함된 `Matching` 1건(있을 때).
+ * @param {import('@prisma/client').PrismaClient} prisma
+ * @param {string} userId `Identity.id`
+ * @param {Date} periodStart `getMatchingPeriodStart()`와 동일 기준
+ */
+async function findUserMatchingInPeriod(prisma, userId, periodStart) {
+  const pe = getMatchingPeriodEnd(periodStart);
+  return prisma.matching.findFirst({
+    where: {
+      AND: [
+        { OR: [{ userAId: userId }, { userBId: userId }] },
+        {
+          OR: [
+            { periodStart },
+            {
+              AND: [{ periodStart: null }, { matchedAt: { gte: periodStart, lt: pe } }],
+            },
+          ],
+        },
+      ],
+    },
+    select: {
+      id: true,
+      userAId: true,
+      userBId: true,
+      score: true,
+      matchedAt: true,
+      meetingStartsAt: true,
+      periodStart: true,
+    },
+  });
+}
+
 module.exports = {
   MIN_MATCH_SCORE,
   MATCHING_PERIOD_ANCHOR_ISO,
@@ -187,4 +221,5 @@ module.exports = {
   getSamePeriodLockedPairTuplesExceptUser,
   getUserIdsMatchedInPeriod,
   deleteMatchingsForUsersInPeriod,
+  findUserMatchingInPeriod,
 };

@@ -10,6 +10,7 @@ const {
   getMatchingPeriodStart,
   getMatchingPeriodEnd,
   deleteMatchingsForUsersInPeriod,
+  findUserMatchingInPeriod,
 } = require('../lib/matchPolicy');
 const {
   buildSurveySubmissionWindowForApplicationPeriod,
@@ -193,6 +194,120 @@ router.get('/test', async (req, res) => {
 
     return res.status(500).json({ error: '매칭 테스트 처리 중 서버 오류가 발생했습니다.' });
   }
+});
+
+/**
+ * @openapi
+ * /api/match/week-status:
+ *   get:
+ *     tags: [Match]
+ *     summary: 이번 매칭 운영 주·대상 만남 주·남은 시간·주간 설문·현재 주기 짝 여부
+ *     description: |
+ *       `periodStart`/`periodEnd`는 `POST /api/match/request`와 동일한 **운영 주(화 00:00 KST 앵커 기준 7일)**.
+ *       `millisecondsUntilPeriodEnd`는 그 운영 주가 끝나기까지 남은 ms(0 이상).
+ *       `meetingTargetPeriod*`는 이 운영 주에 제출한 설문이 적용되는 **만남 가능 날짜가 속한 주**(`surveyAvailability`와 동일).
+ *       주당 매칭 **횟수 상한**은 두지 않았고, 같은 주에 `/match/request`를 다시 호출하면 짝이 갱신될 수 있습니다.
+ *     security:
+ *       - UserUuidAuth: []
+ *     responses:
+ *       200:
+ *         description: 현재 주기 요약
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/MatchWeekStatusResponse'
+ *       401:
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorMessage'
+ *       500:
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorMessage'
+ */
+router.get('/week-status', async (req, res) => {
+  const self = req.user;
+  const periodStart = getMatchingPeriodStart();
+  const periodEnd = getMatchingPeriodEnd(periodStart);
+  const targetPeriodStart = getSurveyTargetPeriodStartForApplicationPeriod(periodStart);
+  const meetingTargetPeriodEnd = getMatchingPeriodEnd(targetPeriodStart);
+  const submissionWindow = buildSurveySubmissionWindowForApplicationPeriod(periodStart);
+  const nowMs = Date.now();
+  const millisecondsUntilPeriodEnd = Math.max(0, periodEnd.getTime() - nowMs);
+
+  const selfSurvey = self.trait?.surveyData;
+  const hasSurveyObject =
+    selfSurvey !== null && selfSurvey !== undefined && typeof selfSurvey === 'object';
+  const selfGender = normalizeTraitGender(self.trait?.gender);
+
+  let weeklySurveySubmittedForTargetWeek = false;
+  try {
+    const sub = await prisma.weeklySurveySubmission.findUnique({
+      where: {
+        identityId_targetPeriodStart: {
+          identityId: self.id,
+          targetPeriodStart,
+        },
+      },
+      select: { id: true },
+    });
+    weeklySurveySubmittedForTargetWeek = Boolean(sub);
+  } catch (err) {
+    console.error('match /week-status weekly survey load error:', err);
+    return res.status(500).json({ error: '주차별 설문 제출 여부를 확인하지 못했습니다.' });
+  }
+
+  let row;
+  try {
+    row = await findUserMatchingInPeriod(prisma, self.id, periodStart);
+  } catch (err) {
+    console.error('match /week-status matching load error:', err);
+    return res.status(500).json({ error: '매칭 이력을 불러오지 못했습니다.' });
+  }
+
+  let activeMatchingThisPeriod = null;
+  if (row) {
+    const partnerId = row.userAId === self.id ? row.userBId : row.userAId;
+    activeMatchingThisPeriod = {
+      matchingId: row.id,
+      partnerId,
+      score: row.score,
+      matchedAt: row.matchedAt.toISOString(),
+      meetingStartsAt: row.meetingStartsAt ? row.meetingStartsAt.toISOString() : null,
+      periodStartStored: row.periodStart ? row.periodStart.toISOString() : null,
+    };
+  }
+
+  /** @type {string[]} */
+  const matchRequestPrecheckMessages = [];
+  if (!hasSurveyObject) {
+    matchRequestPrecheckMessages.push('설문을 먼저 제출해 주세요.');
+  }
+  if (!selfGender) {
+    matchRequestPrecheckMessages.push(
+      '이성 매칭을 위해 설문에 남성/여성 성별이 필요합니다. 설문을 다시 제출해 주세요.',
+    );
+  }
+  if (!weeklySurveySubmittedForTargetWeek) {
+    matchRequestPrecheckMessages.push(
+      '이번 매칭 주기에 참여하려면 현재 신청 기간에 설문을 제출해 주세요.',
+    );
+  }
+
+  return res.status(200).json({
+    periodStart: periodStart.toISOString(),
+    periodEnd: periodEnd.toISOString(),
+    millisecondsUntilPeriodEnd,
+    meetingTargetPeriodStart: targetPeriodStart.toISOString(),
+    meetingTargetPeriodEnd: meetingTargetPeriodEnd.toISOString(),
+    submissionWindow,
+    weeklySurveySubmittedForTargetWeek,
+    activeMatchingThisPeriod,
+    readyToCallMatchRequest: matchRequestPrecheckMessages.length === 0,
+    matchRequestPrecheckMessages,
+  });
 });
 
 /**

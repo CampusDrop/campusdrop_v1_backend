@@ -577,19 +577,21 @@ router.get('/me', requireUserUuid, async (req, res) => {
   const department = u.department != null ? String(u.department).trim() : null;
   const genderTrait = u.trait?.gender != null ? String(u.trait.gender).trim() : null;
   const genderLabel = traitGenderLabelKo(u.trait?.gender) || null;
+  const schoolVerified = userHasSchoolVerification(u);
   const profile = {
     studentId: studentId || null,
     birthYear: birthYear || null,
     department: department || null,
     gender: genderLabel,
     genderTrait: genderTrait || null,
+    schoolVerified,
   };
   return res.status(200).json({
     uuid: u.id,
     email: u.email ?? null,
     kakaoLinkPin: u.kakaoLinkPin ?? null,
     kakaoLinked: Boolean(u.kakaoId && String(u.kakaoId).trim()),
-    schoolVerified: userHasSchoolVerification(u),
+    schoolVerified,
     profile,
     participantMeta: { profile: { ...profile } },
     privacyPolicyAgreed: Boolean(u.privacyPolicyAgreed),

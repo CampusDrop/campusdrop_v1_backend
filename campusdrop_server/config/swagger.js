@@ -430,6 +430,10 @@ const swaggerDefinition = {
                 enum: ['male', 'female'],
                 description: 'DB Trait.gender',
               },
+              schoolVerified: {
+                type: 'boolean',
+                description: '학교 인증 여부 (`email` 도메인·승인된 증빙·유효 이미지 세션). 최상단 `schoolVerified`와 동일',
+              },
             },
           },
           participantMeta: {

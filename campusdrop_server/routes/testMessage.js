@@ -1,5 +1,5 @@
 const express = require('express');
-const CoolsmsMessageService = require('coolsms-node-sdk').default;
+const { assertSolapiFriendTalkEnv, sendFriendTalkCta } = require('../lib/solapiFriendTalkSend');
 
 const router = express.Router();
 
@@ -11,36 +11,22 @@ const router = express.Router();
  * (PowerShell에서 `curl`은 Invoke-WebRequest 별칭일 수 있으므로 curl.exe 사용 권장)
  */
 router.post('/test-message', async (req, res) => {
-  const apiKey = (process.env.SOLAPI_API_KEY || '').trim();
-  const apiSecret = (process.env.SOLAPI_API_SECRET || '').trim();
-  const from = (process.env.SENDER_NUMBER || '').trim();
-  const pfId = (process.env.KAKAO_PF_ID || '').trim();
-
-  if (!apiKey || !apiSecret || !from || !pfId) {
-    return res.status(500).json({
-      ok: false,
-      error: 'Missing env: SOLAPI_API_KEY, SOLAPI_API_SECRET, SENDER_NUMBER, KAKAO_PF_ID',
-    });
+  const missingEnv = assertSolapiFriendTalkEnv();
+  if (missingEnv) {
+    return res.status(500).json({ ok: false, error: missingEnv });
   }
 
+  const from = (process.env.SENDER_NUMBER || '').trim();
   const text =
     '[캠퍼스드롭 매칭 완료! 💘]\n드디어 매칭이 성사되었습니다!\n- 시간: 오늘 오후 6시\n- 장소: 세종대 후문 커피니\n설레는 만남 되시길 바랍니다!';
 
-  const message = {
-    to: from,
-    from,
-    type: 'CTA',
-    text,
-    kakaoOptions: {
-      pfId,
-    },
-  };
-
   try {
-    const messageService = new CoolsmsMessageService(apiKey, apiSecret);
-    const result = await messageService.sendOne(message);
+    const result = await sendFriendTalkCta({ to: from, text });
     return res.json({ ok: true, result });
   } catch (err) {
+    if (err && err.code === 'SOLAPI_CONFIG') {
+      return res.status(500).json({ ok: false, error: err.message || String(err) });
+    }
     const name = err && err.name ? String(err.name) : 'Error';
     const messageText = err && err.message ? String(err.message) : String(err);
     return res.status(502).json({ ok: false, error: { name, message: messageText } });

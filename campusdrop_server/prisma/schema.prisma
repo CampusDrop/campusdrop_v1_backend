@@ -145,6 +145,7 @@ model Matching {
   userA Identity @relation("MatchPairUserA", fields: [userAId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   userB Identity @relation("MatchPairUserB", fields: [userBId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   chatMessages MeetingChatMessage[]
+  friendTalkRsvp MatchingFriendTalkRsvp?
 
   @@index([matchedAt])
   @@index([periodStart])
@@ -152,6 +153,35 @@ model Matching {
   @@index([userBId])
   @@index([meetingStartsAt])
   @@map("matchings")
+}
+
+/// 7번(월요 일정)·6번(전날) 친구톡 응답·수신번호 보관. 매칭 1행당 최대 1행.
+model MatchingFriendTalkRsvp {
+  matchingId String @id @map("matching_id") @db.Uuid
+  matching   Matching @relation(fields: [matchingId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  /// Solapi 발신 대상(01… 11자리). userAId / userBId 순과 동일.
+  phoneUserA String @map("phone_user_a")
+  phoneUserB String @map("phone_user_b")
+
+  /// 7번(일정 안내) 버튼 응답: YES | NO
+  mondayRsvpUserA String? @map("monday_rsvp_user_a")
+  mondayRsvpUserB String? @map("monday_rsvp_user_b")
+  /// 6번(전날) 버튼 응답
+  dayEveRsvpUserA String? @map("day_eve_rsvp_user_a")
+  dayEveRsvpUserB String? @map("day_eve_rsvp_user_b")
+
+  /// 7번에서 한쪽이라도 NO 확정 시 true → 6번 발송 생략
+  skipDayEveReminder Boolean @default(false) @map("skip_day_eve_reminder")
+
+  /// 7번 후속 확정/취소 친구톡을 이미 보냈으면 true (중복 방지)
+  mondayOutcomeSent Boolean @default(false) @map("monday_outcome_sent")
+  /// 6번(전날) 친구톡을 수동·크론으로 보낸 시각 — 중복 발송 방지
+  dayEveReminderSentAt DateTime? @map("day_eve_reminder_sent_at")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("matching_friend_talk_rsvps")
 }
 
 /// 소개팅 매칭 단위 QR 채팅 메시지. 행은 유지되며 관리자는 항상 조회 가능.

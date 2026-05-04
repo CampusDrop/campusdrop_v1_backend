@@ -12,6 +12,7 @@ const { requireUserUuid } = require('./lib/requireUserUuid');
 const { requireImageUuidAccessForSurveyApis } = require('./lib/imageUuidAccess');
 const { disconnectRedis } = require('./lib/redis');
 const { scheduleKakaoMatchingReminderCron } = require('./lib/kakaoMatchingReminderCron');
+const { scheduleFriendTalkDayEveCron } = require('./lib/friendTalkDayEveCron');
 const swaggerUi = require('swagger-ui-express');
 const { buildSwaggerSpec } = require('./config/swagger');
 
@@ -93,7 +94,9 @@ app.use('/api/admin', require('./routes/admin'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/auth', require('./routes/schoolProof'));
 app.use('/api/kakao', require('./routes/kakao'));
+app.use('/api/friend-talk', require('./routes/friendTalkRsvp'));
 app.use('/api', require('./routes/testMessage'));
+app.use('/api/notify', requireUserUuid, require('./routes/friendTalkNotify'));
 app.use('/api/stats', require('./routes/stats'));
 app.use('/api/landing-like', require('./routes/landingLike'));
 app.use('/api/departments', require('./routes/departments'));
@@ -137,6 +140,7 @@ const server = app.listen(PORT, HOST, () => {
     console.log(`========================================`);
 
     scheduleKakaoMatchingReminderCron();
+    scheduleFriendTalkDayEveCron();
 });
 
 async function shutdown() {

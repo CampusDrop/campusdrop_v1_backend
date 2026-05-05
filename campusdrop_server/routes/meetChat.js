@@ -130,6 +130,7 @@ router.get('/access', requireUserUuid, async (req, res) => {
  *     description: |
  *       물리 QR 없이 앱에서 `/meet/chat` 등으로 진입할 때 사용합니다.
  *       `matchingId` 생략 시 이번 매칭 운영 주(`getMatchingPeriodStart`) 기준 본인 짝 1건에 대해 발급합니다.
+ *       이때 짝이 없으면 200·`hasMatching: false`·`qrToken` null (에러 아님).
  *       `matchingId` 지정 시 해당 매칭의 참가자(A/B)인 경우에만 발급합니다.
  *     security:
  *       - UserUuidAuth: []
@@ -177,7 +178,11 @@ router.get('/my-qr-token', requireUserUuid, async (req, res) => {
       return res.status(500).json({ error: '매칭 정보를 불러오지 못했습니다.' });
     }
     if (!row) {
-      return res.status(404).json({ error: '이번 주기에 매칭이 없습니다.' });
+      return res.status(200).json({
+        hasMatching: false,
+        matchingId: null,
+        qrToken: null,
+      });
     }
     matchingId = row.id;
   }
@@ -187,7 +192,11 @@ router.get('/my-qr-token', requireUserUuid, async (req, res) => {
     return res.status(503).json({ error: 'QR 토큰을 생성하지 못했습니다.' });
   }
 
-  return res.status(200).json({ matchingId, qrToken });
+  return res.status(200).json({
+    hasMatching: true,
+    matchingId,
+    qrToken,
+  });
 });
 
 /**

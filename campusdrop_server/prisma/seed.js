@@ -4,7 +4,6 @@ require('dotenv').config({ path: path.resolve(__dirname, '..', '.env'), override
 
 const { PrismaClient } = require('@prisma/client');
 const { normalizeEmail } = require('../lib/sjuEmail');
-const { hashEmailForStorage } = require('../lib/identityAuth');
 const { hashAdminPassword } = require('../lib/adminDbAuth');
 const { validateSurveyPayload } = require('../lib/surveyValidation');
 
@@ -262,7 +261,7 @@ const surveyRandomMix = () =>
     },
   });
 
-/** `plainEmailForHash` → 정규화 후 `Identity.email`·`emailHash`에 반영. */
+/** `plainEmailForHash` → 정규화 후 `Identity.email`에 반영. */
 const SEED_IDENTITIES = [
   {
     id: '00000000-0000-4000-8000-000000000001',
@@ -315,12 +314,10 @@ async function main() {
 
   for (const row of SEED_IDENTITIES) {
     const normalized = normalizeEmail(row.plainEmailForHash);
-    const emailHash = await hashEmailForStorage(normalized);
     await prisma.identity.create({
       data: {
         id: row.id,
         email: normalized,
-        emailHash,
         privacyPolicyAgreed: true,
         trait: {
           create: {

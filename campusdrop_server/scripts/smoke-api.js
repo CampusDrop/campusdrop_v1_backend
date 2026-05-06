@@ -20,7 +20,6 @@ const serverRoot = path.resolve(__dirname, '..');
 require('dotenv').config({ path: path.resolve(serverRoot, '..', '.env') });
 require('dotenv').config({ path: path.resolve(serverRoot, '.env'), override: true });
 
-const { hashEmailForStorage } = require('../lib/identityAuth');
 const { normalizeEmail } = require('../lib/sjuEmail');
 const { getDummyMatchUsers } = require('../lib/matchDummyUsers');
 
@@ -57,12 +56,10 @@ function assert(cond, msg) {
 
 async function ensureSmokeIdentity(prisma) {
   await prisma.identity.deleteMany({ where: { id: SMOKE_UUID } });
-  const emailHash = await hashEmailForStorage(normalizeEmail(SMOKE_EMAIL));
   await prisma.identity.create({
     data: {
       id: SMOKE_UUID,
       email: normalizeEmail(SMOKE_EMAIL),
-      emailHash,
       privacyPolicyAgreed: true,
       trait: { create: {} },
     },

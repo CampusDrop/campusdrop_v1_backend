@@ -34,7 +34,6 @@
 |------|------|
 | `id` | 계정 UUID(내부 식별자) |
 | `email` | 정규화된 `@sju.ac.kr` 학교 이메일(없을 수 있음) |
-| `emailHash` | 정규화 이메일에 대한 bcrypt 해시 |
 | `kakaoId` | 카카오 챗봇/연동 사용자 ID 문자열(없을 수 있음) |
 | `kakaoLinkPin` | 챗봇 연동용 4자리 PIN(전역 유일, 연동 후 null 가능) |
 | `blockedAt` | 관리자 차단 시각 |

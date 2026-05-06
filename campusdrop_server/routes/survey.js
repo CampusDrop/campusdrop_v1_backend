@@ -10,8 +10,23 @@ const { upsertWeeklySurveySubmission } = require('../lib/weeklySurveySubmission'
 const { writeAccessLog } = require('../lib/accessLog');
 const { storePinForIdentity } = require('../lib/pinSession');
 const { surveySchoolAccessOk, SURVEY_ACCESS_DENIED } = require('../lib/surveyAccess');
+const { encryptPhoneForStorage, decryptPhoneFromStorage } = require('../lib/phoneCrypto');
+const { sendFriendTalkCta } = require('../lib/solapiFriendTalkSend');
 
 const router = express.Router();
+const FIRST_WEEKLY_SURVEY_CONFIRMED_TEXT =
+  '설문 제출이 완료되어 이번 주 매칭 신청이 인증되었습니다 ✅\n\n좋은 인연을 찾을 수 있도록 정성껏 매칭해드릴게요!';
+
+function phoneFromExistingIdentity(user) {
+  if (!user || !user.phoneEncrypted) {
+    return null;
+  }
+  try {
+    return decryptPhoneFromStorage(user.phoneEncrypted);
+  } catch (_) {
+    return null;
+  }
+}
 
 /**
  * `Trait` 한 행 → `GET /api/survey/me` JSON 본문.
@@ -197,7 +212,7 @@ router.post('/submit', async (req, res) => {
   try {
     const surveySubmittedAt = new Date();
     const surveyGender = String(validation.data.gender);
-    const trait = await prisma.$transaction(async (tx) => {
+    const txResult = await prisma.$transaction(async (tx) => {
       const savedTrait = await tx.trait.upsert({
         where: { id: req.user.id },
         create: {
@@ -213,7 +228,7 @@ router.post('/submit', async (req, res) => {
         },
         select: { id: true },
       });
-      await upsertWeeklySurveySubmission(tx, {
+      const weekly = await upsertWeeklySurveySubmission(tx, {
         identityId: req.user.id,
         surveyData: validation.data,
         gender: surveyGender,
@@ -222,24 +237,48 @@ router.post('/submit', async (req, res) => {
       });
 
       const profileCols = identityProfileColumnsFromSurveyData(validation.data);
+      let latestPhoneForNotification = profileCols.phone || phoneFromExistingIdentity(req.user);
       if (Object.keys(profileCols).length > 0) {
+        const identityPatch = { ...profileCols };
+        if (profileCols.phone) {
+          identityPatch.phoneEncrypted = encryptPhoneForStorage(profileCols.phone);
+          delete identityPatch.phone;
+        }
         await tx.identity.update({
           where: { id: req.user.id },
-          data: profileCols,
+          data: identityPatch,
         });
       }
-      return savedTrait;
+      return {
+        trait: savedTrait,
+        shouldSendFirstWeeklySurveyConfirmed: weekly.isFirstSubmissionForWeek,
+        phoneForFirstWeeklySurveyConfirmed: latestPhoneForNotification,
+      };
     });
 
     await writeAccessLog({
       actorType: 'user_session',
       actorId: req.user.id,
       action: 'TRAIT_SURVEY_UPDATE',
-      resource: `Trait:${trait.id}`,
+      resource: `Trait:${txResult.trait.id}`,
       ip: req.ip || null,
       userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
       metadata: null,
     });
+
+    if (
+      txResult.shouldSendFirstWeeklySurveyConfirmed &&
+      txResult.phoneForFirstWeeklySurveyConfirmed
+    ) {
+      try {
+        await sendFriendTalkCta({
+          to: txResult.phoneForFirstWeeklySurveyConfirmed,
+          text: FIRST_WEEKLY_SURVEY_CONFIRMED_TEXT,
+        });
+      } catch (notifyErr) {
+        console.error('survey submit first-week friendtalk error:', notifyErr);
+      }
+    }
 
     let pin = null;
     let expiresInSec = null;
@@ -253,11 +292,16 @@ router.post('/submit', async (req, res) => {
 
     return res.status(200).json({
       message: '설문 결과가 저장되었습니다.',
-      userId: trait.id,
+      userId: txResult.trait.id,
       pin,
       expiresInSec,
     });
   } catch (err) {
+    if (err && err.message === 'PHONE_ENCRYPTION_KEY_INVALID') {
+      return res.status(500).json({
+        error: '전화번호 저장 암호화 키가 설정되지 않았습니다. 서버 설정을 확인해 주세요.',
+      });
+    }
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
       return res.status(404).json({ error: '사용자를 찾을 수 없습니다.' });
     }

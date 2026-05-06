@@ -12,10 +12,10 @@ datasource db {
 /// 계정·로그인 식별. 인증 완료 시 정규화된 `@sju.ac.kr` 주소를 `email`에 보관(수사·고객 특정).
 model Identity {
   id        String   @id @default(uuid()) @db.Uuid
+  /// 표시용 닉네임. `형용사 + 생물명사` 자동 생성 + DB 유니크로 중복 방지.
+  nickname  String?  @unique
   /// `normalizeEmail` 적용 후 문자열. 구 가입자는 재인증 전 null일 수 있음.
   email     String?  @unique
-  /// 정규화된 이메일 문자열에 대한 bcrypt 해시(솔트 포함). 로그인 시 `bcrypt.compare`로만 대조합니다.
-  emailHash String
   kakaoId   String?  @unique
   /// 카카오 OAuth 리프레시 토큰(있을 때만). `talk_message` 등 동의 시 로그인 응답에 포함되며, 주기 알림 스케줄러에서 갱신·나에게 보내기에 사용합니다.
   kakaoRefreshToken String? @map("kakao_refresh_token")
@@ -31,6 +31,8 @@ model Identity {
   studentId String? @map("student_id")
   birthYear String? @map("birth_year")
   department String?
+  /// 설문/프로필에서 수집한 휴대폰 번호(01… 11자리)를 AES-GCM으로 암호화한 문자열.
+  phoneEncrypted String? @map("phone_encrypted")
   /// 가입·이메일 연결·온보딩 시 수집. 구 가입자 마이그레이션 후 기본값 false일 수 있음.
   privacyPolicyAgreed Boolean @default(false) @map("privacy_policy_agreed")
   /// 만남 일정 라벨(자유 문자열). 알림에서는 `오전/오후 n시` 조각 우선 추출.
@@ -50,7 +52,6 @@ model Identity {
 
   meetingChatMessages MeetingChatMessage[] @relation("MeetingChatSender")
 
-  @@index([emailHash])
   @@map("identities")
 }
 

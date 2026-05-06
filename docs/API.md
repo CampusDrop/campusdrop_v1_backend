@@ -127,7 +127,7 @@ Express 서버 진입점: `campusdrop_server/index.js`. 기본 포트는 환경 
 
 ## 인증 `/api/auth`
 
-원문 이메일은 DB에 저장하지 않습니다. `verify-code` 성공 시 신규면 `emailHash`와 `Trait`를 생성합니다. `privacyPolicyAgreed`는 DB `privacy_policy_agreed`에 저장됩니다.
+학교 이메일은 정규화된 문자열로 DB `identities.email`에 저장됩니다. `verify-code` 성공 시 `Trait`를 생성/갱신하며 `privacyPolicyAgreed`는 DB `privacy_policy_agreed`에 저장됩니다.
 
 ### 개인정보처리방침 동의 (`privacyPolicyAgreed`)
 

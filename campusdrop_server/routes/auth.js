@@ -10,13 +10,14 @@ const {
   clearVerificationCode,
   verifyAndConsume,
 } = require('../lib/verificationCodes');
-const { hashEmailForStorage, findIdentityIdByNormalizedEmail } = require('../lib/identityAuth');
 const { requireUserUuid } = require('../lib/requireUserUuid');
 const { storePinForIdentity } = require('../lib/pinSession');
 const { traitGenderLabelKo } = require('../lib/genderPolicy');
 const { parsePrivacyPolicyAgreed } = require('../lib/privacyPolicyConsent');
 const { exchangeKakaoCode, fetchKakaoUserId } = require('../lib/kakaoOAuth');
 const { userHasSchoolVerification } = require('../lib/surveyAccess');
+const { decryptPhoneFromStorage } = require('../lib/phoneCrypto');
+const { registerNewUser } = require('../lib/nickname');
 
 const router = express.Router();
 
@@ -191,6 +192,7 @@ router.post('/kakao', async (req, res) => {
         verified: true,
         uuid: existing.id,
         schoolVerified: userHasSchoolVerification(existing),
+        nickname: existing.nickname ?? null,
         meetingTime: meetingPatch.meetingTime ?? existing.meetingTime ?? null,
         meetingPlace: meetingPatch.meetingPlace ?? existing.meetingPlace ?? null,
       });
@@ -206,30 +208,27 @@ router.post('/kakao', async (req, res) => {
       });
     }
 
-    const placeholder = `__kakao__:${kakaoUserId}@internal.invalid`;
-    const emailHash = await hashEmailForStorage(placeholder);
-
     const seed = meetingSeedFromEnv();
     const mergedMeeting = { ...seed, ...meetingPatch };
 
-    const created = await prisma.identity.create({
-      data: {
+    const created = await registerNewUser(
+      {
         kakaoId: kakaoUserId,
         kakaoRefreshToken: kakaoRefreshTokenStored,
         email: null,
-        emailHash,
         privacyPolicyAgreed: true,
         meetingTime: mergedMeeting.meetingTime,
         meetingPlace: mergedMeeting.meetingPlace,
         trait: { create: { gender: null } },
       },
-      include: { trait: true },
-    });
+      { prismaClient: prisma },
+    );
 
     return res.status(200).json({
       verified: true,
       uuid: created.id,
       schoolVerified: userHasSchoolVerification(created),
+      nickname: created.nickname ?? null,
       meetingTime: created.meetingTime,
       meetingPlace: created.meetingPlace,
     });
@@ -449,8 +448,11 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
   }
 
   try {
-    const emailOwnerId = await findIdentityIdByNormalizedEmail(prisma, normalized);
-    if (emailOwnerId && emailOwnerId !== sessionIdentityId) {
+    const emailOwner = await prisma.identity.findUnique({
+      where: { email: normalized },
+      select: { id: true },
+    });
+    if (emailOwner && emailOwner.id !== sessionIdentityId) {
       return res.status(400).json({
         error: '해당 학교 이메일은 다른 계정에서 이미 사용 중입니다. 해당 카카오 계정으로 로그인해 주세요.',
       });
@@ -471,10 +473,8 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
       return res.status(400).json({ error: prof.error });
     }
 
-    const emailHash = await hashEmailForStorage(normalized);
     const data = {
       email: normalized,
-      emailHash,
       imageUuidAccessUntil: null,
       privacyPolicyAgreed: true,
     };
@@ -575,6 +575,15 @@ router.get('/me', requireUserUuid, async (req, res) => {
   const studentId = u.studentId != null ? String(u.studentId).trim() : null;
   const birthYear = u.birthYear != null ? String(u.birthYear).trim() : null;
   const department = u.department != null ? String(u.department).trim() : null;
+  let phone = null;
+  if (u.phoneEncrypted) {
+    try {
+      phone = decryptPhoneFromStorage(u.phoneEncrypted);
+    } catch (err) {
+      console.error('auth /me phone decrypt error:', err);
+      phone = null;
+    }
+  }
   const genderTrait = u.trait?.gender != null ? String(u.trait.gender).trim() : null;
   const genderLabel = traitGenderLabelKo(u.trait?.gender) || null;
   const schoolVerified = userHasSchoolVerification(u);
@@ -582,12 +591,14 @@ router.get('/me', requireUserUuid, async (req, res) => {
     studentId: studentId || null,
     birthYear: birthYear || null,
     department: department || null,
+    phone,
     gender: genderLabel,
     genderTrait: genderTrait || null,
     schoolVerified,
   };
   return res.status(200).json({
     uuid: u.id,
+    nickname: u.nickname ?? null,
     email: u.email ?? null,
     kakaoLinkPin: u.kakaoLinkPin ?? null,
     kakaoLinked: Boolean(u.kakaoId && String(u.kakaoId).trim()),

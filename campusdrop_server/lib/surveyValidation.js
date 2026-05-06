@@ -5,6 +5,7 @@
 
 const { normalizeTraitGender } = require('./genderPolicy');
 const { normalizeDepartment } = require('./departments');
+const { normalizePhone01 } = require('./phoneCrypto');
 const { loadSemantics, validateCatalogAndBuildMatchProfile } = require('./surveySemanticsCatalog');
 
 const MAX_AVAILABILITY_SLOTS = 100;
@@ -360,11 +361,13 @@ function normalizeParticipantMetaForStorage(pm) {
     const departmentRaw = p.department != null ? String(p.department).trim() : '';
     const department = departmentRaw ? normalizeDepartment(departmentRaw) : null;
     const gender = p.gender != null ? String(p.gender).trim() : '';
+    const phone = normalizePhone01(p.phone);
     out.profile = {
       ...(studentId ? { studentId } : {}),
       ...(birthYear ? { birthYear } : {}),
       ...(department ? { department } : {}),
       ...(gender ? { gender } : {}),
+      ...(phone ? { phone } : {}),
     };
     if (Object.keys(/** @type {object} */ (out.profile)).length === 0) {
       delete out.profile;
@@ -397,10 +400,28 @@ function validateParticipantMetaProfileDepartment(pm) {
     : 'participantMeta.profile.department는 등록된 학과 목록 중 하나여야 합니다.';
 }
 
+/** @param {unknown} pm */
+function validateParticipantMetaProfilePhone(pm) {
+  if (pm === null || pm === undefined || typeof pm !== 'object' || Array.isArray(pm)) {
+    return null;
+  }
+  const profileRaw = /** @type {Record<string, unknown>} */ (pm).profile;
+  if (!profileRaw || typeof profileRaw !== 'object' || Array.isArray(profileRaw)) {
+    return null;
+  }
+  const phoneRaw = /** @type {Record<string, unknown>} */ (profileRaw).phone;
+  if (phoneRaw === undefined || phoneRaw === null || String(phoneRaw).trim() === '') {
+    return null;
+  }
+  return normalizePhone01(phoneRaw)
+    ? null
+    : 'participantMeta.profile.phone은 010으로 시작하는 휴대폰 11자리여야 합니다.';
+}
+
 /**
  * `validateSurveyPayload` 결과의 `participantMeta.profile` → `Identity` 선택 컬럼
  * @param {Record<string, unknown>} data
- * @returns {{ studentId?: string, birthYear?: string, department?: string }}
+ * @returns {{ studentId?: string, birthYear?: string, department?: string, phone?: string }}
  */
 function identityProfileColumnsFromSurveyData(data) {
   const pm = data && typeof data === 'object' ? data.participantMeta : null;
@@ -414,11 +435,13 @@ function identityProfileColumnsFromSurveyData(data) {
   const sid = pr.studentId != null ? String(pr.studentId).trim() : '';
   const by = pr.birthYear != null ? String(pr.birthYear).trim() : '';
   const department = normalizeDepartment(pr.department);
-  /** @type {{ studentId?: string, birthYear?: string, department?: string }} */
+  const phone = normalizePhone01(pr.phone);
+  /** @type {{ studentId?: string, birthYear?: string, department?: string, phone?: string }} */
   const out = {};
   if (sid) out.studentId = sid;
   if (by) out.birthYear = by;
   if (department) out.department = department;
+  if (phone) out.phone = phone;
   return out;
 }
 
@@ -781,6 +804,10 @@ function validateSurveyPayload(surveyData) {
   const departmentError = validateParticipantMetaProfileDepartment(participantMeta);
   if (departmentError) {
     return { ok: false, error: departmentError };
+  }
+  const phoneError = validateParticipantMetaProfilePhone(participantMeta);
+  if (phoneError) {
+    return { ok: false, error: phoneError };
   }
 
   const pmStored = normalizeParticipantMetaForStorage(participantMeta);

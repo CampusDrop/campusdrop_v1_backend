@@ -24,29 +24,37 @@ async function upsertWeeklySurveySubmission(prismaClient, params) {
   const { targetPeriodStart, targetPeriodEnd } = targetPeriodFromAvailabilityWindow(
     params.availabilityWindow,
   );
-
-  return prismaClient.weeklySurveySubmission.upsert({
-    where: {
-      identityId_targetPeriodStart: {
-        identityId: params.identityId,
-        targetPeriodStart,
-      },
-    },
-    create: {
+  const where = {
+    identityId_targetPeriodStart: {
       identityId: params.identityId,
       targetPeriodStart,
-      targetPeriodEnd,
-      gender: params.gender,
-      surveyData: params.surveyData,
-      submittedAt: params.submittedAt,
     },
-    update: {
+  };
+  const existing = await prismaClient.weeklySurveySubmission.findUnique({ where });
+  if (!existing) {
+    const created = await prismaClient.weeklySurveySubmission.create({
+      data: {
+        identityId: params.identityId,
+        targetPeriodStart,
+        targetPeriodEnd,
+        gender: params.gender,
+        surveyData: params.surveyData,
+        submittedAt: params.submittedAt,
+      },
+    });
+    return { submission: created, isFirstSubmissionForWeek: true };
+  }
+
+  const updated = await prismaClient.weeklySurveySubmission.update({
+    where,
+    data: {
       targetPeriodEnd,
       gender: params.gender,
       surveyData: params.surveyData,
       submittedAt: params.submittedAt,
     },
   });
+  return { submission: updated, isFirstSubmissionForWeek: false };
 }
 
 module.exports = {

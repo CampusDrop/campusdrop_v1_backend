@@ -10,6 +10,11 @@ const {
   clearVerificationCode,
   verifyAndConsume,
 } = require('../lib/verificationCodes');
+const {
+  checkSendCodeAllowed,
+  recordSendCode,
+  clearSendCodeRate,
+} = require('../lib/sendCodeRateLimit');
 const { requireUserUuid } = require('../lib/requireUserUuid');
 const { storePinForIdentity } = require('../lib/pinSession');
 const { traitGenderLabelKo } = require('../lib/genderPolicy');
@@ -280,6 +285,14 @@ router.post('/kakao', async (req, res) => {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorMessage'
+ *       429:
+ *         description: |
+ *           동일 이메일에 대해 발송 간격 제한(최근 1~3회는 10초, 4회째부터는 10분) 위반.
+ *           응답 헤더 `Retry-After`에 남은 대기 시간(초)을 포함합니다.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorMessage'
  *       500:
  *         description: SMTP 실패(메모리 코드 제거)
  *         content:
@@ -304,6 +317,22 @@ router.post('/send-code', requireUserUuid, async (req, res) => {
     });
   }
 
+  const rate = checkSendCodeAllowed(normalized);
+  if (!rate.ok) {
+    const retryAfterSec = Math.max(1, Math.ceil(rate.retryAfterMs / 1000));
+    res.set('Retry-After', String(retryAfterSec));
+    const minutes = Math.floor(retryAfterSec / 60);
+    const seconds = retryAfterSec % 60;
+    const waitText =
+      minutes > 0
+        ? `${minutes}분${seconds > 0 ? ` ${seconds}초` : ''}`
+        : `${seconds}초`;
+    return res.status(429).json({
+      error: `인증 메일 요청이 너무 잦습니다. ${waitText} 후 다시 시도해 주세요.`,
+      retryAfterSec,
+    });
+  }
+
   const fixedCode = fixedVerificationCodeFromEnv();
   const code = fixedCode || randomSixDigitCode();
   setVerificationCode(normalized, code);
@@ -319,6 +348,8 @@ router.post('/send-code', requireUserUuid, async (req, res) => {
       });
     }
   }
+
+  recordSendCode(normalized);
 
   if (
     process.env.NODE_ENV !== 'production' ||
@@ -425,6 +456,7 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
         }
         return res.status(400).json({ error: '인증 번호가 올바르지 않습니다.' });
       }
+      clearSendCodeRate(normalized);
       return res.status(200).json({ verified: true, uuid: sessionIdentityId });
     }
     return res.status(400).json({
@@ -573,6 +605,7 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
       });
       return sessionIdentityId;
     });
+    clearSendCodeRate(normalized);
     return res.status(200).json({ verified: true, uuid: resolvedUuid });
   } catch (err) {
     console.error('verify-code identity error:', err);

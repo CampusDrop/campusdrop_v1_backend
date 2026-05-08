@@ -3,6 +3,16 @@ const axios = require('axios');
 const KAKAO_TOKEN_URL = 'https://kauth.kakao.com/oauth/token';
 const KAKAO_USER_ME = 'https://kapi.kakao.com/v2/user/me';
 const KAKAO_MEMO_DEFAULT_SEND = 'https://kapi.kakao.com/v2/api/talk/memo/default/send';
+const KAKAO_TOKEN_RATE_LIMIT_CODE = 'KOE237';
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function rateLimitRetryDelayMs(attempt) {
+  const cappedAttempt = Math.max(0, Math.min(4, attempt));
+  return 300 * (2 ** cappedAttempt);
+}
 
 function kakaoWebLinkBaseUrl() {
   const u = String(
@@ -38,28 +48,49 @@ async function exchangeKakaoCode({ code, redirectUri }) {
     paramsBody.set('client_secret', secret);
   }
 
-  const { data, status } = await axios.post(KAKAO_TOKEN_URL, paramsBody.toString(), {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
-    validateStatus: () => true,
-    timeout: 15_000,
-  });
+  const maxAttempts = 3;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const { data, status, headers } = await axios.post(KAKAO_TOKEN_URL, paramsBody.toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
+      validateStatus: () => true,
+      timeout: 15_000,
+    });
 
-  if (status < 200 || status >= 300) {
+    if (status >= 200 && status < 300) {
+      if (!data || typeof data.access_token !== 'string' || !data.access_token.trim()) {
+        const err = new Error('KAKAO_TOKEN');
+        err.code = 'KAKAO_TOKEN';
+        err.kakaoBody = data;
+        throw err;
+      }
+      return data;
+    }
+
+    const errorCode = data && typeof data.error_code === 'string' ? data.error_code.trim() : '';
+    const retryAfterRaw = headers && typeof headers['retry-after'] === 'string' ? headers['retry-after'] : '';
+    const retryAfterSec = Number.parseInt(retryAfterRaw, 10);
+    const canRetryRateLimit = status === 429 && errorCode === KAKAO_TOKEN_RATE_LIMIT_CODE && attempt < maxAttempts - 1;
+    if (canRetryRateLimit) {
+      const waitMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0
+        ? retryAfterSec * 1000
+        : rateLimitRetryDelayMs(attempt);
+      await sleep(waitMs);
+      continue;
+    }
+
     const err = new Error('KAKAO_TOKEN');
     err.code = 'KAKAO_TOKEN';
     err.kakaoStatus = status;
     err.kakaoBody = data;
+    if (Number.isFinite(retryAfterSec) && retryAfterSec > 0) {
+      err.kakaoRetryAfterSec = retryAfterSec;
+    }
     throw err;
   }
 
-  if (!data || typeof data.access_token !== 'string' || !data.access_token.trim()) {
-    const err = new Error('KAKAO_TOKEN');
-    err.code = 'KAKAO_TOKEN';
-    err.kakaoBody = data;
-    throw err;
-  }
-
-  return data;
+  const err = new Error('KAKAO_TOKEN');
+  err.code = 'KAKAO_TOKEN';
+  throw err;
 }
 
 /**

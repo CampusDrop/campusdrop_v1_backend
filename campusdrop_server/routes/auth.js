@@ -155,6 +155,25 @@ router.post('/kakao', async (req, res) => {
         error: '카카오 로그인 설정이 없습니다. KAKAO_REST_API_KEY를 확인해 주세요.',
       });
     }
+    if (
+      err &&
+      err.code === 'KAKAO_TOKEN' &&
+      err.kakaoStatus === 429 &&
+      err.kakaoBody &&
+      err.kakaoBody.error_code === 'KOE237'
+    ) {
+      const retryAfterSec =
+        Number.isFinite(err.kakaoRetryAfterSec) && err.kakaoRetryAfterSec > 0
+          ? err.kakaoRetryAfterSec
+          : 3;
+      res.set('Retry-After', String(retryAfterSec));
+      return res.status(429).json({
+        error: '카카오 로그인 요청이 일시적으로 많습니다. 잠시 후 다시 시도해 주세요.',
+        code: 'KAKAO_TOKEN_RATE_LIMIT',
+        providerCode: 'KOE237',
+        retryAfterSec,
+      });
+    }
     console.error('kakao token exchange:', err && err.kakaoStatus, err && err.kakaoBody);
     return res.status(502).json({ error: '카카오 로그인 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.' });
   }

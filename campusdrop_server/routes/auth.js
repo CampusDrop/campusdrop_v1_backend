@@ -530,16 +530,16 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
         }
 
         await tx.identity.update({
-          where: { id: emailOwner.id },
-          data: ownerUpdate,
-        });
-
-        await tx.identity.update({
           where: { id: sessionIdentity.id },
           data: {
             kakaoId: null,
             kakaoRefreshToken: null,
           },
+        });
+
+        await tx.identity.update({
+          where: { id: emailOwner.id },
+          data: ownerUpdate,
         });
 
         console.log('[verify-code] linked kakao account to existing email owner', {

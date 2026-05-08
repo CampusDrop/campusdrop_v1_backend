@@ -448,16 +448,6 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
   }
 
   try {
-    const emailOwner = await prisma.identity.findUnique({
-      where: { email: normalized },
-      select: { id: true },
-    });
-    if (emailOwner && emailOwner.id !== sessionIdentityId) {
-      return res.status(400).json({
-        error: '해당 학교 이메일은 다른 계정에서 이미 사용 중입니다. 해당 카카오 계정으로 로그인해 주세요.',
-      });
-    }
-
     const ppLink = parsePrivacyPolicyAgreed(req.body?.privacyPolicyAgreed, { required: true });
     if (!ppLink.ok) {
       return res.status(400).json({ error: ppLink.error });
@@ -472,23 +462,118 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
     if (!prof.ok) {
       return res.status(400).json({ error: prof.error });
     }
+    const resolvedUuid = await prisma.$transaction(async (tx) => {
+      const sessionIdentity = await tx.identity.findUnique({
+        where: { id: sessionIdentityId },
+        include: { trait: true },
+      });
+      if (!sessionIdentity) {
+        throw new Error('SESSION_IDENTITY_NOT_FOUND');
+      }
 
-    const data = {
-      email: normalized,
-      imageUuidAccessUntil: null,
-      privacyPolicyAgreed: true,
-    };
-    if (prof.studentId) data.studentId = prof.studentId;
-    if (prof.birthYear) data.birthYear = prof.birthYear;
-    if (prof.department) data.department = prof.department;
-    if (prof.genderTrait != null) {
-      data.trait = { update: { gender: prof.genderTrait } };
-    }
+      const emailOwner = await tx.identity.findUnique({
+        where: { email: normalized },
+        include: { trait: true },
+      });
 
-    await prisma.identity.update({
-      where: { id: sessionIdentityId },
-      data,
+      if (emailOwner && emailOwner.id !== sessionIdentityId) {
+        if (emailOwner.blockedAt) {
+          throw new Error('EMAIL_OWNER_BLOCKED');
+        }
+        if (!sessionIdentity.kakaoId) {
+          throw new Error('SESSION_KAKAO_REQUIRED');
+        }
+        if (emailOwner.kakaoId && emailOwner.kakaoId !== sessionIdentity.kakaoId) {
+          throw new Error('EMAIL_ALREADY_LINKED_TO_OTHER_KAKAO');
+        }
+
+        const ownerUpdate = {
+          kakaoId: sessionIdentity.kakaoId,
+          email: normalized,
+          imageUuidAccessUntil: null,
+          privacyPolicyAgreed: true,
+        };
+        if (!emailOwner.kakaoRefreshToken && sessionIdentity.kakaoRefreshToken) {
+          ownerUpdate.kakaoRefreshToken = sessionIdentity.kakaoRefreshToken;
+        }
+        if (!emailOwner.studentId) {
+          const candidateStudentId = prof.studentId || sessionIdentity.studentId || null;
+          if (candidateStudentId) ownerUpdate.studentId = candidateStudentId;
+        }
+        if (!emailOwner.birthYear) {
+          const candidateBirthYear = prof.birthYear || sessionIdentity.birthYear || null;
+          if (candidateBirthYear) ownerUpdate.birthYear = candidateBirthYear;
+        }
+        if (!emailOwner.department) {
+          const candidateDepartment = prof.department || sessionIdentity.department || null;
+          if (candidateDepartment) ownerUpdate.department = candidateDepartment;
+        }
+        if (!emailOwner.meetingTime && sessionIdentity.meetingTime) {
+          ownerUpdate.meetingTime = sessionIdentity.meetingTime;
+        }
+        if (!emailOwner.meetingPlace && sessionIdentity.meetingPlace) {
+          ownerUpdate.meetingPlace = sessionIdentity.meetingPlace;
+        }
+        if (!emailOwner.phoneEncrypted && sessionIdentity.phoneEncrypted) {
+          ownerUpdate.phoneEncrypted = sessionIdentity.phoneEncrypted;
+        }
+        if (!emailOwner.trait?.gender) {
+          const candidateGender = prof.genderTrait ?? sessionIdentity.trait?.gender ?? null;
+          if (candidateGender != null) {
+            ownerUpdate.trait = {
+              upsert: {
+                create: { gender: candidateGender },
+                update: { gender: candidateGender },
+              },
+            };
+          }
+        }
+
+        await tx.identity.update({
+          where: { id: emailOwner.id },
+          data: ownerUpdate,
+        });
+
+        await tx.identity.update({
+          where: { id: sessionIdentity.id },
+          data: {
+            kakaoId: null,
+            kakaoRefreshToken: null,
+          },
+        });
+
+        console.log('[verify-code] linked kakao account to existing email owner', {
+          ownerId: emailOwner.id,
+          sessionIdentityId,
+        });
+
+        return emailOwner.id;
+      }
+
+      const sessionUpdate = {
+        email: normalized,
+        imageUuidAccessUntil: null,
+        privacyPolicyAgreed: true,
+      };
+      if (prof.studentId) sessionUpdate.studentId = prof.studentId;
+      if (prof.birthYear) sessionUpdate.birthYear = prof.birthYear;
+      if (prof.department) sessionUpdate.department = prof.department;
+      if (prof.genderTrait != null) {
+        sessionUpdate.trait = {
+          upsert: {
+            create: { gender: prof.genderTrait },
+            update: { gender: prof.genderTrait },
+          },
+        };
+      }
+
+      await tx.identity.update({
+        where: { id: sessionIdentityId },
+        data: sessionUpdate,
+      });
+      return sessionIdentityId;
     });
+    return res.status(200).json({ verified: true, uuid: resolvedUuid });
   } catch (err) {
     console.error('verify-code identity error:', err);
     if (err instanceof PrismaClientInitializationError) {
@@ -497,10 +582,21 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
           '데이터베이스에 연결할 수 없습니다. .env의 DATABASE_URL을 확인한 뒤 서버를 재시작해 주세요. 인증 메일 발송(send-code)은 DB를 쓰지 않아 정상일 수 있습니다.',
       });
     }
+    if (err instanceof Error && err.message === 'EMAIL_OWNER_BLOCKED') {
+      return res.status(403).json({
+        error: '이 계정은 이용이 제한되었습니다. 문의가 필요하면 운영팀에 연락해 주세요.',
+      });
+    }
+    if (
+      err instanceof Error &&
+      (err.message === 'EMAIL_ALREADY_LINKED_TO_OTHER_KAKAO' || err.message === 'SESSION_KAKAO_REQUIRED')
+    ) {
+      return res.status(400).json({
+        error: '해당 학교 이메일은 다른 계정에서 이미 사용 중입니다. 해당 카카오 계정으로 로그인해 주세요.',
+      });
+    }
     return res.status(500).json({ error: '인증 처리 중 오류가 발생했습니다.' });
   }
-
-  return res.status(200).json({ verified: true, uuid: sessionIdentityId });
 });
 
 /**

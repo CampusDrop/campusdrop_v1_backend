@@ -275,7 +275,6 @@ async function runWeeklyBatchMatch(options = {}) {
       select: { id: true, kakaoId: true, kakaoLinkPin: true },
     });
     for (const row of identities) {
-      if (!row.kakaoId) continue;
       await sendWeeklyMatchAlimtalkMock({
         identityId: row.id,
         kakaoId: row.kakaoId,
@@ -325,7 +324,7 @@ async function runWeeklyBatchMatch(options = {}) {
   });
 
   console.log(
-    `[weeklyBatchMatch] 완료: 배치대상(남/여) ${batchTraitsCount}명(설문보유 ${traitsCount}명), 쌍 ${insertRows.length}건, 알림 대상(kakaoId 보유) 처리`,
+    `[weeklyBatchMatch] 완료: 배치대상(남/여) ${batchTraitsCount}명(설문보유 ${traitsCount}명), 쌍 ${insertRows.length}건, 알림 대상 처리`,
   );
   return {
     skipped: false,

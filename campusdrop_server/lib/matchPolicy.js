@@ -205,7 +205,12 @@ async function findUserMatchingInPeriod(prisma, userId, periodStart) {
       score: true,
       matchedAt: true,
       meetingStartsAt: true,
+      meetingVenueName: true,
+      cafeId: true,
       periodStart: true,
+      userA: { select: { id: true, nickname: true } },
+      userB: { select: { id: true, nickname: true } },
+      cafe: { select: { id: true, name: true, naverPlaceUrl: true, isActive: true } },
     },
   });
 }

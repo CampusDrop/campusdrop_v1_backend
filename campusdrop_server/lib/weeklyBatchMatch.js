@@ -43,6 +43,7 @@ async function loadEligibleTraits(options = {}) {
       identity: {
         select: {
           id: true,
+          nickname: true,
           email: true,
           kakaoId: true,
           kakaoLinkPin: true,

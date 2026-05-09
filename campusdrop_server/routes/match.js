@@ -269,13 +269,21 @@ router.get('/week-status', async (req, res) => {
 
   let activeMatchingThisPeriod = null;
   if (row) {
-    const partnerId = row.userAId === self.id ? row.userBId : row.userAId;
+    const isUserA = row.userAId === self.id;
+    const partnerId = isUserA ? row.userBId : row.userAId;
+    const partner = isUserA ? row.userB : row.userA;
+    const me = isUserA ? row.userA : row.userB;
     activeMatchingThisPeriod = {
       matchingId: row.id,
       partnerId,
+      partnerNickname: partner?.nickname ?? null,
+      myNickname: me?.nickname ?? null,
       score: row.score,
       matchedAt: row.matchedAt.toISOString(),
       meetingStartsAt: row.meetingStartsAt ? row.meetingStartsAt.toISOString() : null,
+      meetingVenueName: row.meetingVenueName ?? null,
+      cafeId: row.cafeId ?? null,
+      cafe: row.cafe ?? null,
       periodStartStored: row.periodStart ? row.periodStart.toISOString() : null,
     };
   }
@@ -482,6 +490,8 @@ router.post('/request', async (req, res) => {
   }
 
   const partnerLabel = traitGenderLabelKo(partner.trait?.gender) || '상대';
+  const partnerNickname =
+    typeof partner.nickname === 'string' && partner.nickname.trim() !== '' ? partner.nickname.trim() : null;
   const partnerEmail =
     typeof partner.email === 'string' && partner.email.trim() !== '' ? partner.email.trim() : null;
   const partnerKakaoId =
@@ -493,6 +503,7 @@ router.post('/request', async (req, res) => {
 
   const best = {
     partnerId,
+    partnerNickname,
     partnerLabel,
     partnerEmail,
     partnerKakaoId,
@@ -527,6 +538,8 @@ router.post('/request', async (req, res) => {
   }
 
   return res.status(200).json({
+    partnerId: best.partnerId,
+    partnerNickname: best.partnerNickname,
     partnerLabel: best.partnerLabel,
     partnerEmail: best.partnerEmail,
     partnerKakaoId: best.partnerKakaoId,

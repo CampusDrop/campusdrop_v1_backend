@@ -674,6 +674,7 @@ router.get('/users', async (req, res) => {
         take: limit,
         select: {
           id: true,
+          nickname: true,
           email: true,
           kakaoId: true,
           blockedAt: true,
@@ -700,6 +701,7 @@ router.get('/users', async (req, res) => {
       );
       return {
         id: row.id,
+        nickname: row.nickname ?? null,
         email: row.email,
         /** `email`이 있으면 학교 이메일이 연결된 것으로 간주(증빙만 올리고 이메일 미연결 계정은 null) */
         emailVerified: Boolean(row.email),
@@ -853,6 +855,7 @@ router.get('/matches', async (req, res) => {
           userA: {
             select: {
               id: true,
+              nickname: true,
               email: true,
               kakaoId: true,
               kakaoLinkPin: true,
@@ -862,6 +865,7 @@ router.get('/matches', async (req, res) => {
           userB: {
             select: {
               id: true,
+              nickname: true,
               email: true,
               kakaoId: true,
               kakaoLinkPin: true,
@@ -895,6 +899,8 @@ router.get('/matches', async (req, res) => {
         id: m.id,
         userAId: m.userAId,
         userBId: m.userBId,
+        userANickname: m.userA?.nickname ?? null,
+        userBNickname: m.userB?.nickname ?? null,
         userAEmail: m.userA?.email ?? null,
         userBEmail: m.userB?.email ?? null,
         userAGender: normalizeTraitGender(m.userA?.trait?.gender) ?? null,
@@ -951,6 +957,7 @@ router.get('/matches/unmatched', async (req, res) => {
     const users = unmatched.map((t) => ({
       id: t.id,
       identityId: t.id,
+      nickname: t.identity?.nickname ?? null,
       email: t.identity?.email ?? null,
       kakaoId: t.identity?.kakaoId ?? null,
       kakaoLinked: Boolean(t.identity?.kakaoId && String(t.identity.kakaoId).trim()),
@@ -1124,6 +1131,7 @@ router.get('/matches/slot-candidates', async (req, res) => {
       candidates.push({
         identityId: cand.id,
         id: cand.id,
+        nickname: cand.identity?.nickname ?? null,
         email: cand.identity?.email ?? null,
         gender: 'male',
         genderLabel: traitGenderLabelKo(cand.gender) || '남성',
@@ -1162,6 +1170,7 @@ router.get('/matches/slot-candidates', async (req, res) => {
       baseUser: {
         identityId: base.id,
         id: base.id,
+        nickname: base.identity?.nickname ?? null,
         gender: 'female',
         genderLabel: traitGenderLabelKo(base.gender) || '여성',
         email: base.identity?.email ?? null,
@@ -1916,6 +1925,7 @@ router.get('/users/:id', async (req, res) => {
     return res.status(200).json({
       user: {
         id: row.id,
+        nickname: row.nickname ?? null,
         email: row.email,
         emailVerified: Boolean(row.email),
         schoolImageVerified: Boolean(row.schoolProofVerifiedAt),

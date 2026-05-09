@@ -41,6 +41,44 @@ function rawQrFromReq(req) {
 }
 
 /**
+ * A/B 참가자 닉네임이 실려 있는 매칭 행에서 요청 유저·상대 닉네임.
+ * @param {{
+ *   userAId: string;
+ *   userBId: string;
+ *   userA: { nickname: string | null } | null;
+ *   userB: { nickname: string | null } | null;
+ * }} row
+ * @param {string} selfId
+ */
+function meetChatNicknamesForUser(row, selfId) {
+  const isA = row.userAId === selfId;
+  const me = isA ? row.userA : row.userB;
+  const partner = isA ? row.userB : row.userA;
+  return {
+    myNickname: me?.nickname ?? null,
+    partnerNickname: partner?.nickname ?? null,
+  };
+}
+
+/**
+ * @param {{
+ *   userAId: string;
+ *   userBId: string;
+ *   userA: { nickname: string | null } | null;
+ *   userB: { nickname: string | null } | null;
+ * }} row
+ */
+function senderNicknameFromRow(row, senderId) {
+  if (senderId === row.userAId) {
+    return row.userA?.nickname ?? null;
+  }
+  if (senderId === row.userBId) {
+    return row.userB?.nickname ?? null;
+  }
+  return null;
+}
+
+/**
  * @openapi
  * /api/meet-chat/access:
  *   get:
@@ -79,6 +117,8 @@ router.get('/access', requireUserUuid, async (req, res) => {
         meetingStartsAt: true,
         meetingVenueName: true,
         matchReport: true,
+        userA: { select: { nickname: true } },
+        userB: { select: { nickname: true } },
       },
     });
   } catch (err) {
@@ -94,6 +134,7 @@ router.get('/access', requireUserUuid, async (req, res) => {
     return res.status(403).json({ error: '이 소개팅 채팅에 참여한 유저가 아닙니다.' });
   }
 
+  const { myNickname, partnerNickname } = meetChatNicknamesForUser(row, uid);
   const meetingAt = resolveMeetingStartsAt(row);
   const now = new Date();
 
@@ -102,6 +143,8 @@ router.get('/access', requireUserUuid, async (req, res) => {
       redirectToLanding: true,
       reason: 'meeting_not_configured',
       matchingId: row.id,
+      myNickname,
+      partnerNickname,
     });
   }
 
@@ -118,6 +161,8 @@ router.get('/access', requireUserUuid, async (req, res) => {
     chatWindowOpen: windowOpen.toISOString(),
     chatWindowEnd: windowEnd.toISOString(),
     canUseChat: inWindow,
+    myNickname,
+    partnerNickname,
   });
 });
 
@@ -156,7 +201,13 @@ router.get('/my-qr-token', requireUserUuid, async (req, res) => {
     try {
       row = await prisma.matching.findUnique({
         where: { id: midOpt },
-        select: { id: true, userAId: true, userBId: true },
+        select: {
+          id: true,
+          userAId: true,
+          userBId: true,
+          userA: { select: { nickname: true } },
+          userB: { select: { nickname: true } },
+        },
       });
     } catch (err) {
       console.error('meetChat /my-qr-token load:', err);
@@ -192,10 +243,14 @@ router.get('/my-qr-token', requireUserUuid, async (req, res) => {
     return res.status(503).json({ error: 'QR 토큰을 생성하지 못했습니다.' });
   }
 
+  const { myNickname, partnerNickname } = meetChatNicknamesForUser(row, uid);
+
   return res.status(200).json({
     hasMatching: true,
     matchingId,
     qrToken,
+    myNickname,
+    partnerNickname,
   });
 });
 
@@ -220,6 +275,8 @@ async function assertUserMeetChatSession(matchingId, userId, qr) {
       meetingStartsAt: true,
       meetingVenueName: true,
       matchReport: true,
+      userA: { select: { nickname: true } },
+      userB: { select: { nickname: true } },
     },
   });
 
@@ -297,12 +354,17 @@ router.get('/:matchingId/messages', requireUserUuid, async (req, res) => {
       },
     });
 
+    const { myNickname, partnerNickname } = meetChatNicknamesForUser(session.row, req.user.id);
+
     return res.status(200).json({
       matchingId,
       roomTitle: formatMeetChatRoomTitle(session.meetingAt, session.row.meetingVenueName || ''),
+      myNickname,
+      partnerNickname,
       messages: items.map((m) => ({
         id: m.id,
         senderId: m.senderId,
+        senderNickname: senderNicknameFromRow(session.row, m.senderId),
         body: m.body,
         createdAt: m.createdAt.toISOString(),
         mine: m.senderId === req.user.id,
@@ -369,6 +431,7 @@ router.post('/:matchingId/messages', requireUserUuid, async (req, res) => {
       message: {
         id: created.id,
         senderId: created.senderId,
+        senderNickname: senderNicknameFromRow(session.row, created.senderId),
         body: created.body,
         createdAt: created.createdAt.toISOString(),
         mine: true,

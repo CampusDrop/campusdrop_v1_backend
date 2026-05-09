@@ -30,4 +30,25 @@ function hourStartFromTimeSlotString(timeSlot) {
   return h;
 }
 
-module.exports = { kstWallClockToUtc, hourStartFromTimeSlotString };
+/**
+ * UTC `Date` → KST(UTC+9) 벽시계 기준 1시간 슬롯 정보. 분/초는 시간 단위로 floor 됩니다.
+ * 관리자 콘솔이 `matchReport.matchedSlot`을 시간대 칸으로 쓰는 흐름에 맞춰
+ * `meetingStartsAt` 변경 시 슬롯 메타를 같이 갱신할 때 사용합니다.
+ *
+ * @param {Date | string | number} input
+ * @returns {{ date: string, hourStart: number, hourEnd: number, time_slot: string } | null}
+ */
+function utcToKstSlot(input) {
+  const d = input instanceof Date ? input : input == null ? null : new Date(input);
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return null;
+  const k = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+  const yyyy = k.getUTCFullYear();
+  const mm = String(k.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(k.getUTCDate()).padStart(2, '0');
+  const hourStart = k.getUTCHours();
+  const hourEnd = (hourStart + 1) % 24;
+  const time_slot = `${String(hourStart).padStart(2, '0')}:00-${String(hourEnd).padStart(2, '0')}:00`;
+  return { date: `${yyyy}-${mm}-${dd}`, hourStart, hourEnd, time_slot };
+}
+
+module.exports = { kstWallClockToUtc, hourStartFromTimeSlotString, utcToKstSlot };

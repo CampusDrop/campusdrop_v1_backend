@@ -20,6 +20,7 @@
     "db:studio": "node scripts/prisma-with-repo-root-env.cjs studio",
     "db:seed": "prisma db seed",
     "nickname:migrate": "node scripts/migrate-existing-users-nicknames.js",
+    "nickname:add-space": "node scripts/add-space-to-existing-nicknames.js",
     "admin:upsert": "node scripts/upsert-admin-from-env.js",
     "postinstall": "prisma generate",
     "smoke": "node scripts/smoke-api.js",

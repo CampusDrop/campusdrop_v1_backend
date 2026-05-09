@@ -34,7 +34,37 @@ function pickRandom(arr) {
 }
 
 function buildRandomNickname() {
-  return `${pickRandom(adjectives)}${pickRandom(bioNouns)}`;
+  return `${pickRandom(adjectives)} ${pickRandom(bioNouns)}`;
+}
+
+/**
+ * 기존 "형용사명사" / "형용사명사#1234" 형태의 닉네임에 띄어쓰기를 끼워 넣는다.
+ * - 형용사 사전과 prefix-longest-match로 경계를 찾음.
+ * - `#1234` suffix가 있으면 보존.
+ * - 매칭 실패(사용자 임의 닉네임 등)는 null 반환 → 호출부가 그대로 두거나 재발급 결정.
+ *
+ * @param {string} nickname
+ * @returns {string | null}
+ */
+function insertSpaceIntoLegacyNickname(nickname) {
+  if (typeof nickname !== 'string') {
+    return null;
+  }
+  const trimmed = nickname.trim();
+  if (trimmed === '' || trimmed.includes(' ')) {
+    return null;
+  }
+  const hashIdx = trimmed.indexOf('#');
+  const head = hashIdx >= 0 ? trimmed.slice(0, hashIdx) : trimmed;
+  const tail = hashIdx >= 0 ? trimmed.slice(hashIdx) : '';
+
+  const sortedByLenDesc = [...adjectives].sort((a, b) => b.length - a.length);
+  for (const adj of sortedByLenDesc) {
+    if (adj.length > 0 && head.length > adj.length && head.startsWith(adj)) {
+      return `${adj} ${head.slice(adj.length)}${tail}`;
+    }
+  }
+  return null;
 }
 
 function random4Digits() {
@@ -211,11 +241,92 @@ async function registerNewUser(createData, { prismaClient = prisma, maxRetry = 5
   throw new Error('신규 가입 닉네임 생성 재시도 횟수를 초과했습니다.');
 }
 
+/**
+ * 띄어쓰기 없는 기존 닉네임을 "형용사 명사" 형태로 일괄 보정.
+ * - 사전 기반 split이 가능한 닉네임만 update.
+ * - update 시 P2002(unique 충돌) 발생하면 새 닉네임을 재발급해서 보정.
+ * - 사전 매칭 실패는 건드리지 않음(사용자 임의 닉네임 보호).
+ */
+async function addSpaceToExistingNicknames({
+  prismaClient = prisma,
+  batchSize = 100,
+} = {}) {
+  const existingWithSpace = await prismaClient.identity.findMany({
+    where: { nickname: { contains: ' ' } },
+    select: { nickname: true },
+  });
+  const reservedNicknames = new Set(
+    existingWithSpace.map((row) => (row.nickname || '').trim()).filter(Boolean),
+  );
+
+  let migratedCount = 0;
+  let regeneratedCount = 0;
+  let skippedCount = 0;
+  let lastId = null;
+
+  for (;;) {
+    const targets = await prismaClient.identity.findMany({
+      where: {
+        AND: [
+          { nickname: { not: null } },
+          { NOT: { nickname: { contains: ' ' } } },
+          ...(lastId ? [{ id: { gt: lastId } }] : []),
+        ],
+      },
+      select: { id: true, nickname: true },
+      take: batchSize,
+      orderBy: { id: 'asc' },
+    });
+
+    if (targets.length === 0) {
+      break;
+    }
+
+    for (const row of targets) {
+      lastId = row.id;
+      const split = insertSpaceIntoLegacyNickname(row.nickname);
+      if (!split) {
+        skippedCount += 1;
+        continue;
+      }
+      if (reservedNicknames.has(split)) {
+        const regenerated = await prismaClient.$transaction(async (tx) => {
+          return assignNicknameWithRetry(tx, row.id, reservedNicknames);
+        });
+        regeneratedCount += 1;
+        reservedNicknames.add(regenerated);
+        continue;
+      }
+      try {
+        await prismaClient.identity.update({
+          where: { id: row.id },
+          data: { nickname: split },
+        });
+        reservedNicknames.add(split);
+        migratedCount += 1;
+      } catch (err) {
+        if (!isNicknameUniqueViolation(err)) {
+          throw err;
+        }
+        const regenerated = await prismaClient.$transaction(async (tx) => {
+          return assignNicknameWithRetry(tx, row.id, reservedNicknames);
+        });
+        regeneratedCount += 1;
+        reservedNicknames.add(regenerated);
+      }
+    }
+  }
+
+  return { migratedCount, regeneratedCount, skippedCount };
+}
+
 module.exports = {
   adjectives,
   bioNouns,
   generateUniqueNickname,
   migrateExistingUsersNicknames,
+  addSpaceToExistingNicknames,
+  insertSpaceIntoLegacyNickname,
   registerNewUser,
   isNicknameUniqueViolation,
 };

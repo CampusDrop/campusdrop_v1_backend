@@ -31,7 +31,7 @@ const { normalizeDepartment } = require('../lib/departments');
 const { slimMatchReportForDb } = require('../lib/slimMatchReport');
 const { areOppositeTraitGenders, normalizeTraitGender, traitGenderLabelKo } = require('../lib/genderPolicy');
 const { resolveSchoolProofAbsolutePath } = require('../lib/schoolProofMulter');
-const { kstWallClockToUtc } = require('../lib/kstMeetingInstant');
+const { kstWallClockToUtc, utcToKstSlot } = require('../lib/kstMeetingInstant');
 const { signMeetChatQrToken, meetChatQrSecret } = require('../lib/meetChatQr');
 
 const CAFE_NAME_MAX_LEN = 200;
@@ -1265,19 +1265,56 @@ router.patch('/matches/:id/meet-details', async (req, res) => {
   }
 
   try {
-    const updated = await prisma.matching.update({
-      where: { id },
-      data,
-      select: {
-        id: true,
-        userAId: true,
-        userBId: true,
-        meetingStartsAt: true,
-        meetingVenueName: true,
-        cafeId: true,
-        cafe: { select: { id: true, name: true, isActive: true } },
-        matchReport: true,
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      // meetingStartsAt이 본문에 명시된 경우, 동일 트랜잭션에서 matchReport.matchedSlot도
+      // KST 슬롯 기준으로 동기화한다 — 관리자 콘솔이 matchedSlot으로 시간대 칸을 잡기 때문.
+      if ('meetingStartsAt' in data) {
+        const current = await tx.matching.findUnique({
+          where: { id },
+          select: { matchReport: true },
+        });
+        if (!current) {
+          throw Object.assign(new Error('MATCHING_NOT_FOUND'), { code: 'MATCHING_NOT_FOUND' });
+        }
+        const baseReport =
+          current.matchReport && typeof current.matchReport === 'object' && !Array.isArray(current.matchReport)
+            ? { .../** @type {Record<string, unknown>} */ (current.matchReport) }
+            : null;
+
+        if (data.meetingStartsAt === null) {
+          if (baseReport && 'matchedSlot' in baseReport) {
+            delete baseReport.matchedSlot;
+            data.matchReport = baseReport;
+          }
+        } else {
+          const slot = utcToKstSlot(data.meetingStartsAt);
+          if (slot) {
+            const next = baseReport ?? { score: 0, reasons: [] };
+            next.matchedSlot = {
+              date: slot.date,
+              hourStart: slot.hourStart,
+              hourEnd: slot.hourEnd,
+              time_slot: slot.time_slot,
+            };
+            data.matchReport = next;
+          }
+        }
+      }
+
+      return tx.matching.update({
+        where: { id },
+        data,
+        select: {
+          id: true,
+          userAId: true,
+          userBId: true,
+          meetingStartsAt: true,
+          meetingVenueName: true,
+          cafeId: true,
+          cafe: { select: { id: true, name: true, isActive: true } },
+          matchReport: true,
+        },
+      });
     });
 
     await writeAccessLog({
@@ -1292,6 +1329,9 @@ router.patch('/matches/:id/meet-details', async (req, res) => {
 
     return res.status(200).json({ match: updated });
   } catch (err) {
+    if (err && err.code === 'MATCHING_NOT_FOUND') {
+      return res.status(404).json({ error: '매칭을 찾을 수 없습니다.' });
+    }
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
       return res.status(404).json({ error: '매칭을 찾을 수 없습니다.' });
     }

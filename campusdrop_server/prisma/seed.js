@@ -346,7 +346,31 @@ async function main() {
   } else {
     console.log('Seed: ADMIN_EMAIL·ADMIN_PASSWORD 없음 — Admin 테이블 스킵');
   }
+
+  // 매칭 카페 마스터 시드. 마이그레이션 SQL과 동일한 2개를 name 기준 upsert.
+  // - 이미 존재하면 URL·displayOrder만 동기화하고 isActive는 운영 설정 보존(덮어쓰지 않음).
+  for (const cafe of SEED_CAFES) {
+    await prisma.cafe.upsert({
+      where: { name: cafe.name },
+      create: {
+        name: cafe.name,
+        naverPlaceUrl: cafe.naverPlaceUrl,
+        displayOrder: cafe.displayOrder,
+        isActive: true,
+      },
+      update: {
+        naverPlaceUrl: cafe.naverPlaceUrl,
+        displayOrder: cafe.displayOrder,
+      },
+    });
+  }
+  console.log(`Seed: 매칭 카페 ${SEED_CAFES.length}건 upsert 완료`);
 }
+
+const SEED_CAFES = [
+  { name: '제주몰빵', naverPlaceUrl: 'https://naver.me/GbDneBEr', displayOrder: 1 },
+  { name: '트레비커피로스터스', naverPlaceUrl: 'https://naver.me/xxY2b5Iz', displayOrder: 2 },
+];
 
 main()
   .catch((e) => {

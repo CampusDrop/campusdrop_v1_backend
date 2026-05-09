@@ -140,11 +140,14 @@ model Matching {
   matchReport Json? @map("match_report")
   /// 소개팅 약속 시각(KST 벽시계 기준으로 저장한 순간의 UTC 인스턴스). QR 채팅 시간대 계산에 사용.
   meetingStartsAt DateTime? @map("meeting_starts_at")
-  /// 채팅방 제목 등에 쓰는 장소명(예: 카페 이름).
+  /// 채팅방 제목 등에 쓰는 장소명(예: 카페 이름). 배치 시 `cafe.name` 스냅샷이 들어가며, 카페 이름이 바뀌어도 과거 매칭은 당시 이름을 보존합니다.
   meetingVenueName String? @map("meeting_venue_name")
+  /// 배치 시 라운드로빈으로 배정되는 카페 FK. 카페가 삭제되면 NULL로 끊어지고 `meetingVenueName` 스냅샷은 남습니다.
+  cafeId String? @map("cafe_id") @db.Uuid
 
   userA Identity @relation("MatchPairUserA", fields: [userAId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   userB Identity @relation("MatchPairUserB", fields: [userBId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  cafe  Cafe?    @relation(fields: [cafeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   chatMessages MeetingChatMessage[]
   friendTalkRsvp MatchingFriendTalkRsvp?
 
@@ -153,7 +156,30 @@ model Matching {
   @@index([userAId])
   @@index([userBId])
   @@index([meetingStartsAt])
+  @@index([cafeId])
   @@map("matchings")
+}
+
+/// 매칭 카페 마스터. 관리자 콘솔에서 등록/수정/비활성화. 배치 매칭은 `isActive=true`만 `displayOrder` 순으로 라운드로빈 배정합니다.
+model Cafe {
+  id             String   @id @default(uuid()) @db.Uuid
+  /// 카카오톡·QR 채팅 등 사용자 노출 이름. 트리밍·중복 방지(@unique)로 한 카페는 한 행만.
+  name           String   @unique
+  /// 네이버 지도 등 외부 링크(선택).
+  naverPlaceUrl  String?  @map("naver_place_url")
+  /// 운영 메모용 자유 주소 문자열(선택).
+  address        String?
+  /// false면 배치 매칭에서 제외(카페 자체는 보존). 기존 `Matching.cafeId` 참조는 유지.
+  isActive       Boolean  @default(true) @map("is_active")
+  /// 라운드로빈 배정 순서. 같은 슬롯에 여러 매칭이 들어갈 때 0부터 우선 배정.
+  displayOrder   Int      @default(0) @map("display_order")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  matchings Matching[]
+
+  @@index([isActive, displayOrder])
+  @@map("cafes")
 }
 
 /// 7번(월요 일정)·6번(전날) 친구톡 응답·수신번호 보관. 매칭 1행당 최대 1행.

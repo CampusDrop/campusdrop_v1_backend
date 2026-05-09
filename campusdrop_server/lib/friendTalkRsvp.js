@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { prisma } = require('./prisma');
 const { sendFriendTalkCta, assertSolapiFriendTalkEnv, getKakaoFriendTalkImageIdFromEnv, FRIEND_TALK_IMG_DAY_EVE, FRIEND_TALK_IMG_MATCH_FAIL, FRIEND_TALK_IMG_MATCH_SUCCESS } = require('./solapiFriendTalkSend');
 const templates = require('./friendTalkTemplates');
+const { resolveMatchMeetingDisplay } = require('./meetingDisplay');
 
 const RSVP_YES = 'YES';
 const RSVP_NO = 'NO';
@@ -286,7 +287,12 @@ async function sendDayEveReminderForMatching(matchingId) {
     return { ok: false, error: 'RSVP 토큰 생성에 실패했습니다.' };
   }
 
-  const text = templates.MATCH_DAY_EVE_REMINDER_TEXT;
+  // 매칭 행에 시간·카페가 설정되어 있으면 본문에 채워 넣음. 없으면 기존처럼 일반 본문.
+  const meeting = await resolveMatchMeetingDisplay(matchingId);
+  const text = templates.buildMatchDayEveReminderText({
+    meetingTime: meeting.meetingTime,
+    meetingPlace: meeting.meetingPlace,
+  });
 
   await prisma.matchingFriendTalkRsvp.update({
     where: { matchingId },

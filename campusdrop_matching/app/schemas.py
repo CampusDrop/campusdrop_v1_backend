@@ -184,6 +184,13 @@ class BatchMatchRequest(BaseModel):
         default_factory=list,
         description="과거 매칭 쌍. 각 원소는 `[uuid_lo, uuid_hi]`(문자열 정렬). 해당 쌍은 배치 엣지에서 제외.",
     )
+    # 같은 (date, time_slot) 슬롯에 동시에 배정 가능한 최대 쌍 수. 일반적으로 활성 카페 개수를 그대로 넣는다.
+    # 생략 시 기존 동작과 호환되도록 2로 간주.
+    max_matches_per_slot: int | None = Field(
+        default=None,
+        ge=1,
+        description="슬롯당 최대 쌍 수. 활성 카페 N개일 때 N을 넣어 카페당 1쌍 정책을 강제한다.",
+    )
 
 
 class BatchMatchPair(BaseModel):

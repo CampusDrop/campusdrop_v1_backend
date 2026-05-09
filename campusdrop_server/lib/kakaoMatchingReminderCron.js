@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const { prisma } = require('./prisma');
-const { refreshKakaoAccessToken, sendKakaoTalkDefaultTextMemo } = require('./kakaoOAuth');
+const { decryptPhoneFromStorage } = require('./phoneCrypto');
+const { sendFriendTalkCta, assertSolapiFriendTalkEnv } = require('./solapiFriendTalkSend');
 const { buildMeetingFeedbackKakaoReminder } = require('./meetingReminderText');
 
 function parseReminderIdentityIds() {
@@ -19,11 +20,16 @@ function reminderMessageForRow(row) {
 }
 
 /**
- * 테스트·소규모 수신자용: ENV에 적은 `Identity.id`(UUID)마다 저장된 카카오 리프레시 토큰으로
- * 나에게 보내기 API를 호출합니다. 향후 “전 유저 확장”은 대상 조회 쿼리만 바꾸면 됩니다.
+ * 테스트·소규모 수신자용: ENV에 적은 `Identity.id`(UUID)마다 Solapi 친구톡을 전송합니다.
+ * 향후 “전 유저 확장”은 대상 조회 쿼리만 바꾸면 됩니다.
  */
 async function runKakaoMatchingReminderJob() {
   const ids = parseReminderIdentityIds();
+  const missingEnv = assertSolapiFriendTalkEnv();
+  if (missingEnv) {
+    console.warn('[kakaoMatchingReminderCron] Solapi 설정 누락으로 건너뜀:', missingEnv);
+    return;
+  }
 
   if (!ids.length) {
     console.warn('[kakaoMatchingReminderCron] KAKAO_CRON_NOTIFY_IDENTITY_UUIDS 비어 있음 — 건너뜀');
@@ -38,7 +44,7 @@ async function runKakaoMatchingReminderJob() {
         select: {
           id: true,
           blockedAt: true,
-          kakaoRefreshToken: true,
+          phoneEncrypted: true,
           meetingTime: true,
           meetingPlace: true,
         },
@@ -56,36 +62,29 @@ async function runKakaoMatchingReminderJob() {
       console.warn('[kakaoMatchingReminderCron] 차단 계정 건너뜀:', identityId);
       continue;
     }
-    if (!row.kakaoRefreshToken || !String(row.kakaoRefreshToken).trim()) {
-      console.warn(
-        '[kakaoMatchingReminderCron] kakaoRefreshToken 없음(카카오 로그인에 talk_message 등 동의·리프레시 발급 필요):',
-        identityId,
-      );
+    if (!row.phoneEncrypted) {
+      console.warn('[kakaoMatchingReminderCron] phoneEncrypted 없음:', identityId);
+      continue;
+    }
+
+    let to;
+    try {
+      to = decryptPhoneFromStorage(row.phoneEncrypted);
+    } catch (e) {
+      console.warn('[kakaoMatchingReminderCron] 전화번호 복호화 실패:', identityId, e && e.message);
       continue;
     }
 
     try {
       const text = reminderMessageForRow(row);
-      const refreshed = await refreshKakaoAccessToken(row.kakaoRefreshToken);
-      const newRt =
-        typeof refreshed.refresh_token === 'string' && refreshed.refresh_token.trim()
-          ? refreshed.refresh_token.trim()
-          : null;
-      if (newRt && newRt !== row.kakaoRefreshToken) {
-        await prisma.identity.update({
-          where: { id: row.id },
-          data: { kakaoRefreshToken: newRt },
-        });
-      }
-      await sendKakaoTalkDefaultTextMemo(refreshed.access_token, text);
+      await sendFriendTalkCta({ to, text });
       console.log('[kakaoMatchingReminderCron] 전송 완료:', identityId);
     } catch (e) {
       console.error(
         '[kakaoMatchingReminderCron] 전송 실패:',
         identityId,
-        e && e.code,
-        e && e.kakaoStatus,
-        e && e.kakaoBody,
+        e && e.code ? e.code : '',
+        e && e.message ? e.message : e,
       );
     }
   }

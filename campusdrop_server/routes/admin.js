@@ -34,6 +34,81 @@ const { resolveSchoolProofAbsolutePath } = require('../lib/schoolProofMulter');
 const { kstWallClockToUtc } = require('../lib/kstMeetingInstant');
 const { signMeetChatQrToken, meetChatQrSecret } = require('../lib/meetChatQr');
 
+const CAFE_NAME_MAX_LEN = 200;
+const CAFE_URL_MAX_LEN = 1000;
+const CAFE_ADDRESS_MAX_LEN = 500;
+
+/**
+ * @param {unknown} body
+ * @returns {{ ok: true, value: { name?: string, naverPlaceUrl?: string | null, address?: string | null, isActive?: boolean, displayOrder?: number } } | { ok: false, error: string }}
+ */
+function parseCafeInput(body, { requireName }) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, error: '요청 본문은 JSON 객체여야 합니다.' };
+  }
+  const out = {};
+  const b = /** @type {Record<string, unknown>} */ (body);
+
+  if ('name' in b) {
+    const v = b.name;
+    if (typeof v !== 'string') {
+      return { ok: false, error: 'name은 문자열이어야 합니다.' };
+    }
+    const t = v.trim();
+    if (t.length === 0) {
+      return { ok: false, error: 'name은 비어 있을 수 없습니다.' };
+    }
+    if (t.length > CAFE_NAME_MAX_LEN) {
+      return { ok: false, error: `name은 ${CAFE_NAME_MAX_LEN}자 이하여야 합니다.` };
+    }
+    out.name = t;
+  } else if (requireName) {
+    return { ok: false, error: 'name이 필요합니다.' };
+  }
+
+  for (const [key, max] of [
+    ['naverPlaceUrl', CAFE_URL_MAX_LEN],
+    ['naver_place_url', CAFE_URL_MAX_LEN],
+    ['address', CAFE_ADDRESS_MAX_LEN],
+  ]) {
+    if (key in b) {
+      const v = b[key];
+      if (v === null || v === '') {
+        if (key === 'address') out.address = null;
+        else out.naverPlaceUrl = null;
+        continue;
+      }
+      if (typeof v !== 'string') {
+        return { ok: false, error: `${key}는 문자열이거나 null이어야 합니다.` };
+      }
+      const t = v.trim();
+      if (t.length > max) {
+        return { ok: false, error: `${key}는 ${max}자 이하여야 합니다.` };
+      }
+      if (key === 'address') out.address = t || null;
+      else out.naverPlaceUrl = t || null;
+    }
+  }
+
+  if ('isActive' in b || 'is_active' in b) {
+    const v = b.isActive ?? b.is_active;
+    if (typeof v !== 'boolean') {
+      return { ok: false, error: 'isActive는 boolean이어야 합니다.' };
+    }
+    out.isActive = v;
+  }
+
+  if ('displayOrder' in b || 'display_order' in b) {
+    const v = Number(b.displayOrder ?? b.display_order);
+    if (!Number.isInteger(v)) {
+      return { ok: false, error: 'displayOrder는 정수여야 합니다.' };
+    }
+    out.displayOrder = v;
+  }
+
+  return { ok: true, value: out };
+}
+
 const router = express.Router();
 
 const UUID_RE =
@@ -360,6 +435,223 @@ router.use(adminAuthMiddleware);
 
 /**
  * @openapi
+ * /api/admin/cafes:
+ *   get:
+ *     tags: [Admin]
+ *     summary: 매칭 카페 마스터 목록 (활성·비활성 모두)
+ *     description: |
+ *       `displayOrder` 오름차순, 동률은 `createdAt` 오름차순. 배치 매칭은 `isActive=true`인 카페만 사용합니다.
+ *     security:
+ *       - AdminBearerAuth: []
+ */
+router.get('/cafes', async (req, res) => {
+  try {
+    const cafes = await prisma.cafe.findMany({
+      orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+      select: {
+        id: true,
+        name: true,
+        naverPlaceUrl: true,
+        address: true,
+        isActive: true,
+        displayOrder: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin.adminId,
+      action: 'ADMIN_LIST_CAFES',
+      resource: 'GET /api/admin/cafes',
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: { count: cafes.length },
+    });
+
+    return res.status(200).json({ total: cafes.length, cafes });
+  } catch (err) {
+    console.error('admin GET /cafes error:', err);
+    return res.status(500).json({ error: '카페 목록 조회 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/cafes:
+ *   post:
+ *     tags: [Admin]
+ *     summary: 매칭 카페 등록
+ *     description: |
+ *       `name`은 유니크. `displayOrder`는 라운드로빈 우선순위(오름차순). 생략 시 0.
+ *     security:
+ *       - AdminBearerAuth: []
+ */
+router.post('/cafes', async (req, res) => {
+  const parsed = parseCafeInput(req.body, { requireName: true });
+  if (!parsed.ok) {
+    return res.status(400).json({ error: parsed.error });
+  }
+  const v = parsed.value;
+  try {
+    const created = await prisma.cafe.create({
+      data: {
+        name: v.name,
+        naverPlaceUrl: v.naverPlaceUrl ?? null,
+        address: v.address ?? null,
+        isActive: v.isActive ?? true,
+        displayOrder: v.displayOrder ?? 0,
+      },
+      select: {
+        id: true,
+        name: true,
+        naverPlaceUrl: true,
+        address: true,
+        isActive: true,
+        displayOrder: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin.adminId,
+      action: 'ADMIN_CAFE_CREATE',
+      resource: `Cafe:${created.id}`,
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: { name: created.name, displayOrder: created.displayOrder },
+    });
+
+    return res.status(201).json({ cafe: created });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      return res.status(409).json({ error: '같은 이름의 카페가 이미 존재합니다.' });
+    }
+    console.error('admin POST /cafes error:', err);
+    return res.status(500).json({ error: '카페 등록 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/cafes/{id}:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: 매칭 카페 부분 수정 (이름·URL·주소·displayOrder·isActive)
+ *     security:
+ *       - AdminBearerAuth: []
+ */
+router.patch('/cafes/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!isUuid(id)) {
+    return res.status(400).json({ error: '유효한 카페 UUID가 아닙니다.' });
+  }
+  const parsed = parseCafeInput(req.body, { requireName: false });
+  if (!parsed.ok) {
+    return res.status(400).json({ error: parsed.error });
+  }
+  if (Object.keys(parsed.value).length === 0) {
+    return res.status(400).json({ error: '수정할 필드를 하나 이상 보내 주세요.' });
+  }
+
+  try {
+    const updated = await prisma.cafe.update({
+      where: { id },
+      data: parsed.value,
+      select: {
+        id: true,
+        name: true,
+        naverPlaceUrl: true,
+        address: true,
+        isActive: true,
+        displayOrder: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin.adminId,
+      action: 'ADMIN_CAFE_UPDATE',
+      resource: `Cafe:${id}`,
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: { keys: Object.keys(parsed.value) },
+    });
+
+    return res.status(200).json({ cafe: updated });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+      return res.status(404).json({ error: '카페를 찾을 수 없습니다.' });
+    }
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      return res.status(409).json({ error: '같은 이름의 카페가 이미 존재합니다.' });
+    }
+    console.error('admin PATCH /cafes/:id error:', err);
+    return res.status(500).json({ error: '카페 수정 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/cafes/{id}:
+ *   delete:
+ *     tags: [Admin]
+ *     summary: 매칭 카페 삭제 (사용 중이면 기본 거부, `?force=1`로 강제)
+ *     description: |
+ *       이미 매칭에 배정된 카페면 기본은 400이며, `?force=1`을 주면 매칭 행의 `cafe_id`만 NULL로 끊어지고
+ *       `meeting_venue_name` 스냅샷은 보존됩니다. 일반적으로는 비활성화(`isActive=false`)를 권장합니다.
+ *     security:
+ *       - AdminBearerAuth: []
+ */
+router.delete('/cafes/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!isUuid(id)) {
+    return res.status(400).json({ error: '유효한 카페 UUID가 아닙니다.' });
+  }
+  const force = ['1', 'true', 'yes'].includes(String(req.query.force || '').toLowerCase());
+
+  try {
+    const usedCount = await prisma.matching.count({ where: { cafeId: id } });
+    if (usedCount > 0 && !force) {
+      return res.status(400).json({
+        error: `이 카페에 배정된 매칭이 ${usedCount}건 있어 삭제할 수 없습니다. \`?force=1\`로 강제 삭제하면 매칭의 카페 연결만 해제되고 이름은 보존됩니다. 일반적으로는 isActive=false 비활성화를 권장합니다.`,
+        usedCount,
+      });
+    }
+
+    await prisma.cafe.delete({ where: { id } });
+
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin.adminId,
+      action: 'ADMIN_CAFE_DELETE',
+      resource: `Cafe:${id}`,
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: { force, usedCount },
+    });
+
+    return res.status(200).json({
+      message: '카페가 삭제되었습니다.',
+      id,
+      detachedMatchingCount: force ? usedCount : 0,
+    });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+      return res.status(404).json({ error: '카페를 찾을 수 없습니다.' });
+    }
+    console.error('admin DELETE /cafes/:id error:', err);
+    return res.status(500).json({ error: '카페 삭제 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * @openapi
  * /api/admin/users:
  *   get:
  *     tags: [Admin]
@@ -576,6 +868,7 @@ router.get('/matches', async (req, res) => {
               trait: { select: { gender: true } },
             },
           },
+          cafe: { select: { id: true, name: true, isActive: true, naverPlaceUrl: true } },
         },
       }),
     ]);
@@ -619,6 +912,8 @@ router.get('/matches', async (req, res) => {
         periodStart: m.periodStart ?? null,
         meetingStartsAt: m.meetingStartsAt ?? null,
         meetingVenueName: m.meetingVenueName ?? null,
+        cafeId: m.cafeId ?? null,
+        cafe: m.cafe ?? null,
         matchReport: m.matchReport ?? null,
       })),
     });
@@ -933,8 +1228,31 @@ router.patch('/matches/:id/meet-details', async (req, res) => {
     }
   }
 
+  // cafeId가 들어오면 카페 존재 여부 확인 후 venueName을 동시에 동기화. null은 카페 해제.
+  if ('cafeId' in body || 'cafe_id' in body) {
+    const v = body.cafeId ?? body.cafe_id;
+    if (v === null || v === '') {
+      data.cafeId = null;
+    } else {
+      if (typeof v !== 'string' || !isUuid(v)) {
+        return res.status(400).json({ error: 'cafeId는 유효한 UUID여야 합니다.' });
+      }
+      const cafe = await prisma.cafe.findUnique({ where: { id: v }, select: { id: true, name: true } });
+      if (!cafe) {
+        return res.status(404).json({ error: '카페를 찾을 수 없습니다.' });
+      }
+      data.cafeId = cafe.id;
+      // 본문에 meetingVenueName이 함께 오지 않았으면 카페 이름으로 자동 동기화.
+      if (!('meetingVenueName' in body) && !('meeting_venue_name' in body)) {
+        data.meetingVenueName = cafe.name;
+      }
+    }
+  }
+
   if (Object.keys(data).length === 0) {
-    return res.status(400).json({ error: 'meetingStartsAt 또는 meetingVenueName 중 하나 이상을 보내 주세요.' });
+    return res
+      .status(400)
+      .json({ error: 'meetingStartsAt, meetingVenueName, cafeId 중 하나 이상을 보내 주세요.' });
   }
 
   try {
@@ -947,6 +1265,8 @@ router.patch('/matches/:id/meet-details', async (req, res) => {
         userBId: true,
         meetingStartsAt: true,
         meetingVenueName: true,
+        cafeId: true,
+        cafe: { select: { id: true, name: true, isActive: true } },
         matchReport: true,
       },
     });
@@ -968,6 +1288,111 @@ router.patch('/matches/:id/meet-details', async (req, res) => {
     }
     console.error('admin PATCH /matches/:id/meet-details:', err);
     return res.status(500).json({ error: '매칭 정보 갱신 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/matches/reassign-venue:
+ *   post:
+ *     tags: [Admin]
+ *     summary: 특정 시간(KST date+hour) 슬롯의 매칭 카페를 일괄 교체
+ *     description: |
+ *       본문 `{ date: 'YYYY-MM-DD', hourStart: 0~23, toCafeId, fromCafeId? }`.
+ *       KST 벽시계로 해석한 `meeting_starts_at` 시각이 정확히 일치하는 매칭을 일괄 update.
+ *       `fromCafeId`가 주어지면 해당 카페에 배정된 매칭만, 없으면 슬롯 전체를 대상으로 한다.
+ *       `meeting_venue_name`은 `toCafeId`의 현재 이름으로 동기화. 응답에는 변경된 매칭 ID 배열 + 카운트.
+ *     security:
+ *       - AdminBearerAuth: []
+ */
+router.post('/matches/reassign-venue', async (req, res) => {
+  const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+  const date = typeof body.date === 'string' ? body.date.trim() : '';
+  if (!isValidDateOnly(date)) {
+    return res.status(400).json({ error: 'date는 YYYY-MM-DD 형식의 유효한 날짜여야 합니다.' });
+  }
+  const hs = parseQueryHour(body.hourStart ?? body.hour_start, 'hourStart');
+  if (!hs.ok) {
+    return res.status(400).json({ error: hs.error });
+  }
+  const toCafeId = String(body.toCafeId ?? body.to_cafe_id ?? '').trim();
+  if (!isUuid(toCafeId)) {
+    return res.status(400).json({ error: 'toCafeId는 유효한 카페 UUID여야 합니다.' });
+  }
+  let fromCafeId = null;
+  if (body.fromCafeId !== undefined && body.fromCafeId !== null && body.fromCafeId !== ''
+      || body.from_cafe_id !== undefined && body.from_cafe_id !== null && body.from_cafe_id !== '') {
+    const v = String(body.fromCafeId ?? body.from_cafe_id).trim();
+    if (!isUuid(v)) {
+      return res.status(400).json({ error: 'fromCafeId는 유효한 카페 UUID여야 합니다.' });
+    }
+    fromCafeId = v;
+  }
+
+  const meetingStartsAt = kstWallClockToUtc(date, hs.value);
+  if (!meetingStartsAt) {
+    return res.status(400).json({ error: 'date·hourStart로 유효한 KST 시각을 만들 수 없습니다.' });
+  }
+
+  try {
+    const toCafe = await prisma.cafe.findUnique({
+      where: { id: toCafeId },
+      select: { id: true, name: true, isActive: true },
+    });
+    if (!toCafe) {
+      return res.status(404).json({ error: 'toCafeId에 해당하는 카페를 찾을 수 없습니다.' });
+    }
+
+    const where = {
+      meetingStartsAt,
+      ...(fromCafeId ? { cafeId: fromCafeId } : {}),
+    };
+
+    const targets = await prisma.matching.findMany({
+      where,
+      select: { id: true, cafeId: true, meetingVenueName: true },
+    });
+
+    if (targets.length === 0) {
+      return res.status(200).json({
+        updatedCount: 0,
+        updatedIds: [],
+        message: '대상 매칭이 없습니다.',
+        slot: { date, hourStart: hs.value, meetingStartsAt: meetingStartsAt.toISOString() },
+      });
+    }
+
+    await prisma.matching.updateMany({
+      where: { id: { in: targets.map((t) => t.id) } },
+      data: { cafeId: toCafe.id, meetingVenueName: toCafe.name },
+    });
+
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin.adminId,
+      action: 'ADMIN_MATCH_BULK_REASSIGN_VENUE',
+      resource: `Cafe:${toCafe.id}`,
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: {
+        slot: { date, hourStart: hs.value, meetingStartsAt: meetingStartsAt.toISOString() },
+        fromCafeId,
+        toCafeId: toCafe.id,
+        updatedCount: targets.length,
+        sampleMatchIds: targets.slice(0, 50).map((t) => t.id),
+      },
+    });
+
+    return res.status(200).json({
+      updatedCount: targets.length,
+      updatedIds: targets.map((t) => t.id),
+      slot: { date, hourStart: hs.value, meetingStartsAt: meetingStartsAt.toISOString() },
+      toCafe: { id: toCafe.id, name: toCafe.name, isActive: toCafe.isActive },
+      fromCafeId,
+    });
+  } catch (err) {
+    console.error('admin POST /matches/reassign-venue error:', err);
+    return res.status(500).json({ error: '카페 일괄 교체 중 오류가 발생했습니다.' });
   }
 });
 
@@ -1182,6 +1607,13 @@ router.post('/matches/batch-run', async (req, res) => {
  *     description: |
  *       남성·여성(이성) 쌍만 허용. `Trait.gender`가 비어 있으면 본문 `genderA`·`genderB`(각각 userA·userB의 `male`/`female` 또는 남성/여성 표기)로 넘기면 저장 후 매칭한다.
  *       DB에 이미 성별이 있는데 본문 값이 다르면 400.
+ *
+ *       **약속 시각(요일·시간):** 별도 `weekday` 필드는 없고, 달력 날짜로 요일이 정해진다.
+ *       - `meetingStartsAt`(또는 `meeting_starts_at`)에 ISO-8601 시각을 주면 그 값이 `matchings.meeting_starts_at`에 저장되며, 비어 있지 않으면 **이 값이 우선**이다.
+ *       - 그렇지 않고 `matchedSlot`(또는 `matched_slot`)을 주면 `{ date: YYYY-MM-DD, hourStart, hourEnd }` 정확히 1시간 구간으로 검증한 뒤, 해당 날짜·`hourStart`를 **KST 벽시계**로 해석해 `meeting_starts_at`을 채운다. 선택적으로 `time_slot`/`timeSlot` 문자열로 `hourStart`/`hourEnd`와 교차 검증 가능.
+ *       **장소:** `meetingVenueName`(또는 `meeting_venue_name`) 문자열 최대 200자 → `matchings.meeting_venue_name`. 클라이언트의 소개팅 채팅 등에서 방 제목 등으로 사용된다.
+ *
+ *       `matchedSlot`을 넘기면 `match_report` JSON에 `matchedSlot`이 함께 저장된다(넘기지 않으면 `match_report`는 생략 가능). `meetingStartsAt`만 넣고 슬롯을 생략해도 DB 시각만으로 일정·채팅 창 유도가 가능하다.
  *     security:
  *       - AdminBearerAuth: []
  */
@@ -1238,6 +1670,26 @@ router.post('/matches/force', async (req, res) => {
     }
     const t = venueIn.trim();
     meetingVenueName = t.length > 0 ? t.slice(0, 200) : null;
+  }
+
+  // cafeId가 들어오면 카페 존재 확인. meetingVenueName이 본문에 없으면 카페 이름으로 자동 설정.
+  let cafeId = null;
+  const cafeIdIn = body.cafeId ?? body.cafe_id;
+  if (cafeIdIn !== undefined && cafeIdIn !== null && cafeIdIn !== '') {
+    if (typeof cafeIdIn !== 'string' || !isUuid(cafeIdIn)) {
+      return res.status(400).json({ error: 'cafeId는 유효한 UUID여야 합니다.' });
+    }
+    const cafeRow = await prisma.cafe.findUnique({
+      where: { id: cafeIdIn },
+      select: { id: true, name: true },
+    });
+    if (!cafeRow) {
+      return res.status(404).json({ error: 'cafeId에 해당하는 카페를 찾을 수 없습니다.' });
+    }
+    cafeId = cafeRow.id;
+    if (venueIn === undefined) {
+      meetingVenueName = cafeRow.name;
+    }
   }
 
   try {
@@ -1360,6 +1812,7 @@ router.post('/matches/force', async (req, res) => {
           periodStart,
           meetingStartsAt,
           meetingVenueName,
+          cafeId,
           ...(matchedSlot
             ? { matchReport: { score: Math.round(score * 100) / 100, reasons: [], matchedSlot } }
             : {}),
@@ -1383,6 +1836,7 @@ router.post('/matches/force', async (req, res) => {
         matchedSlot,
         meetingStartsAt: meetingStartsAt ? meetingStartsAt.toISOString() : null,
         meetingVenueName,
+        cafeId,
       },
     });
 
@@ -1399,6 +1853,7 @@ router.post('/matches/force', async (req, res) => {
         matchedSlot,
         meetingStartsAt: match.meetingStartsAt ?? null,
         meetingVenueName: match.meetingVenueName ?? null,
+        cafeId: match.cafeId ?? null,
         matchReport: match.matchReport ?? null,
       },
       meetChatQrToken: signMeetChatQrToken(match.id),

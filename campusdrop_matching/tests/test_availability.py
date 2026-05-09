@@ -202,7 +202,7 @@ def test_batch_protects_female_with_sparse_time_candidates() -> None:
     }
 
 
-def test_batch_allows_at_most_one_pair_per_slot() -> None:
+def test_batch_allows_at_most_two_pairs_per_slot() -> None:
     only_slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     users = [
         ("female-a", _u(), "female", [only_slot], None, None, None),
@@ -213,12 +213,12 @@ def test_batch_allows_at_most_one_pair_per_slot() -> None:
 
     result = run_batch_female_coverage_matching(users, set())
 
-    assert len(result.pairs) == 1
+    assert len(result.pairs) == 2
     assert all(pair.matched_slot == only_slot for pair in result.pairs)
 
 
-def test_batch_multiple_couples_share_slot_only_once() -> None:
-    """같은 슬롯만 가진 많은 사람이 있어도 슬롯당 1쌍까지만 같은 시간대에 배정."""
+def test_batch_multiple_couples_share_slot_capped_at_two() -> None:
+    """같은 슬롯만 가진 많은 사람이 있어도 슬롯당 2쌍까지만 같은 시간대에 배정."""
     only_slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
     users = [
         ("female-a", _u(), "female", [only_slot], None, None, None),
@@ -231,7 +231,7 @@ def test_batch_multiple_couples_share_slot_only_once() -> None:
 
     result = run_batch_female_coverage_matching(users, set())
 
-    assert len(result.pairs) == 1
+    assert len(result.pairs) == 2
     assert all(pair.matched_slot == only_slot for pair in result.pairs)
 
 
@@ -256,9 +256,9 @@ def test_batch_large_candidate_pool_uses_slot_safe_fallback() -> None:
     ]
 
     # Everyone shares the same slot list → only the lexicographically first overlap is kept per pair:
-    # all candidate edges compete for one slot bucket; with _MAX_MATCHES_PER_SLOT=1 at most one match.
-    assert len(result.pairs) == 1
-    assert slot_keys.count("2026-04-21\t10:00-11:00") == 1
+    # all candidate edges compete for one slot bucket; with _MAX_MATCHES_PER_SLOT=2 at most two matches.
+    assert len(result.pairs) == 2
+    assert slot_keys.count("2026-04-21\t10:00-11:00") == 2
 
 
 def test_batch_forbidden_pairs_are_excluded() -> None:
@@ -410,3 +410,54 @@ def test_batch_excludes_large_age_gap() -> None:
     ]
     pairs = run_batch_greedy_unique_pairs(users, set())
     assert pairs == []
+
+
+def test_batch_max_matches_per_slot_one_caps_to_one_pair() -> None:
+    """카페가 1개일 때 같은 슬롯에 동시에 들어갈 수 있는 쌍은 1개뿐이어야 한다."""
+    only_slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
+    users = [
+        ("female-a", _u(), "female", [only_slot], None, None, None),
+        ("female-b", _u(), "female", [only_slot], None, None, None),
+        ("male-a", _u(), "male", [only_slot], None, None, None),
+        ("male-b", _u(), "male", [only_slot], None, None, None),
+    ]
+
+    result = run_batch_female_coverage_matching(users, set(), max_matches_per_slot=1)
+
+    assert len(result.pairs) == 1
+    assert result.pairs[0].matched_slot == only_slot
+    # 한 명의 여성은 매칭되지 못한다 — 슬롯 capacity 제약에 걸려서.
+    assert len(result.unmatched_females) == 1
+    assert result.unmatched_females[0].reason == "unmatched_after_optimization"
+
+
+def test_batch_max_matches_per_slot_three_admits_more_pairs() -> None:
+    """카페가 3개라면 같은 슬롯에 3쌍까지 배정 가능."""
+    only_slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
+    users = [
+        ("female-a", _u(), "female", [only_slot], None, None, None),
+        ("female-b", _u(), "female", [only_slot], None, None, None),
+        ("female-c", _u(), "female", [only_slot], None, None, None),
+        ("male-a", _u(), "male", [only_slot], None, None, None),
+        ("male-b", _u(), "male", [only_slot], None, None, None),
+        ("male-c", _u(), "male", [only_slot], None, None, None),
+    ]
+
+    result = run_batch_female_coverage_matching(users, set(), max_matches_per_slot=3)
+
+    assert len(result.pairs) == 3
+    assert all(pair.matched_slot == only_slot for pair in result.pairs)
+
+
+def test_batch_match_summary_records_max_matches_per_slot() -> None:
+    only_slot = AvailabilitySlot(date="2026-04-21", time_slot="11:00-12:00")
+    users = [
+        ("female-a", _u(), "female", [only_slot], None, None, None),
+        ("male-a", _u(), "male", [only_slot], None, None, None),
+    ]
+
+    result = run_batch_female_coverage_matching(users, set(), max_matches_per_slot=4)
+    assert result.match_summary["max_matches_per_slot"] == 4
+
+    default_result = run_batch_female_coverage_matching(users, set())
+    assert default_result.match_summary["max_matches_per_slot"] == 2

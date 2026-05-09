@@ -22,7 +22,8 @@ def _batch_gender(g: str | None) -> Literal["male", "female"] | None:
 
 _MAX_EXACT_SLOT_OPTIMIZATION_EDGES = 220
 _MAX_EXACT_SLOT_OPTIMIZATION_FEMALES = 18
-_MAX_MATCHES_PER_SLOT = 1
+# 슬롯당 동시에 들어갈 수 있는 쌍 수 기본값. 운영에서는 활성 카페 수만큼 동적으로 주입(BatchMatchRequest.max_matches_per_slot).
+DEFAULT_MAX_MATCHES_PER_SLOT = 2
 # Max edges per overlapping (female, male) pair; extra overlaps dropped (sorted keys kept first).
 _MAX_OVERLAPPING_SLOT_KEYS_PER_PAIR = 1
 
@@ -99,12 +100,12 @@ def _resource_bits(edges: list[_CandidateEdge]) -> tuple[dict[str, int], dict[st
     return male_bits, slot_indices
 
 
-def _slot_usage_count(encoded_counts: int, slot_index: int) -> int:
-    return (encoded_counts // ((_MAX_MATCHES_PER_SLOT + 1) ** slot_index)) % (_MAX_MATCHES_PER_SLOT + 1)
+def _slot_usage_count(encoded_counts: int, slot_index: int, max_matches_per_slot: int) -> int:
+    return (encoded_counts // ((max_matches_per_slot + 1) ** slot_index)) % (max_matches_per_slot + 1)
 
 
-def _increment_slot_usage(encoded_counts: int, slot_index: int) -> int:
-    return encoded_counts + ((_MAX_MATCHES_PER_SLOT + 1) ** slot_index)
+def _increment_slot_usage(encoded_counts: int, slot_index: int, max_matches_per_slot: int) -> int:
+    return encoded_counts + ((max_matches_per_slot + 1) ** slot_index)
 
 
 def _use_exact_slot_optimization(edges: list[_CandidateEdge]) -> bool:
@@ -117,6 +118,7 @@ def _use_exact_slot_optimization(edges: list[_CandidateEdge]) -> bool:
 def _greedy_slot_safe_selection(
     edges: list[_CandidateEdge],
     *,
+    max_matches_per_slot: int,
     min_female_score: float | None = None,
     target_count: int | None = None,
 ) -> list[_CandidateEdge]:
@@ -150,7 +152,7 @@ def _greedy_slot_safe_selection(
             break
         if edge.female_id in used_females or edge.male_id in used_males:
             continue
-        if edge.slot_key is not None and used_slot_counts.get(edge.slot_key, 0) >= _MAX_MATCHES_PER_SLOT:
+        if edge.slot_key is not None and used_slot_counts.get(edge.slot_key, 0) >= max_matches_per_slot:
             continue
         selected.append(edge)
         used_females.add(edge.female_id)
@@ -162,7 +164,12 @@ def _greedy_slot_safe_selection(
     return selected
 
 
-def _max_cardinality(edges: list[_CandidateEdge], *, min_female_score: float | None = None) -> int:
+def _max_cardinality(
+    edges: list[_CandidateEdge],
+    *,
+    max_matches_per_slot: int,
+    min_female_score: float | None = None,
+) -> int:
     filtered = [
         edge
         for edge in edges
@@ -171,7 +178,7 @@ def _max_cardinality(edges: list[_CandidateEdge], *, min_female_score: float | N
     if not filtered:
         return 0
     if not _use_exact_slot_optimization(filtered):
-        return len(_greedy_slot_safe_selection(filtered))
+        return len(_greedy_slot_safe_selection(filtered, max_matches_per_slot=max_matches_per_slot))
 
     female_groups = _edges_by_female(filtered)
     male_bits, slot_indices = _resource_bits(filtered)
@@ -187,16 +194,22 @@ def _max_cardinality(edges: list[_CandidateEdge], *, min_female_score: float | N
             slot_index = slot_indices.get(edge.slot_key)
             if used_males & male_bit:
                 continue
-            if slot_index is not None and _slot_usage_count(used_slots, slot_index) >= _MAX_MATCHES_PER_SLOT:
+            if slot_index is not None and _slot_usage_count(used_slots, slot_index, max_matches_per_slot) >= max_matches_per_slot:
                 continue
-            next_slots = _increment_slot_usage(used_slots, slot_index) if slot_index is not None else used_slots
+            next_slots = (
+                _increment_slot_usage(used_slots, slot_index, max_matches_per_slot)
+                if slot_index is not None
+                else used_slots
+            )
             best = max(best, 1 + solve(group_idx + 1, used_males | male_bit, next_slots))
         return best
 
     return solve(0, 0, 0)
 
 
-def _best_minimum_female_score(edges: list[_CandidateEdge], target_count: int) -> float:
+def _best_minimum_female_score(
+    edges: list[_CandidateEdge], target_count: int, *, max_matches_per_slot: int
+) -> float:
     if target_count <= 0:
         return 0.0
     scores = sorted({round(edge.female_score, 6) for edge in edges})
@@ -205,7 +218,10 @@ def _best_minimum_female_score(edges: list[_CandidateEdge], target_count: int) -
     answer = scores[0]
     while lo <= hi:
         mid = (lo + hi) // 2
-        if _max_cardinality(edges, min_female_score=scores[mid]) >= target_count:
+        if (
+            _max_cardinality(edges, max_matches_per_slot=max_matches_per_slot, min_female_score=scores[mid])
+            >= target_count
+        ):
             answer = scores[mid]
             lo = mid + 1
         else:
@@ -289,11 +305,15 @@ def _min_cost_max_flow_selected_edges(edges: list[_CandidateEdge], target_count:
     return selected
 
 
-def _best_weighted_selection(edges: list[_CandidateEdge], target_count: int) -> list[_CandidateEdge]:
+def _best_weighted_selection(
+    edges: list[_CandidateEdge], target_count: int, *, max_matches_per_slot: int
+) -> list[_CandidateEdge]:
     if target_count <= 0 or not edges:
         return []
     if not _use_exact_slot_optimization(edges):
-        return _greedy_slot_safe_selection(edges, target_count=target_count)
+        return _greedy_slot_safe_selection(
+            edges, target_count=target_count, max_matches_per_slot=max_matches_per_slot
+        )
 
     female_groups = _edges_by_female(edges)
     male_bits, slot_indices = _resource_bits(edges)
@@ -324,9 +344,13 @@ def _best_weighted_selection(edges: list[_CandidateEdge], target_count: int) -> 
             slot_index = slot_indices.get(edge.slot_key)
             if used_males & male_bit:
                 continue
-            if slot_index is not None and _slot_usage_count(used_slots, slot_index) >= _MAX_MATCHES_PER_SLOT:
+            if slot_index is not None and _slot_usage_count(used_slots, slot_index, max_matches_per_slot) >= max_matches_per_slot:
                 continue
-            next_slots = _increment_slot_usage(used_slots, slot_index) if slot_index is not None else used_slots
+            next_slots = (
+                _increment_slot_usage(used_slots, slot_index, max_matches_per_slot)
+                if slot_index is not None
+                else used_slots
+            )
             tail = solve(group_idx + 1, used_males | male_bit, next_slots, remaining - 1)
             if tail is None:
                 continue
@@ -348,6 +372,8 @@ def run_batch_female_coverage_matching(
         tuple[str, LifestyleUser, str | None, list[AvailabilitySlot], str | None, int | None, list[str] | None]
     ],
     forbidden_keys: set[str],
+    *,
+    max_matches_per_slot: int = DEFAULT_MAX_MATCHES_PER_SLOT,
 ) -> _BatchMatchResult:
     """
     여성 커버리지 우선 배치 매칭.
@@ -358,12 +384,17 @@ def run_batch_female_coverage_matching(
     겹치는 슬롯이 여러 개여도 쌍당 후보 간선은 `_MAX_OVERLAPPING_SLOT_KEYS_PER_PAIR`개만 둔다(정렬된 키 앞쪽).
     phase6 연상·연하 선호 하드는 참가자 `gender`가 female인 쪽에만 적용한다.
 
+    `max_matches_per_slot`은 같은 (date, time_slot) 슬롯에 동시에 들어갈 수 있는 쌍 수.
+    운영에서는 활성 카페 수만큼(예: 카페 2개 → 2)을 그대로 넣어 카페당 1쌍 정책을 강제한다.
+
     최적화 우선순위:
     1. 매칭 가능한 여성 수 최대화
     2. 선택된 여성 후보의 최저 `female_score` 최대화
     3. 여성 평균 만족도(고정 cardinality에서 합계) 최대화
     4. 전체 점수와 남성 점수로 동점 처리
     """
+    if max_matches_per_slot < 1:
+        max_matches_per_slot = 1
     n = len(users)
     if n < 2:
         return _BatchMatchResult(pairs=[], unmatched_females=[], match_summary={"matched_count": 0, "target_count": 0})
@@ -437,10 +468,16 @@ def run_batch_female_coverage_matching(
                     )
                 )
 
-    target_count = _max_cardinality(edges)
-    min_female_score = _best_minimum_female_score(edges, target_count) if target_count else 0.0
+    target_count = _max_cardinality(edges, max_matches_per_slot=max_matches_per_slot)
+    min_female_score = (
+        _best_minimum_female_score(edges, target_count, max_matches_per_slot=max_matches_per_slot)
+        if target_count
+        else 0.0
+    )
     eligible_edges = [edge for edge in edges if edge.female_score + 1e-9 >= min_female_score]
-    selected_edges = _best_weighted_selection(eligible_edges, target_count)
+    selected_edges = _best_weighted_selection(
+        eligible_edges, target_count, max_matches_per_slot=max_matches_per_slot
+    )
     matched_females = {edge.female_id for edge in selected_edges}
 
     pairs: list[BatchMatchPair] = []
@@ -518,6 +555,7 @@ def run_batch_female_coverage_matching(
         "matched_count": len(pairs),
         "target_count": target_count,
         "minimum_female_score": round(min_female_score, 2) if target_count else None,
+        "max_matches_per_slot": max_matches_per_slot,
         "priority": [
             "hard_filters",
             "max_female_coverage",
@@ -534,9 +572,13 @@ def run_batch_greedy_unique_pairs(
         tuple[str, LifestyleUser, str | None, list[AvailabilitySlot], str | None, int | None, list[str] | None]
     ],
     forbidden_keys: set[str],
+    *,
+    max_matches_per_slot: int = DEFAULT_MAX_MATCHES_PER_SLOT,
 ) -> list[BatchMatchPair]:
     """Backward-compatible wrapper for tests/importers; implementation is no longer greedy."""
-    return run_batch_female_coverage_matching(users, forbidden_keys).pairs
+    return run_batch_female_coverage_matching(
+        users, forbidden_keys, max_matches_per_slot=max_matches_per_slot
+    ).pairs
 
 
 def batch_match_endpoint(body: BatchMatchRequest) -> BatchMatchResponse:
@@ -549,7 +591,10 @@ def batch_match_endpoint(body: BatchMatchRequest) -> BatchMatchResponse:
             (u.user_id, u.profile, g, u.availability, u.department, u.birth_year, u.partner_age_preference),
         )
     forbidden_keys = _forbidden_pair_key_set(body)
-    result = run_batch_female_coverage_matching(entries, forbidden_keys)
+    max_matches_per_slot = body.max_matches_per_slot or DEFAULT_MAX_MATCHES_PER_SLOT
+    result = run_batch_female_coverage_matching(
+        entries, forbidden_keys, max_matches_per_slot=max_matches_per_slot
+    )
     return BatchMatchResponse(
         pairs=result.pairs,
         unmatched_females=result.unmatched_females,

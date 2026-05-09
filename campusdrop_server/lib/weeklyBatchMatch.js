@@ -20,6 +20,7 @@ const {
 const { slimMatchReportForDb } = require('./slimMatchReport');
 const { meetingStartsAtFromMatchReport } = require('./meetingStartsAtDerive');
 const { isBinaryTraitGender, normalizeTraitGender } = require('./genderPolicy');
+const { assignCafesToPairs } = require('./cafeAssignment');
 
 const DEFAULT_BATCH_TIMEOUT_MS = 300_000;
 
@@ -80,11 +81,13 @@ async function loadEligibleTraits(options = {}) {
  *
  * @param {import('@prisma/client').PrismaClient} prismaClient
  * @param {Date} periodStart
- * @param {{ lockSamePeriodPairsExceptUserId?: string | null }} [options] 실시간 매칭 시 이번 주 타인의 짝을 금지 쌍에 합침.
+ * @param {{ lockSamePeriodPairsExceptUserId?: string | null, maxMatchesPerSlot?: number | null }} [options]
+ *   - lockSamePeriodPairsExceptUserId: 실시간 매칭 시 이번 주 타인의 짝을 금지 쌍에 합침.
+ *   - maxMatchesPerSlot: 슬롯당 최대 쌍 수(활성 카페 수). 생략 시 Python 기본값(2) 사용.
  * @returns {Promise<{ pairs: any[], skipped: boolean, skipReason?: string, batchTraitsCount: number, eligibleSurveyCount: number, url: string }>}
  */
 async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
-  const { lockSamePeriodPairsExceptUserId = null } = options;
+  const { lockSamePeriodPairsExceptUserId = null, maxMatchesPerSlot = null } = options;
   const url = getMatchingBatchMatchUrl();
   const submissionWindow = buildSurveySubmissionWindowForApplicationPeriod(periodStart);
   const traits = await loadEligibleTraits({ prismaClient, periodStart });
@@ -157,6 +160,9 @@ async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
     })),
     forbidden_pairs: mergedForbidden,
   };
+  if (Number.isInteger(maxMatchesPerSlot) && maxMatchesPerSlot >= 1) {
+    body.max_matches_per_slot = maxMatchesPerSlot;
+  }
 
   try {
     const { data, status } = await axios.post(url, body, {
@@ -196,7 +202,18 @@ async function runWeeklyBatchMatch(options = {}) {
   const actorId = options.actorId !== undefined ? options.actorId : null;
   const logAction = actorType === 'admin' ? 'ADMIN_BATCH_MATCH' : 'WEEKLY_BATCH_MATCH';
   const periodStartForBatch = getMatchingPeriodStart();
-  const fetched = await fetchPythonBatchPairs(prisma, periodStartForBatch);
+  const activeCafes = await prisma.cafe.findMany({
+    where: { isActive: true },
+    orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+    select: { id: true, name: true },
+  });
+  if (activeCafes.length === 0) {
+    console.warn(
+      '[weeklyBatchMatch] 활성 카페가 없습니다. matchings에 cafe_id/meeting_venue_name이 비어 저장됩니다. 관리자 콘솔에서 카페를 등록해 주세요.',
+    );
+  }
+  const maxMatchesPerSlot = activeCafes.length > 0 ? activeCafes.length : null;
+  const fetched = await fetchPythonBatchPairs(prisma, periodStartForBatch, { maxMatchesPerSlot });
 
   if (fetched.skipped) {
     if (fetched.skipReason === 'not_enough_users') {
@@ -255,6 +272,10 @@ async function runWeeklyBatchMatch(options = {}) {
     })
     .filter(Boolean)
     .sort((a, b) => b.score - a.score);
+
+  // 슬롯별 라운드로빈으로 카페 배정. matchedSlot이 없는 행은 카페·이름 미설정.
+  assignCafesToPairs(insertRows, activeCafes);
+
   if (insertRows.length > 0) {
     const userIds = [...new Set(insertRows.flatMap((r) => [r.userAId, r.userBId]))];
     await prisma.$transaction(async (tx) => {
@@ -320,11 +341,13 @@ async function runWeeklyBatchMatch(options = {}) {
       pythonUrl: url,
       periodStart: insertRows.length > 0 ? insertRows[0].periodStart?.toISOString?.() ?? null : null,
       submissionWindow,
+      activeCafeCount: activeCafes.length,
+      cafesAssignedCount: insertRows.filter((r) => r.cafeId).length,
     },
   });
 
   console.log(
-    `[weeklyBatchMatch] 완료: 배치대상(남/여) ${batchTraitsCount}명(설문보유 ${traitsCount}명), 쌍 ${insertRows.length}건, 알림 대상 처리`,
+    `[weeklyBatchMatch] 완료: 배치대상(남/여) ${batchTraitsCount}명(설문보유 ${traitsCount}명), 쌍 ${insertRows.length}건, 카페 ${activeCafes.length}개, 알림 대상 처리`,
   );
   return {
     skipped: false,
@@ -332,6 +355,7 @@ async function runWeeklyBatchMatch(options = {}) {
     eligibleSurveyCount: traitsCount,
     submissionWindow,
     pairCount: insertRows.length,
+    activeCafeCount: activeCafes.length,
     matches,
   };
 }

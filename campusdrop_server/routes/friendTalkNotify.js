@@ -15,6 +15,7 @@ const {
   buildRsvpButtons,
   sendDayEveReminderForMatching,
 } = require('../lib/friendTalkRsvp');
+const { resolveMatchMeetingDisplay } = require('../lib/meetingDisplay');
 
 const router = express.Router();
 
@@ -100,7 +101,12 @@ function recipientMsisdnFromBody(body) {
   return digits;
 }
 
-/** @param {unknown} body */
+/**
+ * 본문의 meetingTime·meetingPlace를 안전하게 trim·자른 문자열로 꺼냅니다.
+ * 둘 중 하나만 있어도 그대로 반환(필수 검증은 호출부에서).
+ *
+ * @param {unknown} body
+ */
 function meetingTimePlaceFromBody(body) {
   const b = body && typeof body === 'object' ? body : {};
   const mt =
@@ -115,16 +121,10 @@ function meetingTimePlaceFromBody(body) {
       : typeof b.meeting_place === 'string'
         ? b.meeting_place
         : '';
-  const meetingTime = mt.trim().slice(0, MEETING_FIELD_MAX_LEN);
-  const meetingPlace = mp.trim().slice(0, MEETING_FIELD_MAX_LEN);
-  if (!meetingTime || !meetingPlace) {
-    return {
-      ok: false,
-      error:
-        'meetingTime·meetingPlace(또는 meeting_time·meeting_place)에 일시·장소 문자열을 넣어 주세요.',
-    };
-  }
-  return { ok: true, meetingTime, meetingPlace };
+  return {
+    meetingTime: mt.trim().slice(0, MEETING_FIELD_MAX_LEN),
+    meetingPlace: mp.trim().slice(0, MEETING_FIELD_MAX_LEN),
+  };
 }
 
 /** @param {string} meetingTime @param {string} meetingPlace */
@@ -353,11 +353,7 @@ router.post('/match-complete', async (req, res) => {
   const base = publicApiBase();
   const secretOk = rsvpSecret().length >= 16;
 
-  const placeRes = meetingTimePlaceFromBody(req.body);
-  if (!placeRes.ok) {
-    return res.status(400).json({ ok: false, error: placeRes.error });
-  }
-  const text = buildMatchCompleteText(placeRes.meetingTime, placeRes.meetingPlace);
+  const bodyMeeting = meetingTimePlaceFromBody(req.body);
 
   if (mid) {
     if (!base) {
@@ -402,6 +398,19 @@ router.post('/match-complete', async (req, res) => {
       return res.status(400).json({ ok: false, error: '본인 번호와 상대 번호가 같을 수 없습니다.' });
     }
 
+    // 본문 값을 우선 override로 사용하되, 비어 있으면 DB에서 채운다.
+    const fromDb = await resolveMatchMeetingDisplay(mid);
+    const meetingTime = bodyMeeting.meetingTime || fromDb.meetingTime || '';
+    const meetingPlace = bodyMeeting.meetingPlace || fromDb.meetingPlace || '';
+    if (!meetingTime || !meetingPlace) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          '매칭 행에 meeting_starts_at / meeting_venue_name(또는 cafe)이 없고 본문에도 meetingTime·meetingPlace가 없습니다. 관리자 콘솔에서 매칭의 시간·카페를 먼저 설정해 주세요.',
+      });
+    }
+    const text = buildMatchCompleteText(meetingTime, meetingPlace);
+
     const phoneUserA = m.userAId === req.user.id ? to : partner;
     const phoneUserB = m.userBId === req.user.id ? to : partner;
 
@@ -443,11 +452,26 @@ router.post('/match-complete', async (req, res) => {
     try {
       const rA = await sendFriendTalkCta({ to: phoneUserA, text, buttons: btnA });
       const rB = await sendFriendTalkCta({ to: phoneUserB, text, buttons: btnB });
-      return res.json({ ok: true, result: { userA: rA, userB: rB } });
+      return res.json({
+        ok: true,
+        result: { userA: rA, userB: rB },
+        meetingTime,
+        meetingPlace,
+      });
     } catch (err) {
       return solapiRouteError(res, err);
     }
   }
+
+  // 레거시(matchingId 없음): 일시·장소를 본문으로만 받는 단일 발송 경로.
+  if (!bodyMeeting.meetingTime || !bodyMeeting.meetingPlace) {
+    return res.status(400).json({
+      ok: false,
+      error:
+        'meetingTime·meetingPlace(또는 meeting_time·meeting_place)에 일시·장소 문자열을 넣어 주세요. (또는 matchingId로 DB 기반 자동 채움)',
+    });
+  }
+  const text = buildMatchCompleteText(bodyMeeting.meetingTime, bodyMeeting.meetingPlace);
 
   const to = recipientMsisdnFromBody(req.body);
   if (!to) {

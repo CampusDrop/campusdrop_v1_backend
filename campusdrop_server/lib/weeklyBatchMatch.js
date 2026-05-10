@@ -4,7 +4,6 @@ const { normalizeDepartment } = require('./departments');
 const { surveyDataToLifestyleUser } = require('./surveyToLifestyleUser');
 const { surveyDataToAvailabilitySlots } = require('./surveyAvailabilitySlots');
 const { getMatchingBatchMatchUrl } = require('./resolveMatchingServiceUrl');
-const { sendWeeklyMatchAlimtalkMock } = require('./kakaoAlimtalk');
 const { writeAccessLog } = require('./accessLog');
 const {
   MIN_MATCH_SCORE,
@@ -291,20 +290,6 @@ async function runWeeklyBatchMatch(options = {}) {
     notifyIds.add(row.userBId);
   }
 
-  if (notifyIds.size > 0) {
-    const identities = await prisma.identity.findMany({
-      where: { id: { in: [...notifyIds] } },
-      select: { id: true, kakaoId: true, kakaoLinkPin: true },
-    });
-    for (const row of identities) {
-      await sendWeeklyMatchAlimtalkMock({
-        identityId: row.id,
-        kakaoId: row.kakaoId,
-        context: { pairCount: insertRows.length, matchedAt: matchedAt.toISOString() },
-      });
-    }
-  }
-
   const matchedIdentityRows =
     notifyIds.size > 0
       ? await prisma.identity.findMany({
@@ -348,7 +333,7 @@ async function runWeeklyBatchMatch(options = {}) {
   });
 
   console.log(
-    `[weeklyBatchMatch] 완료: 배치대상(남/여) ${batchTraitsCount}명(설문보유 ${traitsCount}명), 쌍 ${insertRows.length}건, 카페 ${activeCafes.length}개, 알림 대상 처리`,
+    `[weeklyBatchMatch] 완료: 배치대상(남/여) ${batchTraitsCount}명(설문보유 ${traitsCount}명), 쌍 ${insertRows.length}건, 카페 ${activeCafes.length}개 (친구톡은 관리자 성공 전송 API로 발송)`,
   );
   return {
     skipped: false,

@@ -39,6 +39,8 @@ model Identity {
   meetingTime String? @map("meeting_time")
   /// 만남 장소(자유 문자열). 알림에서는 마지막 어절을 대괄호 안 표기에 사용합니다.
   meetingPlace String? @map("meeting_place")
+  /// 첫 주간 설문 후 친구톡 유입 경로 버튼 응답(한 번만 저장). slug: everytime | instagram | friend | poster
+  acquisitionSource String? @map("acquisition_source")
   createdAt DateTime @default(now())
   trait     Trait?
   weeklySurveySubmissions WeeklySurveySubmission[]
@@ -51,6 +53,7 @@ model Identity {
   matchesAsUserB Matching[] @relation("MatchPairUserB")
 
   meetingChatMessages MeetingChatMessage[] @relation("MeetingChatSender")
+  meetingFeedbacks    MatchingMeetingFeedback[]
 
   @@map("identities")
 }
@@ -150,6 +153,9 @@ model Matching {
   cafe  Cafe?    @relation(fields: [cafeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   chatMessages MeetingChatMessage[]
   friendTalkRsvp MatchingFriendTalkRsvp?
+  /// 만남 당일 후기 친구톡(3버튼) 발송 시각 — 중복 방지
+  feedbackFriendTalkSentAt DateTime? @map("feedback_friend_talk_sent_at")
+  meetingFeedbacks MatchingMeetingFeedback[]
 
   @@index([matchedAt])
   @@index([periodStart])
@@ -203,12 +209,31 @@ model MatchingFriendTalkRsvp {
 
   /// 7번 후속 확정/취소 친구톡을 이미 보냈으면 true (중복 방지)
   mondayOutcomeSent Boolean @default(false) @map("monday_outcome_sent")
+  /// (레거시) 전날 RSVP 후속 발송 여부 — 전날 버튼 제거 후 미사용
+  dayEveOutcomeSent Boolean @default(false) @map("day_eve_outcome_sent")
   /// 6번(전날) 친구톡을 수동·크론으로 보낸 시각 — 중복 발송 방지
   dayEveReminderSentAt DateTime? @map("day_eve_reminder_sent_at")
 
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("matching_friend_talk_rsvps")
+}
+
+/// 만남 당일 후기 친구톡 버튼 응답. 매칭·유저당 1행.
+model MatchingMeetingFeedback {
+  id         String   @id @default(uuid()) @db.Uuid
+  matchingId String   @map("matching_id") @db.Uuid
+  identityId String   @map("identity_id") @db.Uuid
+  /// similar | different | neutral
+  choice     String
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  matching Matching @relation(fields: [matchingId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  identity Identity @relation(fields: [identityId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([matchingId, identityId])
+  @@index([matchingId])
+  @@map("matching_meeting_feedbacks")
 }
 
 /// 소개팅 매칭 단위 QR 채팅 메시지. 행은 유지되며 관리자는 항상 조회 가능.

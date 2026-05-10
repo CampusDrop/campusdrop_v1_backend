@@ -11,11 +11,11 @@ const { writeAccessLog } = require('../lib/accessLog');
 const { storePinForIdentity } = require('../lib/pinSession');
 const { surveySchoolAccessOk, SURVEY_ACCESS_DENIED } = require('../lib/surveyAccess');
 const { encryptPhoneForStorage, decryptPhoneFromStorage } = require('../lib/phoneCrypto');
-const { sendFriendTalkCta } = require('../lib/solapiFriendTalkSend');
+const { assertSolapiFriendTalkEnv, sendFriendTalkCta } = require('../lib/solapiFriendTalkSend');
+const templates = require('../lib/friendTalkTemplates');
+const { publicApiBase, buildAcquisitionButtons, rsvpSecret } = require('../lib/friendTalkRsvp');
 
 const router = express.Router();
-const FIRST_WEEKLY_SURVEY_CONFIRMED_TEXT =
-  '설문 제출이 완료되어 이번 주 매칭 신청이 인증되었습니다 ✅\n\n좋은 인연을 찾을 수 있도록 정성껏 매칭해드릴게요!';
 
 function phoneFromExistingIdentity(user) {
   if (!user || !user.phoneEncrypted) {
@@ -271,10 +271,25 @@ router.post('/submit', async (req, res) => {
       txResult.phoneForFirstWeeklySurveyConfirmed
     ) {
       try {
-        await sendFriendTalkCta({
-          to: txResult.phoneForFirstWeeklySurveyConfirmed,
-          text: FIRST_WEEKLY_SURVEY_CONFIRMED_TEXT,
-        });
+        const miss = assertSolapiFriendTalkEnv();
+        if (miss) {
+          console.warn('survey first-week friendtalk skipped:', miss);
+        } else {
+          const intro = `${templates.WAITLIST_AND_QUEUE_TEXT}\n\n${templates.FIRST_SURVEY_ACQUISITION_TAIL}`;
+          const base = publicApiBase();
+          const secretOk = rsvpSecret().length >= 16;
+          const to = txResult.phoneForFirstWeeklySurveyConfirmed;
+          if (!base || !secretOk) {
+            await sendFriendTalkCta({ to, text: intro });
+          } else {
+            const buttons = buildAcquisitionButtons(req.user.id, base);
+            if (buttons && buttons.length > 0) {
+              await sendFriendTalkCta({ to, text: intro, buttons });
+            } else {
+              await sendFriendTalkCta({ to, text: intro });
+            }
+          }
+        }
       } catch (notifyErr) {
         console.error('survey submit first-week friendtalk error:', notifyErr);
       }

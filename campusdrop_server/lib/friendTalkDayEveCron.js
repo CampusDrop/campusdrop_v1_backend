@@ -21,14 +21,6 @@ function seoulTomorrowYmdFromNow() {
  */
 async function runFriendTalkDayEveCronJob() {
   const targetKey = seoulTomorrowYmdFromNow();
-  const base = String(process.env.PUBLIC_API_URL || '').trim();
-  const secretOk = String(process.env.FRIEND_TALK_RSVP_SECRET || '').trim().length >= 16;
-  if (!base || !secretOk) {
-    console.warn(
-      '[friendTalkDayEveCron] PUBLIC_API_URL 또는 FRIEND_TALK_RSVP_SECRET 미설정 — 건너뜀',
-    );
-    return;
-  }
 
   const rows = await prisma.matching.findMany({
     where: {

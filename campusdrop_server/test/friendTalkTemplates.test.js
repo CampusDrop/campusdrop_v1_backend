@@ -22,8 +22,7 @@ test('buildMatchDayEveReminderText drops the time/place block when missing', () 
   assert.ok(!out.includes('#{미팅장소}'));
   assert.ok(!out.includes('📍 일시'));
   assert.ok(!out.includes('📍 장소'));
-  // Original opening still intact.
-  assert.ok(out.startsWith('[Campus Drop 보냄]'));
+  assert.ok(out.startsWith('[Campus Drop]'));
 });
 
 test('MATCH_DAY_EVE_REMINDER_TEXT raw template still has placeholders', () => {

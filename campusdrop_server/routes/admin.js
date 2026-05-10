@@ -23,6 +23,10 @@ const {
   getUserIdsMatchedInPeriod,
   deleteMatchingsForUsersInPeriod,
 } = require('../lib/matchPolicy');
+const {
+  sendMatchSuccessFriendTalkForAllInPeriod,
+  sendMatchFailureFriendTalkForUnmatchedInPeriod,
+} = require('../lib/adminMatchFriendTalk');
 const { buildSurveySubmissionWindowForApplicationPeriod } = require('../lib/surveyAvailabilityWindow');
 const { surveyDataToLifestyleUser } = require('../lib/surveyToLifestyleUser');
 const { surveyDataToAvailabilitySlots } = require('../lib/surveyAvailabilitySlots');
@@ -116,6 +120,20 @@ const UUID_RE =
 
 function isUuid(s) {
   return typeof s === 'string' && UUID_RE.test(s);
+}
+
+/** @param {unknown} body */
+function periodStartFromAdminRequestBody(body) {
+  const b = body && typeof body === 'object' ? body : {};
+  const raw = b.periodStart ?? b.period_start;
+  if (raw == null || raw === '') {
+    return { ok: true, value: getMatchingPeriodStart() };
+  }
+  const d = new Date(String(raw));
+  if (Number.isNaN(d.getTime())) {
+    return { ok: false, error: 'periodStart는 유효한 ISO 날짜/시각이어야 합니다.' };
+  }
+  return { ok: true, value: d };
 }
 
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -1644,6 +1662,77 @@ router.post('/matches/batch-run', async (req, res) => {
       error: '배치 매칭 실행에 실패했습니다. 매칭 서비스 URL·로그를 확인해 주세요.',
       detail: err && err.message ? String(err.message) : undefined,
     });
+  }
+});
+
+/**
+ * 매칭 성공 쌍에게 7번(참석 확인) 친구톡 일괄 발송. 본문·버튼은 DB 일시·장소 기준.
+ * 본문: `periodStart`(선택, 기본 현재 매칭 주)에 속한 모든 `matchings` 행.
+ */
+router.post('/friend-talk/send-match-success', async (req, res) => {
+  try {
+    const parsed = periodStartFromAdminRequestBody(req.body);
+    if (!parsed.ok) {
+      return res.status(400).json({ error: parsed.error });
+    }
+    const result = await sendMatchSuccessFriendTalkForAllInPeriod({
+      periodStart: parsed.value,
+    });
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin.adminId,
+      action: 'ADMIN_FRIEND_TALK_MATCH_SUCCESS',
+      resource: 'friend-talk',
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: {
+        sent: result.sent,
+        failedCount: result.failed.length,
+        matchingCount: result.matchingCount,
+        periodStart: result.periodStart,
+      },
+    });
+    return res.status(200).json(result);
+  } catch (err) {
+    console.error('admin POST /friend-talk/send-match-success:', err);
+    return res.status(500).json({ error: '친구톡 발송 처리 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * 이번 주 설문 제출·미매칭자에게 미매칭 안내 친구톡 일괄 발송.
+ */
+router.post('/friend-talk/send-match-failure', async (req, res) => {
+  try {
+    const parsed = periodStartFromAdminRequestBody(req.body);
+    if (!parsed.ok) {
+      return res.status(400).json({ error: parsed.error });
+    }
+    const result = await sendMatchFailureFriendTalkForUnmatchedInPeriod({
+      periodStart: parsed.value,
+    });
+    if (!result.ok) {
+      return res.status(500).json({ error: result.error });
+    }
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin.adminId,
+      action: 'ADMIN_FRIEND_TALK_MATCH_FAILURE',
+      resource: 'friend-talk',
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: {
+        sent: result.sent,
+        skipped: result.skipped,
+        failedCount: result.failed.length,
+        eligibleCount: result.eligibleCount,
+        periodStart: result.periodStart,
+      },
+    });
+    return res.status(200).json(result);
+  } catch (err) {
+    console.error('admin POST /friend-talk/send-match-failure:', err);
+    return res.status(500).json({ error: '친구톡 발송 처리 중 오류가 발생했습니다.' });
   }
 });
 

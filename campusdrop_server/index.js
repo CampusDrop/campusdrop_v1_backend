@@ -11,7 +11,7 @@ const { prisma } = require('./lib/prisma');
 const { requireUserUuid } = require('./lib/requireUserUuid');
 const { requireImageUuidAccessForSurveyApis } = require('./lib/imageUuidAccess');
 const { disconnectRedis } = require('./lib/redis');
-const { scheduleKakaoMatchingReminderCron } = require('./lib/kakaoMatchingReminderCron');
+const { scheduleMeetingFeedbackFriendTalkCron } = require('./lib/meetingFeedbackFriendTalkCron');
 const { scheduleFriendTalkDayEveCron } = require('./lib/friendTalkDayEveCron');
 const swaggerUi = require('swagger-ui-express');
 const { buildSwaggerSpec } = require('./config/swagger');
@@ -139,7 +139,7 @@ const server = app.listen(PORT, HOST, () => {
     console.log(`📘 Swagger UI: ${advertise}/api-docs`);
     console.log(`========================================`);
 
-    scheduleKakaoMatchingReminderCron();
+    scheduleMeetingFeedbackFriendTalkCron();
     scheduleFriendTalkDayEveCron();
 });
 

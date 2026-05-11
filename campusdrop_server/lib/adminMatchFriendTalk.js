@@ -59,7 +59,10 @@ async function matchingsForPeriod(periodStart) {
 /**
  * 한 매칭에 대해 7번 친구톡 양쪽 발송 + RSVP 행 준비.
  * @param {string} matchingId
- * @returns {Promise<{ ok: true } | { ok: false, error: string }>}
+ * @returns {Promise<
+ *   | { ok: true }
+ *   | { ok: false, error: string, skipped?: true }
+ * >}
  */
 async function sendMatchSuccessFriendTalkForMatching(matchingId) {
   const missingEnv = assertSolapiFriendTalkEnv();
@@ -73,10 +76,18 @@ async function sendMatchSuccessFriendTalkForMatching(matchingId) {
 
   const m = await prisma.matching.findUnique({
     where: { id: matchingId },
-    select: { id: true, userAId: true, userBId: true },
+    select: {
+      id: true,
+      userAId: true,
+      userBId: true,
+      friendTalkRsvp: { select: { matchingId: true } },
+    },
   });
   if (!m) {
     return { ok: false, error: '매칭을 찾을 수 없습니다.' };
+  }
+  if (m.friendTalkRsvp) {
+    return { ok: false, error: '이미 발송 이력이 있어 재발송을 건너뜁니다.', skipped: true };
   }
 
   const display = await resolveMatchMeetingDisplay(matchingId);
@@ -149,11 +160,17 @@ async function sendMatchSuccessFriendTalkForMatching(matchingId) {
 
 /**
  * @param {{ periodStart?: Date }} [opts]
- * @returns {Promise<{ sent: number, failed: { matchingId: string, error: string }[] }>}
+ * @returns {Promise<{
+ *   sent: number,
+ *   skipped: { matchingId: string, reason: string }[],
+ *   failed: { matchingId: string, error: string }[]
+ * }>}
  */
 async function sendMatchSuccessFriendTalkForAllInPeriod(opts = {}) {
   const periodStart = opts.periodStart || getMatchingPeriodStart();
   const rows = await matchingsForPeriod(periodStart);
+  /** @type {{ matchingId: string, reason: string }[]} */
+  const skipped = [];
   /** @type {{ matchingId: string, error: string }[]} */
   const failed = [];
   let sent = 0;
@@ -161,11 +178,13 @@ async function sendMatchSuccessFriendTalkForAllInPeriod(opts = {}) {
     const r = await sendMatchSuccessFriendTalkForMatching(row.id);
     if (r.ok) {
       sent += 1;
+    } else if (r.skipped) {
+      skipped.push({ matchingId: row.id, reason: r.error });
     } else {
       failed.push({ matchingId: row.id, error: r.error });
     }
   }
-  return { sent, failed, periodStart: periodStart.toISOString(), matchingCount: rows.length };
+  return { sent, skipped, failed, periodStart: periodStart.toISOString(), matchingCount: rows.length };
 }
 
 /**

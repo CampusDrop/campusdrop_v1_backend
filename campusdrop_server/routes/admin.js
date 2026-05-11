@@ -37,6 +37,7 @@ const { areOppositeTraitGenders, normalizeTraitGender, traitGenderLabelKo } = re
 const { resolveSchoolProofAbsolutePath } = require('../lib/schoolProofMulter');
 const { kstWallClockToUtc, utcToKstSlot } = require('../lib/kstMeetingInstant');
 const { signMeetChatQrToken, meetChatQrSecret } = require('../lib/meetChatQr');
+const { decryptPhoneFromStorage } = require('../lib/phoneCrypto');
 
 const CAFE_NAME_MAX_LEN = 200;
 const CAFE_URL_MAX_LEN = 1000;
@@ -120,6 +121,21 @@ const UUID_RE =
 
 function isUuid(s) {
   return typeof s === 'string' && UUID_RE.test(s);
+}
+
+/**
+ * @param {string | null | undefined} phoneEncrypted
+ * @returns {string | null}
+ */
+function decryptPhoneForAdminResponse(phoneEncrypted) {
+  if (!phoneEncrypted) {
+    return null;
+  }
+  try {
+    return decryptPhoneFromStorage(phoneEncrypted);
+  } catch (_) {
+    return null;
+  }
 }
 
 function slimFriendTalkRsvp(row) {
@@ -711,6 +727,7 @@ router.get('/users', async (req, res) => {
           nickname: true,
           email: true,
           kakaoId: true,
+          phoneEncrypted: true,
           blockedAt: true,
           schoolProofVerifiedAt: true,
           studentId: true,
@@ -744,6 +761,7 @@ router.get('/users', async (req, res) => {
         studentId: row.studentId,
         birthYear: row.birthYear,
         department: row.department,
+        phone: decryptPhoneForAdminResponse(row.phoneEncrypted),
         kakaoLinked: Boolean(row.kakaoId && String(row.kakaoId).trim()),
         blockedAt: row.blockedAt,
         createdAt: row.createdAt,
@@ -1735,6 +1753,7 @@ router.post('/friend-talk/send-match-success', async (req, res) => {
       userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
       metadata: {
         sent: result.sent,
+        skippedCount: Array.isArray(result.skipped) ? result.skipped.length : 0,
         failedCount: result.failed.length,
         matchingCount: result.matchingCount,
         periodStart: result.periodStart,
@@ -2110,6 +2129,7 @@ router.get('/users/:id', async (req, res) => {
         studentId: row.studentId,
         birthYear: row.birthYear,
         department: row.department,
+        phone: decryptPhoneForAdminResponse(row.phoneEncrypted),
         kakaoLinkPin: row.kakaoLinkPin ?? null,
         kakaoLinked: Boolean(row.kakaoId && String(row.kakaoId).trim()),
         blockedAt: row.blockedAt,

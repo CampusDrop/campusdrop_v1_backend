@@ -246,11 +246,30 @@ const swaggerDefinition = {
           },
         },
       },
+      FriendHobbySurveyPayload: {
+        type: 'object',
+        required: ['mainCategory', 'detailChoice'],
+        description:
+          '친구 매칭 취미 설문(택1·택1). Step1 mainCategory: 1 PC방·게임, 2 운동·산책, 3 카페·맛집, 4 문화·여가. Step2 detailChoice: 선택한 Step1에 대한 세부 문항에서 1~4.',
+        properties: {
+          mainCategory: { type: 'integer', minimum: 1, maximum: 4 },
+          detailChoice: { type: 'integer', minimum: 1, maximum: 4 },
+        },
+      },
       SurveySubmitRequest: {
         type: 'object',
         description:
-          '`surveyData` 또는 `survey` 중 하나 필수. (1) 레거시: 척도·선호 키를 한 객체에 두고 `availability`는 `{ date, time_slot }[]`. (2) 프론트 패키지: `surveyAnswers`(또는 `answers`)에 척도·선호, `matchAvailability`(availableSlots에 date·hourStart·hourEnd 0~23), `participantMeta`(profile.studentId·birthYear·gender 등, 서버는 email·registrationToken·userUuid 저장 안 함).',
+          '`surveyData` 또는 `survey` 중 하나 필수. (1) 레거시: 척도·선호 키를 한 객체에 두고 `availability`는 `{ date, time_slot }[]`. (2) 프론트 패키지: `surveyAnswers`(또는 `answers`)에 척도·선호, `matchAvailability`(availableSlots에 date·hourStart·hourEnd 0~23), `participantMeta`(profile.studentId·birthYear·gender 등, 서버는 email·registrationToken·userUuid 저장 안 함). `matchType`이 `FRIEND`이면 `friendHobbySurvey`(메인·세부 취향 각 1~4) 필수.',
         properties: {
+          matchType: {
+            type: 'string',
+            enum: ['ROMANCE', 'FRIEND'],
+            description: '생략 시 ROMANCE',
+          },
+          friendHobbySurvey: {
+            $ref: '#/components/schemas/FriendHobbySurveyPayload',
+            description: '`matchType: FRIEND`일 때 필수. 별도 테이블 `friend_survey_submissions`에 동일 매칭 주차로 저장됩니다.',
+          },
           surveyData: {
             type: 'object',
             additionalProperties: true,
@@ -290,6 +309,33 @@ const swaggerDefinition = {
             description: 'DB 저장본(검증·정규화 후). 없으면 null',
           },
           gender: { type: 'string', nullable: true, description: '`Trait.gender`' },
+          matchType: {
+            type: 'string',
+            nullable: true,
+            enum: ['ROMANCE', 'FRIEND'],
+            description: '가장 최근 `WeeklySurveySubmission`의 match_type',
+          },
+          friendHobbySurvey: {
+            type: 'object',
+            nullable: true,
+            description:
+              '최근 주간 제출이 FRIEND일 때 `friend_survey_submissions`에서 조회. 없거나 ROMANCE면 null',
+            properties: {
+              mainCategory: { type: 'integer', minimum: 1, maximum: 4 },
+              detailChoice: { type: 'integer', minimum: 1, maximum: 4 },
+              submittedAt: {
+                type: 'string',
+                format: 'date-time',
+                description: '해당 취미 설문 저장 시각',
+              },
+            },
+          },
+          surveySubmittedAt: {
+            type: 'string',
+            format: 'date-time',
+            nullable: true,
+            description: '`Trait.surveySubmittedAt`',
+          },
           updatedAt: {
             type: 'string',
             format: 'date-time',

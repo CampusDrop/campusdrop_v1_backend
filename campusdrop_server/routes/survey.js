@@ -14,7 +14,16 @@ const { encryptPhoneForStorage, decryptPhoneFromStorage } = require('../lib/phon
 const { assertSolapiFriendTalkEnv, sendFriendTalkCta } = require('../lib/solapiFriendTalkSend');
 const templates = require('../lib/friendTalkTemplates');
 const { publicApiBase, buildAcquisitionButtons } = require('../lib/friendTalkRsvp');
-const { normalizeMatchType, resolveMatchTypeOrDefault } = require('../lib/matchType');
+const {
+  normalizeMatchType,
+  resolveMatchTypeOrDefault,
+  MATCH_TYPE_FRIEND,
+  MATCH_TYPE_ROMANCE,
+} = require('../lib/matchType');
+const {
+  validateFriendHobbySurvey,
+  upsertFriendSurveySubmission,
+} = require('../lib/friendSurveySubmission');
 
 const router = express.Router();
 
@@ -39,8 +48,9 @@ function phoneFromExistingIdentity(user) {
  *   surveySubmittedAt: Date | string | null;
  *   updatedAt: Date | string;
  * } | null} row
+ * @param {{ mainCategory: number; detailChoice: number; submittedAt: string } | null} friendHobbySurvey
  */
-function surveyMePayloadFromTraitRow(userId, row) {
+function surveyMePayloadFromTraitRow(userId, row, friendHobbySurvey = null) {
   const hasSurvey = Boolean(
     row &&
       row.surveyData !== null &&
@@ -57,6 +67,7 @@ function surveyMePayloadFromTraitRow(userId, row) {
       ? new Date(row.surveySubmittedAt).toISOString()
       : null,
     updatedAt: row?.updatedAt ? new Date(row.updatedAt).toISOString() : null,
+    friendHobbySurvey,
   };
 }
 
@@ -72,6 +83,8 @@ function surveyMePayloadFromTraitRow(userId, row) {
  *       **응답 요약**
  *       - `hasSurvey` / `surveyData`: `Trait.surveyData`가 객체로 있으면 저장됨으로 간주. 없으면 `hasSurvey` false, `surveyData` null.
  *       - `gender`: `Trait.gender` (저장된 설문 기준).
+ *       - `matchType`: 최근 주간 제출(`WeeklySurveySubmission`)의 타입. 없으면 null.
+ *       - `friendHobbySurvey`: 최근 제출이 `FRIEND`이고 `friend_survey_submissions` 행이 있으면 `{ mainCategory, detailChoice, submittedAt }` (취미 설문 택1 값). 메인 1~4 = PC방·게임 / 운동·산책 / 카페·맛집 / 문화·여가.
  *       - `surveySubmittedAt`, `updatedAt`: ISO 8601 문자열 또는 null.
  *
  *       **403:** 학교 소속 미충족(`surveySchoolAccessOk` false)이거나, 이메일·증빙 없이 `imageUuidAccessUntil`만 쓰는 계정에서 그 기한 만료 시 `IMAGE_UUID_ACCESS_EXPIRED` 등.
@@ -117,14 +130,46 @@ router.get('/me', async (req, res) => {
       prisma.weeklySurveySubmission.findFirst({
         where: { identityId: req.user.id },
         orderBy: [{ submittedAt: 'desc' }, { updatedAt: 'desc' }, { createdAt: 'desc' }],
-        select: { matchType: true },
+        select: { matchType: true, targetPeriodStart: true },
       }),
     ]);
 
-    const body = surveyMePayloadFromTraitRow(req.user.id, {
-      ...(traitRow || {}),
-      matchType: weeklyRow?.matchType ?? null,
-    });
+    /** @type {{ mainCategory: number; detailChoice: number; submittedAt: string } | null} */
+    let friendHobbySurvey = null;
+    if (
+      weeklyRow?.matchType === MATCH_TYPE_FRIEND &&
+      weeklyRow.targetPeriodStart != null
+    ) {
+      const fsRow = await prisma.friendSurveySubmission.findUnique({
+        where: {
+          identityId_targetPeriodStart: {
+            identityId: req.user.id,
+            targetPeriodStart: weeklyRow.targetPeriodStart,
+          },
+        },
+        select: {
+          mainCategory: true,
+          detailChoice: true,
+          submittedAt: true,
+        },
+      });
+      if (fsRow) {
+        friendHobbySurvey = {
+          mainCategory: fsRow.mainCategory,
+          detailChoice: fsRow.detailChoice,
+          submittedAt: new Date(fsRow.submittedAt).toISOString(),
+        };
+      }
+    }
+
+    const body = surveyMePayloadFromTraitRow(
+      req.user.id,
+      {
+        ...(traitRow || {}),
+        matchType: weeklyRow?.matchType ?? null,
+      },
+      friendHobbySurvey,
+    );
 
     await writeAccessLog({
       actorType: 'user_session',
@@ -228,6 +273,17 @@ router.post('/submit', async (req, res) => {
     });
   }
 
+  const friendHobbyRaw = req.body?.friendHobbySurvey ?? req.body?.friend_hobby_survey;
+  /** @type {{ ok: true, data: { mainCategory: number, detailChoice: number } } | null} */
+  let friendHobbyValidated = null;
+  if (matchType === MATCH_TYPE_FRIEND) {
+    const fh = validateFriendHobbySurvey(friendHobbyRaw);
+    if (!fh.ok) {
+      return res.status(400).json({ error: fh.error });
+    }
+    friendHobbyValidated = fh;
+  }
+
   try {
     const surveySubmittedAt = new Date();
     const surveyGender = String(validation.data.gender);
@@ -255,6 +311,21 @@ router.post('/submit', async (req, res) => {
         submittedAt: surveySubmittedAt,
         availabilityWindow: windowValidation.window,
       });
+
+      const targetPeriodStart = new Date(windowValidation.window.target.periodStart);
+      if (matchType === MATCH_TYPE_ROMANCE) {
+        await tx.friendSurveySubmission.deleteMany({
+          where: { identityId: req.user.id, targetPeriodStart },
+        });
+      } else if (matchType === MATCH_TYPE_FRIEND && friendHobbyValidated) {
+        await upsertFriendSurveySubmission(tx, {
+          identityId: req.user.id,
+          submittedAt: surveySubmittedAt,
+          mainCategory: friendHobbyValidated.data.mainCategory,
+          detailChoice: friendHobbyValidated.data.detailChoice,
+          availabilityWindow: windowValidation.window,
+        });
+      }
 
       const profileCols = identityProfileColumnsFromSurveyData(validation.data);
       let latestPhoneForNotification = profileCols.phone || phoneFromExistingIdentity(req.user);

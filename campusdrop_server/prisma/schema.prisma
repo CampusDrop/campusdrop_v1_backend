@@ -209,6 +209,10 @@ model MatchingFriendTalkRsvp {
 
   /// 7번 후속 확정/취소 친구톡을 이미 보냈으면 true (중복 방지)
   mondayOutcomeSent Boolean @default(false) @map("monday_outcome_sent")
+  /// 7번 양쪽 응답 확정 결과: CONFIRMED | CANCELLED
+  mondayOutcome String? @map("monday_outcome")
+  /// 7번 후속 확정/취소 친구톡 발송 완료 시각
+  mondayOutcomeSentAt DateTime? @map("monday_outcome_sent_at")
   /// (레거시) 전날 RSVP 후속 발송 여부 — 전날 버튼 제거 후 미사용
   dayEveOutcomeSent Boolean @default(false) @map("day_eve_outcome_sent")
   /// 6번(전날) 친구톡을 수동·크론으로 보낸 시각 — 중복 발송 방지

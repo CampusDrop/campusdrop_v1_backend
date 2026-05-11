@@ -154,13 +154,13 @@
       }
     },
     "pref_religion": {
+      "description_ko": "partner_religion_tolerance 1~5 → pref_religion: 1 무교만(하드), 2~3 무관, 4~5 동일 종교(하드). 구버전 저장값(구 1=동일종교·구 5=무교만)은 마이그레이션 또는 재설문 필요.",
       "levels": [
-        { "id": 1, "tier": "hard_same_religion" },
-        { "id": 2, "tier": "soft_prefer_similar" },
+        { "id": 1, "tier": "hard_none_religion_partner" },
+        { "id": 2, "tier": "neutral_adjacent" },
         { "id": 3, "tier": "neutral" },
-        { "id": 4, "tier": "soft_prefer_none_religion" },
-        { "id": 5, "tier": "hard_none_religion_partner" },
-        { "id": 6, "tier": "hard_religious_partner" }
+        { "id": 4, "tier": "hard_same_religion" },
+        { "id": 5, "tier": "hard_same_religion" }
       ]
     },
     "pref_cc": {

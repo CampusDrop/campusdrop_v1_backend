@@ -49,7 +49,7 @@ function choiceLabelAllowed(field, label) {
 
 /**
  * @param {'pref_smoking'|'pref_tattoo'|'pref_religion'|'pref_cc'} field
- * @param {number} likert 1~5 (pref_religion은 1~6 허용)
+ * @param {number} likert 1~5
  * @returns {{ level: number, tier: string } | null}
  */
 function resolvePreferenceLevelFromLikert(field, likert) {

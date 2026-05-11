@@ -122,6 +122,22 @@ function isUuid(s) {
   return typeof s === 'string' && UUID_RE.test(s);
 }
 
+function slimFriendTalkRsvp(row) {
+  if (!row) {
+    return null;
+  }
+  return {
+    mondayRsvpUserA: row.mondayRsvpUserA ?? null,
+    mondayRsvpUserB: row.mondayRsvpUserB ?? null,
+    mondayOutcome: row.mondayOutcome ?? null,
+    mondayOutcomeSent: Boolean(row.mondayOutcomeSent),
+    mondayOutcomeSentAt: row.mondayOutcomeSentAt ?? null,
+    skipDayEveReminder: Boolean(row.skipDayEveReminder),
+    dayEveReminderSentAt: row.dayEveReminderSentAt ?? null,
+    updatedAt: row.updatedAt ?? null,
+  };
+}
+
 /** @param {unknown} body */
 function periodStartFromAdminRequestBody(body) {
   const b = body && typeof body === 'object' ? body : {};
@@ -891,6 +907,18 @@ router.get('/matches', async (req, res) => {
             },
           },
           cafe: { select: { id: true, name: true, isActive: true, naverPlaceUrl: true } },
+          friendTalkRsvp: {
+            select: {
+              mondayRsvpUserA: true,
+              mondayRsvpUserB: true,
+              mondayOutcome: true,
+              mondayOutcomeSent: true,
+              mondayOutcomeSentAt: true,
+              skipDayEveReminder: true,
+              dayEveReminderSentAt: true,
+              updatedAt: true,
+            },
+          },
         },
       }),
     ]);
@@ -938,6 +966,7 @@ router.get('/matches', async (req, res) => {
         meetingVenueName: m.meetingVenueName ?? null,
         cafeId: m.cafeId ?? null,
         cafe: m.cafe ?? null,
+        friendTalkRsvp: slimFriendTalkRsvp(m.friendTalkRsvp),
         matchReport: m.matchReport ?? null,
       })),
     });
@@ -1330,6 +1359,18 @@ router.patch('/matches/:id/meet-details', async (req, res) => {
           meetingVenueName: true,
           cafeId: true,
           cafe: { select: { id: true, name: true, isActive: true } },
+          friendTalkRsvp: {
+            select: {
+              mondayRsvpUserA: true,
+              mondayRsvpUserB: true,
+              mondayOutcome: true,
+              mondayOutcomeSent: true,
+              mondayOutcomeSentAt: true,
+              skipDayEveReminder: true,
+              dayEveReminderSentAt: true,
+              updatedAt: true,
+            },
+          },
           matchReport: true,
         },
       });
@@ -1345,7 +1386,12 @@ router.patch('/matches/:id/meet-details', async (req, res) => {
       metadata: { keys: Object.keys(data) },
     });
 
-    return res.status(200).json({ match: updated });
+    return res.status(200).json({
+      match: {
+        ...updated,
+        friendTalkRsvp: slimFriendTalkRsvp(updated.friendTalkRsvp),
+      },
+    });
   } catch (err) {
     if (err && err.code === 'MATCHING_NOT_FOUND') {
       return res.status(404).json({ error: '매칭을 찾을 수 없습니다.' });

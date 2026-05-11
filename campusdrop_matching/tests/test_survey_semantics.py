@@ -113,6 +113,119 @@ def test_hard_pref_smoking_level_1_vs_smoker() -> None:
     assert out["match_status"] == "violated"
 
 
+def test_hard_pref_religion_level_1_partner_must_be_unaffiliated() -> None:
+    """시맨틱 단계 1: 무교·비종교 파트너만."""
+    da = {
+        **_base(),
+        "religion_type": "protestant",
+        "pref_religion": "1",
+        "match_profile": {
+            "smoking": {"code": 0, "label": "비흡연"},
+            "tattoo": {"code": 0, "label": "없음"},
+            "religion": {"code": "protestant", "label": "PROTESTANT"},
+            "pref_smoking": {"level": 3, "tier": "neutral", "label": "상관없음"},
+            "pref_tattoo": {"level": 3, "tier": "neutral", "label": "상관없음"},
+            "pref_religion": {"level": 1, "tier": "hard_none_religion_partner", "label": "1"},
+            "pref_cc": {"level": 3, "tier": "neutral", "label": "상관없음"},
+        },
+    }
+    db = {
+        **_base(),
+        "religion_type": "catholic",
+        "pref_religion": "상관없음",
+        "match_profile": {
+            "smoking": {"code": 0, "label": "비흡연"},
+            "tattoo": {"code": 0, "label": "없음"},
+            "religion": {"code": "catholic", "label": "CATHOLIC"},
+            "pref_smoking": {"level": 3, "tier": "neutral", "label": "상관없음"},
+            "pref_tattoo": {"level": 3, "tier": "neutral", "label": "상관없음"},
+            "pref_religion": {"level": 3, "tier": "neutral", "label": "상관없음"},
+            "pref_cc": {"level": 3, "tier": "neutral", "label": "상관없음"},
+        },
+    }
+    a = LifestyleUser.model_validate(da)
+    b = LifestyleUser.model_validate(db)
+    out = compute_match(a, b)
+    assert out["match_status"] == "violated"
+    viol = out["match_report"]["group_b"]["violations"]
+    rules = {v["rule"] for v in viol}
+    assert "religion_none_partner_only" in rules
+
+
+def test_hard_pref_religion_level_1_ok_when_partner_unaffiliated() -> None:
+    da = {
+        **_base(),
+        "religion_type": "protestant",
+        "pref_religion": "1",
+        "match_profile": {
+            "smoking": {"code": 0, "label": "비흡연"},
+            "tattoo": {"code": 0, "label": "없음"},
+            "religion": {"code": "protestant", "label": "PROTESTANT"},
+            "pref_smoking": {"level": 3, "tier": "neutral", "label": "상관없음"},
+            "pref_tattoo": {"level": 3, "tier": "neutral", "label": "상관없음"},
+            "pref_religion": {"level": 1, "tier": "hard_none_religion_partner", "label": "1"},
+            "pref_cc": {"level": 3, "tier": "neutral", "label": "상관없음"},
+        },
+    }
+    db = {
+        **_base(),
+        "religion_type": "없음",
+        "pref_religion": "상관없음",
+        "match_profile": {
+            "smoking": {"code": 0, "label": "비흡연"},
+            "tattoo": {"code": 0, "label": "없음"},
+            "religion": {"code": "none", "label": "없음"},
+            "pref_smoking": {"level": 3, "tier": "neutral", "label": "상관없음"},
+            "pref_tattoo": {"level": 3, "tier": "neutral", "label": "상관없음"},
+            "pref_religion": {"level": 3, "tier": "neutral", "label": "상관없음"},
+            "pref_cc": {"level": 3, "tier": "neutral", "label": "상관없음"},
+        },
+    }
+    a = LifestyleUser.model_validate(da)
+    b = LifestyleUser.model_validate(db)
+    out = compute_match(a, b)
+    assert out["match_status"] == "ok"
+
+
+def test_hard_pref_religion_level_5_requires_same_religion_label() -> None:
+    """시맨틱 단계 5: 동일 종교만 (단계 4와 동일 하드)."""
+    da = {
+        **_base(),
+        "religion_type": "protestant",
+        "pref_religion": "5",
+        "match_profile": {
+            "smoking": {"code": 0, "label": "비흡연"},
+            "tattoo": {"code": 0, "label": "없음"},
+            "religion": {"code": "protestant", "label": "PROTESTANT"},
+            "pref_smoking": {"level": 3, "tier": "neutral", "label": "상관없음"},
+            "pref_tattoo": {"level": 3, "tier": "neutral", "label": "상관없음"},
+            "pref_religion": {"level": 5, "tier": "hard_same_religion", "label": "5"},
+            "pref_cc": {"level": 3, "tier": "neutral", "label": "상관없음"},
+        },
+    }
+    db = {
+        **_base(),
+        "religion_type": "catholic",
+        "pref_religion": "상관없음",
+        "match_profile": {
+            "smoking": {"code": 0, "label": "비흡연"},
+            "tattoo": {"code": 0, "label": "없음"},
+            "religion": {"code": "catholic", "label": "CATHOLIC"},
+            "pref_smoking": {"level": 3, "tier": "neutral", "label": "상관없음"},
+            "pref_tattoo": {"level": 3, "tier": "neutral", "label": "상관없음"},
+            "pref_religion": {"level": 3, "tier": "neutral", "label": "상관없음"},
+            "pref_cc": {"level": 3, "tier": "neutral", "label": "상관없음"},
+        },
+    }
+    a = LifestyleUser.model_validate(da)
+    b = LifestyleUser.model_validate(db)
+    out = compute_match(a, b)
+    assert out["match_status"] == "violated"
+    viol = out["match_report"]["group_b"]["violations"]
+    rules = {v["rule"] for v in viol}
+    assert "religion_same_only" in rules
+
+
 def test_date_expense_is_complementary_axis() -> None:
     low = LifestyleUser.model_validate({**_base(), "date_expense": 1})
     complementary_high = LifestyleUser.model_validate({**_base(), "date_expense": 5})

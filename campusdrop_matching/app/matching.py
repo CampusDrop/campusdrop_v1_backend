@@ -530,7 +530,20 @@ def collect_hard_violations(
 
         pr = pref_level(viewer, "pref_religion") if mpv else None
         if mpv and pr is not None:
+            # 시맨틱: 1=무교 파트너만, 2~3=종교 하드 없음, 4~5=동일 종교만 (partner_religion_tolerance 1~5).
             if pr == 1:
+                if not _is_effectively_no_religion(cand.religion_type):
+                    hits.append(
+                        HardHit(
+                            viewer=v_lit,
+                            candidate=c_lit,
+                            rule="religion_none_partner_only",
+                            constraint_field="pref_religion",
+                            state_field="religion_type",
+                            detail=f"{v_lit}의 pref_religion(무교·비종교 파트너만·시맨틱 단계 1)과 {c_lit}의 religion_type이 충돌합니다.",
+                        )
+                    )
+            elif pr in (4, 5):
                 va = _norm_str(viewer.religion_type)
                 ca = _norm_str(cand.religion_type)
                 if not va or not ca or va != ca:
@@ -541,31 +554,7 @@ def collect_hard_violations(
                             rule="religion_same_only",
                             constraint_field="pref_religion",
                             state_field="religion_type",
-                            detail=f"{v_lit}의 pref_religion(동일 종교만·시맨틱)과 {c_lit}의 religion_type이 일치하지 않습니다.",
-                        )
-                    )
-            elif pr == 5:
-                if not _is_effectively_no_religion(cand.religion_type):
-                    hits.append(
-                        HardHit(
-                            viewer=v_lit,
-                            candidate=c_lit,
-                            rule="religion_none_partner_only",
-                            constraint_field="pref_religion",
-                            state_field="religion_type",
-                            detail=f"{v_lit}의 pref_religion(무교·비종교 파트너만·시맨틱)과 {c_lit}의 religion_type이 충돌합니다.",
-                        )
-                    )
-            elif pr == 6:
-                if _is_effectively_no_religion(cand.religion_type):
-                    hits.append(
-                        HardHit(
-                            viewer=v_lit,
-                            candidate=c_lit,
-                            rule="religion_religious_partner_required",
-                            constraint_field="pref_religion",
-                            state_field="religion_type",
-                            detail=f"{v_lit}는 종교가 있는 파트너만(시맨틱 단계 6) 허용하지만 {c_lit}는 무(無) 종교에 가깝습니다.",
+                            detail=f"{v_lit}의 pref_religion(동일 종교만·시맨틱 4~5)과 {c_lit}의 religion_type이 일치하지 않습니다.",
                         )
                     )
         else:
@@ -718,7 +707,6 @@ def _rule_label_ko(rule: str) -> str:
         "tattoo": "타투·문신 조건",
         "religion_same_only": "종교(동일 종교만)",
         "religion_none_partner_only": "종교(무교·비종교만)",
-        "religion_religious_partner_required": "종교(파트너 종교 필요)",
         "pref_cc": "기타(pref_cc)",
         "availability_mismatch": "만남 가능 시간",
         "same_department": "동일 학과",
@@ -737,9 +725,7 @@ def build_summary_text(
 ) -> str:
     if match_status == "violated":
         rules = [str(v.get("rule", "")) for v in violations]
-        if "religion_religious_partner_required" in rules:
-            s1 = "상대에게 종교가 있어야 한다는 조건과 맞지 않아 매칭이 권장되지 않습니다."
-        elif any(str(r).startswith("religion") for r in rules):
+        if any(str(r).startswith("religion") for r in rules):
             s1 = "종교적 가치관·수용 조건의 차이로 매칭이 권장되지 않습니다."
         elif "smoking" in rules:
             s1 = "흡연 선호(pref_smoking)와 상대의 실제 흡연(smoking)이 맞지 않아 매칭이 권장되지 않습니다."

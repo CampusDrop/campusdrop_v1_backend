@@ -13,6 +13,8 @@ const { resolveMatchMeetingDisplay } = require('./meetingDisplay');
 
 const RSVP_YES = 'YES';
 const RSVP_NO = 'NO';
+const MONDAY_OUTCOME_CONFIRMED = 'CONFIRMED';
+const MONDAY_OUTCOME_CANCELLED = 'CANCELLED';
 const SHORT_LINK_TTL_MS = 7 * 24 * 3600 * 1000;
 const SHORT_LINK_CODE_BYTES = 9;
 const SHORT_LINK_MAX_CREATE_ATTEMPTS = 5;
@@ -34,6 +36,15 @@ function normalizeMsisdn01(raw) {
     return null;
   }
   return digits;
+}
+
+function mondayOutcomeFromRsvps(userA, userB) {
+  if (userA == null || userB == null) {
+    return null;
+  }
+  return userA === RSVP_YES && userB === RSVP_YES
+    ? MONDAY_OUTCOME_CONFIRMED
+    : MONDAY_OUTCOME_CANCELLED;
 }
 
 function signPayload(payloadString) {
@@ -320,26 +331,24 @@ async function sendMondayOutcomeMessages(rsvp) {
 
 async function resolveAfterMondayUpdate(matchingId) {
   const rsvp = await prisma.matchingFriendTalkRsvp.findUnique({ where: { matchingId } });
-  if (!rsvp || rsvp.mondayOutcomeSent) {
+  if (!rsvp || rsvp.mondayOutcome || rsvp.mondayOutcomeSent) {
     return;
   }
   const { mondayRsvpUserA: a, mondayRsvpUserB: b } = rsvp;
-  if (a == null || b == null) {
+  const mondayOutcome = mondayOutcomeFromRsvps(a, b);
+  if (!mondayOutcome) {
     return;
   }
-  const anyNo = a === RSVP_NO || b === RSVP_NO;
+  const anyNo = mondayOutcome === MONDAY_OUTCOME_CANCELLED;
+  await sendMondayOutcomeMessages(rsvp);
   await prisma.matchingFriendTalkRsvp.update({
     where: { matchingId },
-    data: { skipDayEveReminder: anyNo },
-  });
-  const fresh = await prisma.matchingFriendTalkRsvp.findUnique({ where: { matchingId } });
-  if (!fresh) {
-    return;
-  }
-  await sendMondayOutcomeMessages(fresh);
-  await prisma.matchingFriendTalkRsvp.update({
-    where: { matchingId },
-    data: { mondayOutcomeSent: true },
+    data: {
+      skipDayEveReminder: anyNo,
+      mondayOutcomeSent: true,
+      mondayOutcome,
+      mondayOutcomeSentAt: new Date(),
+    },
   });
 }
 
@@ -437,6 +446,9 @@ async function handleRsvpClick({ matchingId, identityId, phase, choice }) {
   const isA = identityId === match.userAId;
 
   if (phase === 'monday') {
+    if (rsvp.mondayOutcome || rsvp.mondayOutcomeSent) {
+      return { ok: true };
+    }
     const data = isA ? { mondayRsvpUserA: value } : { mondayRsvpUserB: value };
     await prisma.matchingFriendTalkRsvp.update({
       where: { matchingId },
@@ -520,11 +532,14 @@ async function sendDayEveReminderForMatching(matchingId) {
 module.exports = {
   RSVP_YES,
   RSVP_NO,
+  MONDAY_OUTCOME_CONFIRMED,
+  MONDAY_OUTCOME_CANCELLED,
   ACQUISITION_SLUGS,
   FEEDBACK_SLUGS,
   rsvpSecret,
   publicApiBase,
   normalizeMsisdn01,
+  mondayOutcomeFromRsvps,
   makeFriendTalkToken,
   makeRsvpToken,
   parseRsvpToken,

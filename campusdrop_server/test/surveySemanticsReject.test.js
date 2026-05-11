@@ -79,6 +79,19 @@ test('invalid partner_age_preference multi-select enum → 400', () => {
   assert.ok(String(r.error).includes('partner_age_preference'));
 });
 
+test('partner_age_preference allows duplicates and preserves order', () => {
+  const r = validateSurveyPayload(
+    minimalSurvey({}, {}, { partner_age_preference: ['OLDER', 'OLDER', 'YOUNGER', 'SAME_AGE'] }),
+  );
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.data.surveyAnswers.phase6_partner_preferences.partner_age_preference, [
+    'OLDER',
+    'OLDER',
+    'YOUNGER',
+    'SAME_AGE',
+  ]);
+});
+
 test('invalid participantMeta.profile.department → 400', () => {
   const p = minimalSurvey();
   p.participantMeta = { profile: { department: '없는학과', gender: '남성' } };

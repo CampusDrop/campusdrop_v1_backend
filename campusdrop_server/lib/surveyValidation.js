@@ -462,23 +462,30 @@ function coerceScaleInt(value) {
 /**
  * @param {unknown} value
  * @param {Set<string>} allowed
+ * @param {{ allowDuplicates?: boolean }} [options] — `partner_age_preference` 등 동일 값 중복·순서 유지 저장용
  * @returns {string[] | null}
  */
-function normalizeMultiSelectEnum(value, allowed) {
+function normalizeMultiSelectEnum(value, allowed, options = {}) {
+  const allowDuplicates = options.allowDuplicates === true;
   if (!Array.isArray(value) || value.length === 0) {
     return null;
   }
   const out = [];
-  const seen = new Set();
+  const seen = allowDuplicates ? null : new Set();
   for (const raw of value) {
     const item = typeof raw === 'string' ? raw.trim() : '';
-    if (!allowed.has(item) || seen.has(item)) {
+    if (!allowed.has(item)) {
       return null;
     }
-    seen.add(item);
+    if (!allowDuplicates) {
+      if (seen.has(item)) {
+        continue;
+      }
+      seen.add(item);
+    }
     out.push(item);
   }
-  return out;
+  return out.length ? out : null;
 }
 
 /**
@@ -606,11 +613,14 @@ function validateAndNormalizeSurveyAnswers(nested) {
         block[field] = s;
       } else if (Object.prototype.hasOwnProperty.call(multiEnumSpec, field)) {
         const allowed = new Set(/** @type {string[]} */ (multiEnumSpec[field]));
-        const values = normalizeMultiSelectEnum(v, allowed);
+        const allowDuplicates = field === 'partner_age_preference';
+        const values = normalizeMultiSelectEnum(v, allowed, { allowDuplicates });
         if (values === null) {
           return {
             ok: false,
-            error: `surveyAnswers.${ph}.${field}는 중복 없는 배열이어야 하며 각 값은 다음 중 하나여야 합니다: ${[...allowed].join(', ')}`,
+            error: allowDuplicates
+              ? `surveyAnswers.${ph}.${field}는 비어 있지 않은 배열이어야 하며 각 값은 다음 중 하나여야 합니다: ${[...allowed].join(', ')}`
+              : `surveyAnswers.${ph}.${field}는 중복 없는 배열이어야 하며 각 값은 다음 중 하나여야 합니다: ${[...allowed].join(', ')}`,
           };
         }
         block[field] = values;

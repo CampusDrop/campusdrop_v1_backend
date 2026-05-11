@@ -1053,7 +1053,8 @@ router.get('/matches/unmatched', async (req, res) => {
  *     summary: 기준 여성의 특정 가능 시간에 매칭 가능한 남성 후보와 점수 조회
  *     description: |
  *       `identityId`는 여성 Identity UUID여야 하며, 현재 매칭 주기 미매칭·비차단·설문 완료 사용자만 대상으로 한다.
- *       후보는 요청 슬롯을 가진 남성 미매칭 사용자이며, Python `calculate-match`로 계산한 점수 내림차순으로 반환한다.
+ *       후보는 요청 슬롯을 가진 남성 미매칭 사용자이며, Python `calculate-match`에 `hard_rules_scope=religion_only`를 넘겨
+ *       종교 하드만 적용하고(동일 학과·나이·흡연 등은 점수·소프트만 반영), 점수 내림차순으로 전부 반환한다.
  *     security:
  *       - AdminBearerAuth: []
  */
@@ -1131,8 +1132,7 @@ router.get('/matches/slot-candidates', async (req, res) => {
       const candBirthYear = parseBirthYearForMatch(cand.identity?.birthYear);
       const candAgePrefs = partnerAgePreferenceFromSurveyData(cand.surveyData);
       const baseIsUserA = base.id.localeCompare(cand.id) <= 0;
-      // 관리자 수동 재매칭 후보 조회는 요청 슬롯 보유 여부만 이 라우트에서 확인한다.
-      // Python availability 하드필터는 일괄/실시간 매칭의 20시 이후 제외 정책까지 적용하므로 여기서는 생략한다.
+      // 슬롯 일치는 Node에서만 본다. Python은 `hard_rules_scope=religion_only`로 종교 하드만 차단·availability는 미전달.
       const body = baseIsUserA
         ? {
             user_A: baseProfile,
@@ -1145,6 +1145,7 @@ router.get('/matches/slot-candidates', async (req, res) => {
             partner_age_preference_b: candAgePrefs,
             gender_a: 'female',
             gender_b: 'male',
+            hard_rules_scope: 'religion_only',
           }
         : {
             user_A: candidateProfile,
@@ -1157,6 +1158,7 @@ router.get('/matches/slot-candidates', async (req, res) => {
             partner_age_preference_b: baseAgePrefs,
             gender_a: 'male',
             gender_b: 'female',
+            hard_rules_scope: 'religion_only',
           };
 
       const py = await postCalculateMatch(body);

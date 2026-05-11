@@ -298,6 +298,19 @@ def test_compute_match_same_department_violates() -> None:
     assert "same_department" in rules
 
 
+def test_compute_match_religion_only_scope_ignores_same_department() -> None:
+    ua = _u()
+    ub = _u()
+    out = compute_match(
+        ua,
+        ub,
+        department_a="컴퓨터공학과",
+        department_b="컴퓨터공학과",
+        hard_rules_scope="religion_only",
+    )
+    assert out["match_status"] == "ok"
+
+
 def test_compute_match_different_department_ok() -> None:
     ua = _u()
     ub = _u()

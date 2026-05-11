@@ -370,6 +370,10 @@ class HardHit:
     detail: str
 
 
+# `hard_rules_scope="religion_only"`: 어드민 슬롯 후보 등 — 종교 하드만 차단, 나머지는 점수만 반영.
+_RELIGION_HARD_RULES = frozenset({"religion_same_only", "religion_none_partner_only"})
+
+
 def collect_hard_violations(
     a: LifestyleUser,
     b: LifestyleUser,
@@ -384,6 +388,7 @@ def collect_hard_violations(
     partner_age_preference_b: list[str] | None = None,
     gender_a: Literal["male", "female"] | None = None,
     gender_b: Literal["male", "female"] | None = None,
+    hard_rules_scope: Literal["full", "religion_only"] = "full",
 ) -> list[HardHit]:
     # partner_age_preference 하드: 해당 위치 사용자 gender가 female일 때만 적용.
     hits: list[HardHit] = []
@@ -624,6 +629,8 @@ def collect_hard_violations(
                     detail="만남 가능 시간(동일 날짜·동일 1시간 time_slot)의 교집합이 없거나, 한쪽만 일정이 있어 동시 만남을 확정할 수 없습니다.",
                 )
             )
+    if hard_rules_scope == "religion_only":
+        hits = [h for h in hits if h.rule in _RELIGION_HARD_RULES]
     return hits
 
 
@@ -830,6 +837,7 @@ def compute_match(
     partner_age_preference_b: list[str] | None = None,
     gender_a: Literal["male", "female"] | None = None,
     gender_b: Literal["male", "female"] | None = None,
+    hard_rules_scope: Literal["full", "religion_only"] = "full",
     # 배치 매칭 후보 루프: 점수·하드만 필요 per-axis·긴 문구 생략으로 메모리·GC 부담 완화.
     batch_candidate_pass: bool = False,
 ) -> dict[str, Any]:
@@ -846,6 +854,7 @@ def compute_match(
         partner_age_preference_b=partner_age_preference_b,
         gender_a=gender_a,
         gender_b=gender_b,
+        hard_rules_scope=hard_rules_scope,
     )
     n_hits = len(hits)
 

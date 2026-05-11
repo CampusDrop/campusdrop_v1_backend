@@ -35,6 +35,7 @@ function phoneFromExistingIdentity(user) {
  * @param {{
  *   surveyData: unknown;
  *   gender: string | null;
+ *   matchType: string | null;
  *   surveySubmittedAt: Date | string | null;
  *   updatedAt: Date | string;
  * } | null} row
@@ -51,6 +52,7 @@ function surveyMePayloadFromTraitRow(userId, row) {
     hasSurvey,
     surveyData: hasSurvey ? row.surveyData : null,
     gender: row?.gender ?? null,
+    matchType: row?.matchType ?? null,
     surveySubmittedAt: row?.surveySubmittedAt
       ? new Date(row.surveySubmittedAt).toISOString()
       : null,
@@ -107,12 +109,22 @@ router.get('/me', async (req, res) => {
   }
 
   try {
-    const row = await prisma.trait.findUnique({
-      where: { id: req.user.id },
-      select: { surveyData: true, gender: true, surveySubmittedAt: true, updatedAt: true },
-    });
+    const [traitRow, weeklyRow] = await Promise.all([
+      prisma.trait.findUnique({
+        where: { id: req.user.id },
+        select: { surveyData: true, gender: true, surveySubmittedAt: true, updatedAt: true },
+      }),
+      prisma.weeklySurveySubmission.findFirst({
+        where: { identityId: req.user.id },
+        orderBy: [{ submittedAt: 'desc' }, { updatedAt: 'desc' }, { createdAt: 'desc' }],
+        select: { matchType: true },
+      }),
+    ]);
 
-    const body = surveyMePayloadFromTraitRow(req.user.id, row);
+    const body = surveyMePayloadFromTraitRow(req.user.id, {
+      ...(traitRow || {}),
+      matchType: weeklyRow?.matchType ?? null,
+    });
 
     await writeAccessLog({
       actorType: 'user_session',

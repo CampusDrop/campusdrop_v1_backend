@@ -25,6 +25,13 @@ async function upsertWeeklySurveySubmission(prismaClient, params) {
   const { targetPeriodStart, targetPeriodEnd } = targetPeriodFromAvailabilityWindow(
     params.availabilityWindow,
   );
+  const existingAnyType = await prismaClient.weeklySurveySubmission.findFirst({
+    where: {
+      identityId: params.identityId,
+      targetPeriodStart,
+    },
+    select: { id: true },
+  });
   const where = {
     identityId_matchType_targetPeriodStart: {
       identityId: params.identityId,
@@ -32,6 +39,16 @@ async function upsertWeeklySurveySubmission(prismaClient, params) {
       targetPeriodStart,
     },
   };
+
+  // 같은 주차에는 선택한 matchType 하나만 유지한다.
+  await prismaClient.weeklySurveySubmission.deleteMany({
+    where: {
+      identityId: params.identityId,
+      targetPeriodStart,
+      NOT: { matchType: params.matchType },
+    },
+  });
+
   const existing = await prismaClient.weeklySurveySubmission.findUnique({ where });
   if (!existing) {
     const created = await prismaClient.weeklySurveySubmission.create({
@@ -45,7 +62,7 @@ async function upsertWeeklySurveySubmission(prismaClient, params) {
         submittedAt: params.submittedAt,
       },
     });
-    return { submission: created, isFirstSubmissionForWeek: true };
+    return { submission: created, isFirstSubmissionForWeek: !existingAnyType };
   }
 
   const updated = await prismaClient.weeklySurveySubmission.update({

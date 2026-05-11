@@ -5,7 +5,6 @@ const templates = require('./friendTalkTemplates');
 const { resolveMatchMeetingDisplay } = require('./meetingDisplay');
 const {
   publicApiBase,
-  rsvpSecret,
   buildFeedbackButtons,
 } = require('./friendTalkRsvp');
 const { decryptPhoneForIdentity } = require('./adminMatchFriendTalk');
@@ -25,10 +24,8 @@ async function runMeetingFeedbackFriendTalkJob() {
     return;
   }
   const base = publicApiBase();
-  if (!base || rsvpSecret().length < 16) {
-    console.warn(
-      '[meetingFeedbackFriendTalkCron] PUBLIC_API_URL 또는 FRIEND_TALK_RSVP_SECRET 미설정 — 건너뜀',
-    );
+  if (!base) {
+    console.warn('[meetingFeedbackFriendTalkCron] PUBLIC_API_URL 미설정 — 건너뜀');
     return;
   }
 
@@ -66,8 +63,8 @@ async function runMeetingFeedbackFriendTalkJob() {
 
     const meeting = await resolveMatchMeetingDisplay(m.id);
     const text = templates.buildMeetingDayFeedbackText(meeting.meetingPlace || '');
-    const btnA = buildFeedbackButtons(m.id, m.userAId, base);
-    const btnB = buildFeedbackButtons(m.id, m.userBId, base);
+    const btnA = await buildFeedbackButtons(m.id, m.userAId, base);
+    const btnB = await buildFeedbackButtons(m.id, m.userBId, base);
     if (!btnA || !btnB) {
       console.warn('[meetingFeedbackFriendTalkCron] 피드백 버튼 생성 실패:', m.id);
       continue;

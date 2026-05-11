@@ -13,7 +13,7 @@ const { surveySchoolAccessOk, SURVEY_ACCESS_DENIED } = require('../lib/surveyAcc
 const { encryptPhoneForStorage, decryptPhoneFromStorage } = require('../lib/phoneCrypto');
 const { assertSolapiFriendTalkEnv, sendFriendTalkCta } = require('../lib/solapiFriendTalkSend');
 const templates = require('../lib/friendTalkTemplates');
-const { publicApiBase, buildAcquisitionButtons, rsvpSecret } = require('../lib/friendTalkRsvp');
+const { publicApiBase, buildAcquisitionButtons } = require('../lib/friendTalkRsvp');
 
 const router = express.Router();
 
@@ -277,12 +277,11 @@ router.post('/submit', async (req, res) => {
         } else {
           const intro = `${templates.WAITLIST_AND_QUEUE_TEXT}\n\n${templates.FIRST_SURVEY_ACQUISITION_TAIL}`;
           const base = publicApiBase();
-          const secretOk = rsvpSecret().length >= 16;
           const to = txResult.phoneForFirstWeeklySurveyConfirmed;
-          if (!base || !secretOk) {
+          if (!base) {
             await sendFriendTalkCta({ to, text: intro });
           } else {
-            const buttons = buildAcquisitionButtons(req.user.id, base);
+            const buttons = await buildAcquisitionButtons(req.user.id, base);
             if (buttons && buttons.length > 0) {
               await sendFriendTalkCta({ to, text: intro, buttons });
             } else {

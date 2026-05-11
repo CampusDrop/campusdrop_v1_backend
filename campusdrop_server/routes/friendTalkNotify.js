@@ -3,7 +3,6 @@ const { assertSolapiFriendTalkEnv, sendFriendTalkCta } = require('../lib/solapiF
 const { prisma } = require('../lib/prisma');
 const {
   publicApiBase,
-  rsvpSecret,
   normalizeMsisdn01,
   buildRsvpButtons,
   sendDayEveReminderForMatching,
@@ -144,7 +143,6 @@ router.post('/match-complete', async (req, res) => {
 
   const mid = matchingIdFromBody(req.body);
   const base = publicApiBase();
-  const secretOk = rsvpSecret().length >= 16;
 
   const bodyMeeting = meetingTimePlaceFromBody(req.body);
 
@@ -153,12 +151,6 @@ router.post('/match-complete', async (req, res) => {
       return res.status(500).json({
         ok: false,
         error: '버튼 링크용 PUBLIC_API_URL 설정이 필요합니다.',
-      });
-    }
-    if (!secretOk) {
-      return res.status(500).json({
-        ok: false,
-        error: 'FRIEND_TALK_RSVP_SECRET(16자 이상) 설정이 필요합니다.',
       });
     }
 
@@ -235,8 +227,8 @@ router.post('/match-complete', async (req, res) => {
       },
     });
 
-    const btnA = buildRsvpButtons(mid, m.userAId, 'monday', base);
-    const btnB = buildRsvpButtons(mid, m.userBId, 'monday', base);
+    const btnA = await buildRsvpButtons(mid, m.userAId, 'monday', base);
+    const btnB = await buildRsvpButtons(mid, m.userBId, 'monday', base);
     if (!btnA || !btnB) {
       return res.status(500).json({ ok: false, error: 'RSVP 토큰 생성에 실패했습니다.' });
     }

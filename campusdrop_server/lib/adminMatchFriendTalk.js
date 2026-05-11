@@ -4,7 +4,6 @@ const { assertSolapiFriendTalkEnv, sendFriendTalkCta, getKakaoFriendTalkImageIdF
 const templates = require('./friendTalkTemplates');
 const {
   publicApiBase,
-  rsvpSecret,
   buildRsvpButtons,
 } = require('./friendTalkRsvp');
 const { resolveMatchMeetingDisplay } = require('./meetingDisplay');
@@ -71,9 +70,6 @@ async function sendMatchSuccessFriendTalkForMatching(matchingId) {
   if (!base) {
     return { ok: false, error: '버튼 링크용 PUBLIC_API_URL 설정이 필요합니다.' };
   }
-  if (rsvpSecret().length < 16) {
-    return { ok: false, error: 'FRIEND_TALK_RSVP_SECRET(16자 이상) 설정이 필요합니다.' };
-  }
 
   const m = await prisma.matching.findUnique({
     where: { id: matchingId },
@@ -100,8 +96,8 @@ async function sendMatchSuccessFriendTalkForMatching(matchingId) {
   }
 
   const text = templates.buildMatchCompleteText(meetingTime, meetingPlace);
-  const btnA = buildRsvpButtons(matchingId, m.userAId, 'monday', base);
-  const btnB = buildRsvpButtons(matchingId, m.userBId, 'monday', base);
+  const btnA = await buildRsvpButtons(matchingId, m.userAId, 'monday', base);
+  const btnB = await buildRsvpButtons(matchingId, m.userBId, 'monday', base);
   if (!btnA || !btnB) {
     return { ok: false, error: 'RSVP 토큰 생성에 실패했습니다.' };
   }

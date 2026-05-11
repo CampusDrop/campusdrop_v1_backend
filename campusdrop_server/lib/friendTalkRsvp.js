@@ -13,6 +13,9 @@ const { resolveMatchMeetingDisplay } = require('./meetingDisplay');
 
 const RSVP_YES = 'YES';
 const RSVP_NO = 'NO';
+const SHORT_LINK_TTL_MS = 7 * 24 * 3600 * 1000;
+const SHORT_LINK_CODE_BYTES = 9;
+const SHORT_LINK_MAX_CREATE_ATTEMPTS = 5;
 
 const ACQUISITION_SLUGS = ['everytime', 'instagram', 'friend', 'poster'];
 const FEEDBACK_SLUGS = ['similar', 'different', 'neutral'];
@@ -72,6 +75,71 @@ function makeRsvpToken({ matchingId, identityId, phase, choice }) {
         ? 'no'
         : String(choice);
   return makeFriendTalkToken({ matchingId, identityId, phase, choice: c });
+}
+
+function shortRsvpPath(code) {
+  return `/api/friend-talk/r/${encodeURIComponent(String(code || ''))}`;
+}
+
+function buildShortRsvpUrl(baseUrl, code) {
+  const base = String(baseUrl || '').replace(/\/+$/, '');
+  return `${base}${shortRsvpPath(code)}`;
+}
+
+function generateShortRsvpCode() {
+  return crypto.randomBytes(SHORT_LINK_CODE_BYTES).toString('base64url');
+}
+
+/**
+ * @param {{ matchingId?: string | null, identityId: string, phase: string, choice: string }} p
+ */
+async function createFriendTalkRsvpLink({ matchingId = null, identityId, phase, choice }) {
+  const expiresAt = new Date(Date.now() + SHORT_LINK_TTL_MS);
+  for (let attempt = 0; attempt < SHORT_LINK_MAX_CREATE_ATTEMPTS; attempt += 1) {
+    const code = generateShortRsvpCode();
+    try {
+      await prisma.friendTalkRsvpLink.create({
+        data: {
+          code,
+          matchingId: matchingId || null,
+          identityId,
+          phase,
+          choice: String(choice),
+          expiresAt,
+        },
+      });
+      return code;
+    } catch (err) {
+      if (err && err.code === 'P2002') {
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('FRIEND_TALK_RSVP_LINK_CODE_COLLISION');
+}
+
+async function resolveFriendTalkRsvpLink(code) {
+  const raw = String(code || '').trim();
+  if (!raw) {
+    return { ok: false, error: '링크가 올바르지 않습니다.' };
+  }
+  const row = await prisma.friendTalkRsvpLink.findUnique({ where: { code: raw } });
+  if (!row) {
+    return { ok: false, error: '유효하지 않은 링크입니다.' };
+  }
+  if (row.expiresAt.getTime() < Date.now()) {
+    return { ok: false, error: '링크가 만료되었습니다.' };
+  }
+  return {
+    ok: true,
+    data: {
+      matchingId: row.matchingId || null,
+      identityId: row.identityId,
+      phase: row.phase,
+      choice: row.choice,
+    },
+  };
 }
 
 function parseRsvpToken(token) {
@@ -140,25 +208,21 @@ function parseRsvpToken(token) {
  * @param {'monday'} phase
  * @param {string} baseUrl
  */
-function buildRsvpButtons(matchingId, identityId, phase, baseUrl) {
-  const base = String(baseUrl || '').replace(/\/+$/, '');
-  const yes = makeRsvpToken({ matchingId, identityId, phase, choice: 'yes' });
-  const no = makeRsvpToken({ matchingId, identityId, phase, choice: 'no' });
-  if (!yes || !no) {
-    return null;
-  }
+async function buildRsvpButtons(matchingId, identityId, phase, baseUrl) {
+  const yes = await createFriendTalkRsvpLink({ matchingId, identityId, phase, choice: 'yes' });
+  const no = await createFriendTalkRsvpLink({ matchingId, identityId, phase, choice: 'no' });
   return [
     {
       buttonName: '참여 가능해요 !',
       buttonType: 'WL',
-      linkMo: `${base}/api/friend-talk/rsvp?t=${encodeURIComponent(yes)}`,
-      linkPc: `${base}/api/friend-talk/rsvp?t=${encodeURIComponent(yes)}`,
+      linkMo: buildShortRsvpUrl(baseUrl, yes),
+      linkPc: buildShortRsvpUrl(baseUrl, yes),
     },
     {
       buttonName: '시간이 안돼요 ㅠㅠ',
       buttonType: 'WL',
-      linkMo: `${base}/api/friend-talk/rsvp?t=${encodeURIComponent(no)}`,
-      linkPc: `${base}/api/friend-talk/rsvp?t=${encodeURIComponent(no)}`,
+      linkMo: buildShortRsvpUrl(baseUrl, no),
+      linkPc: buildShortRsvpUrl(baseUrl, no),
     },
   ];
 }
@@ -174,19 +238,19 @@ const ACQUISITION_BUTTONS = [
  * @param {string} identityId
  * @param {string} baseUrl
  */
-function buildAcquisitionButtons(identityId, baseUrl) {
-  const base = String(baseUrl || '').replace(/\/+$/, '');
+async function buildAcquisitionButtons(identityId, baseUrl) {
   const out = [];
   for (const { slug, label } of ACQUISITION_BUTTONS) {
-    const t = makeFriendTalkToken({ identityId, phase: 'acquisition', choice: slug });
-    if (!t) {
-      return null;
-    }
+    const code = await createFriendTalkRsvpLink({
+      identityId,
+      phase: 'acquisition',
+      choice: slug,
+    });
     out.push({
       buttonName: label,
       buttonType: 'WL',
-      linkMo: `${base}/api/friend-talk/rsvp?t=${encodeURIComponent(t)}`,
-      linkPc: `${base}/api/friend-talk/rsvp?t=${encodeURIComponent(t)}`,
+      linkMo: buildShortRsvpUrl(baseUrl, code),
+      linkPc: buildShortRsvpUrl(baseUrl, code),
     });
   }
   return out;
@@ -203,19 +267,20 @@ const FEEDBACK_BUTTONS = [
  * @param {string} identityId
  * @param {string} baseUrl
  */
-function buildFeedbackButtons(matchingId, identityId, baseUrl) {
-  const base = String(baseUrl || '').replace(/\/+$/, '');
+async function buildFeedbackButtons(matchingId, identityId, baseUrl) {
   const out = [];
   for (const { slug, label } of FEEDBACK_BUTTONS) {
-    const t = makeFriendTalkToken({ matchingId, identityId, phase: 'feedback', choice: slug });
-    if (!t) {
-      return null;
-    }
+    const code = await createFriendTalkRsvpLink({
+      matchingId,
+      identityId,
+      phase: 'feedback',
+      choice: slug,
+    });
     out.push({
       buttonName: label,
       buttonType: 'WL',
-      linkMo: `${base}/api/friend-talk/rsvp?t=${encodeURIComponent(t)}`,
-      linkPc: `${base}/api/friend-talk/rsvp?t=${encodeURIComponent(t)}`,
+      linkMo: buildShortRsvpUrl(baseUrl, code),
+      linkPc: buildShortRsvpUrl(baseUrl, code),
     });
   }
   return out;
@@ -463,6 +528,9 @@ module.exports = {
   makeFriendTalkToken,
   makeRsvpToken,
   parseRsvpToken,
+  buildShortRsvpUrl,
+  createFriendTalkRsvpLink,
+  resolveFriendTalkRsvpLink,
   buildRsvpButtons,
   buildAcquisitionButtons,
   buildFeedbackButtons,

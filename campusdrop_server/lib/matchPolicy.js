@@ -2,6 +2,7 @@
  * Python `final_score` 기준. 미만이면 실시간 매칭 응답·배치 DB 저장 모두 제외.
  */
 const MIN_MATCH_SCORE = 50;
+const { MATCH_TYPE_ROMANCE } = require('./matchType');
 
 /** 매칭 주기 앵커(매주 동일 시각 기준 7일 구간). KST 2026-04-14 00:00(화요일). */
 const MATCHING_PERIOD_ANCHOR_ISO = '2026-04-14T00:00:00.000+09:00';
@@ -36,9 +37,9 @@ function getMatchingPeriodEnd(periodStart) {
  * @param {import('@prisma/client').PrismaClient} prisma
  * @param {string} selfId
  */
-async function getHistoricalPartnerIds(prisma, selfId) {
+async function getHistoricalPartnerIds(prisma, selfId, matchType = MATCH_TYPE_ROMANCE) {
   const rows = await prisma.matching.findMany({
-    where: { OR: [{ userAId: selfId }, { userBId: selfId }] },
+    where: { matchType, OR: [{ userAId: selfId }, { userBId: selfId }] },
     select: { userAId: true, userBId: true },
   });
   const ids = new Set();
@@ -56,10 +57,11 @@ async function getHistoricalPartnerIds(prisma, selfId) {
  * @param {Date} periodStart
  * @returns {Promise<string[][]>}
  */
-async function getForbiddenPairTuplesForBatch(prisma, periodStart) {
+async function getForbiddenPairTuplesForBatch(prisma, periodStart, matchType = MATCH_TYPE_ROMANCE) {
   const pe = getMatchingPeriodEnd(periodStart);
   const rows = await prisma.matching.findMany({
     where: {
+      matchType,
       NOT: {
         OR: [
           { periodStart },
@@ -93,10 +95,16 @@ async function getForbiddenPairTuplesForBatch(prisma, periodStart) {
  * @param {string} exceptUserId
  * @returns {Promise<string[][]>}
  */
-async function getSamePeriodLockedPairTuplesExceptUser(prisma, periodStart, exceptUserId) {
+async function getSamePeriodLockedPairTuplesExceptUser(
+  prisma,
+  periodStart,
+  exceptUserId,
+  matchType = MATCH_TYPE_ROMANCE,
+) {
   const pe = getMatchingPeriodEnd(periodStart);
   const rows = await prisma.matching.findMany({
     where: {
+      matchType,
       OR: [
         { periodStart },
         {
@@ -127,10 +135,11 @@ async function getSamePeriodLockedPairTuplesExceptUser(prisma, periodStart, exce
  * @param {import('@prisma/client').PrismaClient} prisma
  * @param {Date} periodStart
  */
-async function getUserIdsMatchedInPeriod(prisma, periodStart) {
+async function getUserIdsMatchedInPeriod(prisma, periodStart, matchType = MATCH_TYPE_ROMANCE) {
   const pe = getMatchingPeriodEnd(periodStart);
   const rows = await prisma.matching.findMany({
     where: {
+      matchType,
       OR: [
         { periodStart },
         {
@@ -154,12 +163,20 @@ async function getUserIdsMatchedInPeriod(prisma, periodStart) {
  * @param {Date} periodStart
  * @param {string[]} userIds
  */
-async function deleteMatchingsForUsersInPeriod(prisma, periodStart, userIds) {
+async function deleteMatchingsForUsersInPeriod(
+  prisma,
+  periodStart,
+  userIds,
+  matchType = MATCH_TYPE_ROMANCE,
+) {
   if (userIds.length === 0) return;
   const pe = getMatchingPeriodEnd(periodStart);
   await prisma.matching.deleteMany({
     where: {
       AND: [
+        {
+          matchType,
+        },
         {
           OR: [
             { periodStart },
@@ -182,12 +199,18 @@ async function deleteMatchingsForUsersInPeriod(prisma, periodStart, userIds) {
  * @param {string} userId `Identity.id`
  * @param {Date} periodStart `getMatchingPeriodStart()`와 동일 기준
  */
-async function findUserMatchingInPeriod(prisma, userId, periodStart) {
+async function findUserMatchingInPeriod(
+  prisma,
+  userId,
+  periodStart,
+  matchType = MATCH_TYPE_ROMANCE,
+) {
   const pe = getMatchingPeriodEnd(periodStart);
   return prisma.matching.findFirst({
     where: {
       AND: [
         { OR: [{ userAId: userId }, { userBId: userId }] },
+        { matchType },
         {
           OR: [
             { periodStart },

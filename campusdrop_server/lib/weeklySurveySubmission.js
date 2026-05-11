@@ -14,6 +14,7 @@ function targetPeriodFromAvailabilityWindow(availabilityWindow) {
  * @param {import('@prisma/client').PrismaClient | import('@prisma/client').Prisma.TransactionClient} prismaClient
  * @param {{
  *   identityId: string,
+ *   matchType: 'ROMANCE' | 'FRIEND',
  *   surveyData: Record<string, unknown>,
  *   gender: string,
  *   submittedAt: Date,
@@ -25,8 +26,9 @@ async function upsertWeeklySurveySubmission(prismaClient, params) {
     params.availabilityWindow,
   );
   const where = {
-    identityId_targetPeriodStart: {
+    identityId_matchType_targetPeriodStart: {
       identityId: params.identityId,
+      matchType: params.matchType,
       targetPeriodStart,
     },
   };
@@ -35,6 +37,7 @@ async function upsertWeeklySurveySubmission(prismaClient, params) {
     const created = await prismaClient.weeklySurveySubmission.create({
       data: {
         identityId: params.identityId,
+        matchType: params.matchType,
         targetPeriodStart,
         targetPeriodEnd,
         gender: params.gender,

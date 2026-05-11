@@ -20,6 +20,7 @@ const { slimMatchReportForDb } = require('./slimMatchReport');
 const { meetingStartsAtFromMatchReport } = require('./meetingStartsAtDerive');
 const { isBinaryTraitGender, normalizeTraitGender } = require('./genderPolicy');
 const { assignCafesToPairs } = require('./cafeAssignment');
+const { MATCH_TYPE_ROMANCE } = require('./matchType');
 
 const DEFAULT_BATCH_TIMEOUT_MS = 300_000;
 
@@ -30,14 +31,19 @@ function batchTimeoutMs() {
 
 /**
  * 목표 매칭 주 직전 신청 기간에 설문을 제출한 유저만 배치 대상.
- * @param {{ prismaClient?: import('@prisma/client').PrismaClient, periodStart?: Date }} [options]
+ * @param {{
+ *   prismaClient?: import('@prisma/client').PrismaClient,
+ *   periodStart?: Date,
+ *   matchType?: 'ROMANCE' | 'FRIEND',
+ * }} [options]
  */
 async function loadEligibleTraits(options = {}) {
   const prismaClient = options.prismaClient || prisma;
   const periodStart = options.periodStart || getMatchingPeriodStart();
+  const matchType = options.matchType || MATCH_TYPE_ROMANCE;
   const targetPeriodStart = getSurveyTargetPeriodStartForApplicationPeriod(periodStart);
   const submissions = await prismaClient.weeklySurveySubmission.findMany({
-    where: { targetPeriodStart },
+    where: { targetPeriodStart, matchType },
     include: {
       identity: {
         select: {
@@ -81,16 +87,24 @@ async function loadEligibleTraits(options = {}) {
  *
  * @param {import('@prisma/client').PrismaClient} prismaClient
  * @param {Date} periodStart
- * @param {{ lockSamePeriodPairsExceptUserId?: string | null, maxMatchesPerSlot?: number | null }} [options]
+ * @param {{
+ *   lockSamePeriodPairsExceptUserId?: string | null,
+ *   maxMatchesPerSlot?: number | null,
+ *   matchType?: 'ROMANCE' | 'FRIEND',
+ * }} [options]
  *   - lockSamePeriodPairsExceptUserId: 실시간 매칭 시 이번 주 타인의 짝을 금지 쌍에 합침.
  *   - maxMatchesPerSlot: 슬롯당 최대 쌍 수(활성 카페 수). 생략 시 Python 기본값(2) 사용.
  * @returns {Promise<{ pairs: any[], skipped: boolean, skipReason?: string, batchTraitsCount: number, eligibleSurveyCount: number, url: string }>}
  */
 async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
-  const { lockSamePeriodPairsExceptUserId = null, maxMatchesPerSlot = null } = options;
+  const {
+    lockSamePeriodPairsExceptUserId = null,
+    maxMatchesPerSlot = null,
+    matchType = MATCH_TYPE_ROMANCE,
+  } = options;
   const url = getMatchingBatchMatchUrl();
   const submissionWindow = buildSurveySubmissionWindowForApplicationPeriod(periodStart);
-  const traits = await loadEligibleTraits({ prismaClient, periodStart });
+  const traits = await loadEligibleTraits({ prismaClient, periodStart, matchType });
   if (traits.length < 2) {
     return {
       pairs: [],
@@ -103,12 +117,14 @@ async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
     };
   }
 
-  const batchTraits = traits.filter((t) => isBinaryTraitGender(t.gender));
+  const batchTraits =
+    matchType === MATCH_TYPE_ROMANCE ? traits.filter((t) => isBinaryTraitGender(t.gender)) : traits;
   if (batchTraits.length < 2) {
     return {
       pairs: [],
       skipped: true,
-      skipReason: 'not_enough_binary_gender_users',
+      skipReason:
+        matchType === MATCH_TYPE_ROMANCE ? 'not_enough_binary_gender_users' : 'not_enough_users_for_type',
       batchTraitsCount: batchTraits.length,
       eligibleSurveyCount: traits.length,
       submissionWindow,
@@ -118,7 +134,7 @@ async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
 
   let forbiddenPairs;
   try {
-    forbiddenPairs = await getForbiddenPairTuplesForBatch(prismaClient, periodStart);
+    forbiddenPairs = await getForbiddenPairTuplesForBatch(prismaClient, periodStart, matchType);
   } catch (err) {
     console.error('[fetchPythonBatchPairs] forbidden pairs load error:', err);
     throw err;
@@ -133,6 +149,7 @@ async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
         prismaClient,
         periodStart,
         lockSamePeriodPairsExceptUserId,
+        matchType,
       );
     } catch (err) {
       console.error('[fetchPythonBatchPairs] same-period locked pairs load error:', err);
@@ -151,7 +168,7 @@ async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
   const body = {
     users: batchTraits.map((t) => ({
       user_id: t.id,
-      gender: normalizeTraitGender(t.gender),
+      ...(matchType === MATCH_TYPE_ROMANCE ? { gender: normalizeTraitGender(t.gender) } : {}),
       profile: surveyDataToLifestyleUser(/** @type {Record<string, unknown>} */ (t.surveyData)),
       department: normalizeDepartment(t.identity?.department),
       birth_year: parseBirthYearForMatch(t.identity?.birthYear),
@@ -159,6 +176,7 @@ async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
       availability: surveyDataToAvailabilitySlots(/** @type {Record<string, unknown>} */ (t.surveyData)),
     })),
     forbidden_pairs: mergedForbidden,
+    match_type: matchType,
   };
   if (Number.isInteger(maxMatchesPerSlot) && maxMatchesPerSlot >= 1) {
     body.max_matches_per_slot = maxMatchesPerSlot;
@@ -200,6 +218,7 @@ async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
 async function runWeeklyBatchMatch(options = {}) {
   const actorType = options.actorType || 'job';
   const actorId = options.actorId !== undefined ? options.actorId : null;
+  const matchType = options.matchType || MATCH_TYPE_ROMANCE;
   const logAction = actorType === 'admin' ? 'ADMIN_BATCH_MATCH' : 'WEEKLY_BATCH_MATCH';
   const periodStartForBatch = getMatchingPeriodStart();
   const activeCafes = await prisma.cafe.findMany({
@@ -213,7 +232,10 @@ async function runWeeklyBatchMatch(options = {}) {
     );
   }
   const maxMatchesPerSlot = activeCafes.length > 0 ? activeCafes.length : null;
-  const fetched = await fetchPythonBatchPairs(prisma, periodStartForBatch, { maxMatchesPerSlot });
+  const fetched = await fetchPythonBatchPairs(prisma, periodStartForBatch, {
+    maxMatchesPerSlot,
+    matchType,
+  });
 
   if (fetched.skipped) {
     if (fetched.skipReason === 'not_enough_users') {
@@ -240,6 +262,13 @@ async function runWeeklyBatchMatch(options = {}) {
         submissionWindow: fetched.submissionWindow,
       };
     }
+    return {
+      skipped: true,
+      reason: fetched.skipReason || 'unknown',
+      count: fetched.batchTraitsCount,
+      eligibleSurveyCount: fetched.eligibleSurveyCount,
+      submissionWindow: fetched.submissionWindow,
+    };
   }
 
   const pairs = fetched.pairs;
@@ -260,6 +289,7 @@ async function runWeeklyBatchMatch(options = {}) {
       const row = {
         userAId: p.user_a_id,
         userBId: p.user_b_id,
+        matchType,
         score,
         matchedAt,
         periodStart,
@@ -279,7 +309,7 @@ async function runWeeklyBatchMatch(options = {}) {
   if (insertRows.length > 0) {
     const userIds = [...new Set(insertRows.flatMap((r) => [r.userAId, r.userBId]))];
     await prisma.$transaction(async (tx) => {
-      await deleteMatchingsForUsersInPeriod(tx, periodStart, userIds);
+      await deleteMatchingsForUsersInPeriod(tx, periodStart, userIds, matchType);
       await tx.matching.createMany({ data: insertRows });
     });
   }
@@ -325,6 +355,7 @@ async function runWeeklyBatchMatch(options = {}) {
       userCount: batchTraitsCount,
       eligibleSurveyCount: traitsCount,
       pythonUrl: url,
+      matchType,
       periodStart: insertRows.length > 0 ? insertRows[0].periodStart?.toISOString?.() ?? null : null,
       submissionWindow,
       activeCafeCount: activeCafes.length,
@@ -333,10 +364,11 @@ async function runWeeklyBatchMatch(options = {}) {
   });
 
   console.log(
-    `[weeklyBatchMatch] 완료: 배치대상(남/여) ${batchTraitsCount}명(설문보유 ${traitsCount}명), 쌍 ${insertRows.length}건, 카페 ${activeCafes.length}개 (친구톡은 관리자 성공 전송 API로 발송)`,
+    `[weeklyBatchMatch] 완료(${matchType}): 배치대상 ${batchTraitsCount}명(설문보유 ${traitsCount}명), 쌍 ${insertRows.length}건, 카페 ${activeCafes.length}개 (친구톡은 관리자 성공 전송 API로 발송)`,
   );
   return {
     skipped: false,
+    matchType,
     userCount: batchTraitsCount,
     eligibleSurveyCount: traitsCount,
     submissionWindow,

@@ -182,6 +182,8 @@ class BatchMatchRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     users: list[BatchMatchUserEntry]
+    # ROMANCE: 기존 이성 매칭 우선 로직, FRIEND: 성별 구분 없이 친구 매칭.
+    match_type: Literal["ROMANCE", "FRIEND"] = "ROMANCE"
     forbidden_pairs: list[list[str]] = Field(
         default_factory=list,
         description="과거 매칭 쌍. 각 원소는 `[uuid_lo, uuid_hi]`(문자열 정렬). 해당 쌍은 배치 엣지에서 제외.",

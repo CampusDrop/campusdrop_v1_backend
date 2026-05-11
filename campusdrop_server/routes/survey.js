@@ -14,6 +14,7 @@ const { encryptPhoneForStorage, decryptPhoneFromStorage } = require('../lib/phon
 const { assertSolapiFriendTalkEnv, sendFriendTalkCta } = require('../lib/solapiFriendTalkSend');
 const templates = require('../lib/friendTalkTemplates');
 const { publicApiBase, buildAcquisitionButtons } = require('../lib/friendTalkRsvp');
+const { normalizeMatchType, resolveMatchTypeOrDefault } = require('../lib/matchType');
 
 const router = express.Router();
 
@@ -189,7 +190,13 @@ router.post('/submit', async (req, res) => {
   }
 
   const { surveyData, survey } = req.body ?? {};
+  const matchTypeIn = req.body?.matchType ?? req.body?.match_type;
   const payload = surveyData ?? survey;
+  const matchType = resolveMatchTypeOrDefault(matchTypeIn);
+
+  if (matchTypeIn != null && !normalizeMatchType(matchTypeIn)) {
+    return res.status(400).json({ error: 'matchType은 ROMANCE 또는 FRIEND 여야 합니다.' });
+  }
 
   if (payload === undefined || payload === null) {
     return res.status(400).json({
@@ -230,6 +237,7 @@ router.post('/submit', async (req, res) => {
       });
       const weekly = await upsertWeeklySurveySubmission(tx, {
         identityId: req.user.id,
+        matchType,
         surveyData: validation.data,
         gender: surveyGender,
         submittedAt: surveySubmittedAt,

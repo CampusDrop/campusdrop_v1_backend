@@ -581,6 +581,131 @@ def run_batch_greedy_unique_pairs(
     ).pairs
 
 
+def run_batch_friend_matching(
+    users: list[
+        tuple[str, LifestyleUser, str | None, list[AvailabilitySlot], str | None, int | None, list[str] | None]
+    ],
+    forbidden_keys: set[str],
+    *,
+    max_matches_per_slot: int = DEFAULT_MAX_MATCHES_PER_SLOT,
+) -> _BatchMatchResult:
+    """
+    FRIEND 타입 배치 매칭.
+    성별 분리 없이 가능한 모든 쌍을 후보로 두고, 점수 내림차순 + 슬롯 제약으로 1인 1매칭을 고른다.
+    """
+    if max_matches_per_slot < 1:
+        max_matches_per_slot = 1
+    n = len(users)
+    if n < 2:
+        return _BatchMatchResult(
+            pairs=[],
+            unmatched_females=[],
+            match_summary={"algorithm": "friend_score_greedy_unique_pairs", "matched_count": 0, "target_count": 0},
+        )
+
+    by_id: dict[str, LifestyleUser] = {uid: prof for uid, prof, _, _, _, _, _ in users}
+    avail_by_id: dict[str, list[AvailabilitySlot]] = {uid: av for uid, _, _, av, _, _, _ in users}
+    dept_by_id: dict[str, str | None] = {uid: dep for uid, _, _, _, dep, _, _ in users}
+    birth_by_id: dict[str, int | None] = {uid: byy for uid, _, _, _, _, byy, _ in users}
+    age_pref_by_id: dict[str, list[str] | None] = {uid: prefs for uid, _, _, _, _, _, prefs in users}
+    ids = [uid for uid, _, _, _, _, _, _ in users]
+
+    candidate_edges: list[tuple[float, str, str, str | None]] = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            id_a, id_b = ids[i], ids[j]
+            id_lo, id_hi = sorted([id_a, id_b])
+            if _pair_key(id_lo, id_hi) in forbidden_keys:
+                continue
+            if not availability_pair_compatible_for_matching(avail_by_id[id_lo], avail_by_id[id_hi]):
+                continue
+
+            base_match = compute_match(
+                by_id[id_lo],
+                by_id[id_hi],
+                availability_a=avail_by_id[id_lo],
+                availability_b=avail_by_id[id_hi],
+                department_a=dept_by_id.get(id_lo),
+                department_b=dept_by_id.get(id_hi),
+                birth_year_a=birth_by_id.get(id_lo),
+                birth_year_b=birth_by_id.get(id_hi),
+                partner_age_preference_a=age_pref_by_id.get(id_lo),
+                partner_age_preference_b=age_pref_by_id.get(id_hi),
+                gender_a=None,
+                gender_b=None,
+                batch_candidate_pass=True,
+            )
+            if base_match["match_status"] != "ok":
+                continue
+            score = float(base_match["final_score"])
+            slot_keys = overlapping_slot_keys(avail_by_id[id_lo], avail_by_id[id_hi])
+            if not slot_keys:
+                slot_keys = [None]
+            elif len(slot_keys) > _MAX_OVERLAPPING_SLOT_KEYS_PER_PAIR:
+                slot_keys = slot_keys[:_MAX_OVERLAPPING_SLOT_KEYS_PER_PAIR]
+            for slot_key in slot_keys:
+                candidate_edges.append((score, id_lo, id_hi, slot_key))
+
+    candidate_edges.sort(key=lambda x: (-x[0], x[1], x[2], x[3] or ""))
+    selected_edges: list[tuple[float, str, str, str | None]] = []
+    used_users: set[str] = set()
+    slot_counts: dict[str, int] = {}
+    for score, user_a_id, user_b_id, slot_key in candidate_edges:
+        if user_a_id in used_users or user_b_id in used_users:
+            continue
+        if slot_key is not None and slot_counts.get(slot_key, 0) >= max_matches_per_slot:
+            continue
+        selected_edges.append((score, user_a_id, user_b_id, slot_key))
+        used_users.add(user_a_id)
+        used_users.add(user_b_id)
+        if slot_key is not None:
+            slot_counts[slot_key] = slot_counts.get(slot_key, 0) + 1
+
+    pairs: list[BatchMatchPair] = []
+    for score, user_a_id, user_b_id, slot_key in selected_edges:
+        final_match = compute_match(
+            by_id[user_a_id],
+            by_id[user_b_id],
+            availability_a=avail_by_id[user_a_id],
+            availability_b=avail_by_id[user_b_id],
+            department_a=dept_by_id.get(user_a_id),
+            department_b=dept_by_id.get(user_b_id),
+            birth_year_a=birth_by_id.get(user_a_id),
+            birth_year_b=birth_by_id.get(user_b_id),
+            partner_age_preference_a=age_pref_by_id.get(user_a_id),
+            partner_age_preference_b=age_pref_by_id.get(user_b_id),
+            gender_a=None,
+            gender_b=None,
+        )
+        report_raw = final_match.get("match_report")
+        report = report_raw if isinstance(report_raw, dict) else None
+        matched_slot = slot_key_to_availability_slot(slot_key) if slot_key is not None else None
+        pairs.append(
+            BatchMatchPair(
+                user_a_id=user_a_id,
+                user_b_id=user_b_id,
+                score=round(score, 2),
+                matched_slot=matched_slot,
+                match_report=report if isinstance(report, dict) else None,
+            )
+        )
+
+    pairs.sort(key=lambda p: (-p.score, p.user_a_id, p.user_b_id))
+    match_summary = {
+        "algorithm": "friend_score_greedy_unique_pairs",
+        "candidate_edge_count": len(candidate_edges),
+        "matched_count": len(pairs),
+        "target_count": len(pairs),
+        "max_matches_per_slot": max_matches_per_slot,
+        "priority": [
+            "hard_filters",
+            "overall_score_desc",
+            "slot_capacity",
+        ],
+    }
+    return _BatchMatchResult(pairs=pairs, unmatched_females=[], match_summary=match_summary)
+
+
 def batch_match_endpoint(body: BatchMatchRequest) -> BatchMatchResponse:
     entries: list[
         tuple[str, LifestyleUser, str | None, list[AvailabilitySlot], str | None, int | None, list[str] | None]
@@ -592,9 +717,14 @@ def batch_match_endpoint(body: BatchMatchRequest) -> BatchMatchResponse:
         )
     forbidden_keys = _forbidden_pair_key_set(body)
     max_matches_per_slot = body.max_matches_per_slot or DEFAULT_MAX_MATCHES_PER_SLOT
-    result = run_batch_female_coverage_matching(
-        entries, forbidden_keys, max_matches_per_slot=max_matches_per_slot
-    )
+    if body.match_type == "FRIEND":
+        result = run_batch_friend_matching(
+            entries, forbidden_keys, max_matches_per_slot=max_matches_per_slot
+        )
+    else:
+        result = run_batch_female_coverage_matching(
+            entries, forbidden_keys, max_matches_per_slot=max_matches_per_slot
+        )
     return BatchMatchResponse(
         pairs=result.pairs,
         unmatched_females=result.unmatched_females,

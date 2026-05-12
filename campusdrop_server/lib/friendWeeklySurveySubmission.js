@@ -9,30 +9,29 @@ function targetPeriodFromAvailabilityWindow(availabilityWindow) {
 }
 
 /**
- * 같은 매칭 주차에 다시 제출하면 해당 주차 스냅샷을 최신 설문으로 덮어쓴다. 로맨스 전용(`weekly_survey_submissions`).
+ * 친구 매칭 주차 스냅샷 upsert. 같은 주차의 로맨스 주간 행은 호출 전에 상위에서 삭제하거나 여기서 함께 처리합니다.
  *
  * @param {import('@prisma/client').PrismaClient | import('@prisma/client').Prisma.TransactionClient} prismaClient
  * @param {{
  *   identityId: string,
  *   surveyData: Record<string, unknown>,
- *   gender: string,
+ *   gender: string | null,
  *   submittedAt: Date,
  *   availabilityWindow: ReturnType<import('./surveyAvailabilityWindow').buildSurveyAvailabilityWindow>,
  * }} params
  */
-async function upsertWeeklySurveySubmission(prismaClient, params) {
+async function upsertFriendWeeklySurveySubmission(prismaClient, params) {
   const { targetPeriodStart, targetPeriodEnd } = targetPeriodFromAvailabilityWindow(
     params.availabilityWindow,
   );
 
-  await prismaClient.friendWeeklySurveySubmission.deleteMany({
+  await prismaClient.weeklySurveySubmission.deleteMany({
     where: {
       identityId: params.identityId,
       targetPeriodStart,
     },
   });
-
-  const existingAnyType = await prismaClient.weeklySurveySubmission.findFirst({
+  const existingAnyType = await prismaClient.friendWeeklySurveySubmission.findFirst({
     where: {
       identityId: params.identityId,
       targetPeriodStart,
@@ -46,9 +45,9 @@ async function upsertWeeklySurveySubmission(prismaClient, params) {
     },
   };
 
-  const existing = await prismaClient.weeklySurveySubmission.findUnique({ where });
+  const existing = await prismaClient.friendWeeklySurveySubmission.findUnique({ where });
   if (!existing) {
-    const created = await prismaClient.weeklySurveySubmission.create({
+    const created = await prismaClient.friendWeeklySurveySubmission.create({
       data: {
         identityId: params.identityId,
         targetPeriodStart,
@@ -61,7 +60,7 @@ async function upsertWeeklySurveySubmission(prismaClient, params) {
     return { submission: created, isFirstSubmissionForWeek: !existingAnyType };
   }
 
-  const updated = await prismaClient.weeklySurveySubmission.update({
+  const updated = await prismaClient.friendWeeklySurveySubmission.update({
     where,
     data: {
       targetPeriodEnd,
@@ -75,5 +74,5 @@ async function upsertWeeklySurveySubmission(prismaClient, params) {
 
 module.exports = {
   targetPeriodFromAvailabilityWindow,
-  upsertWeeklySurveySubmission,
+  upsertFriendWeeklySurveySubmission,
 };

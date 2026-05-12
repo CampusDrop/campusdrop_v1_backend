@@ -259,17 +259,8 @@ const swaggerDefinition = {
       SurveySubmitRequest: {
         type: 'object',
         description:
-          '`surveyData` 또는 `survey` 중 하나 필수. (1) 레거시: 척도·선호 키를 한 객체에 두고 `availability`는 `{ date, time_slot }[]`. (2) 프론트 패키지: `surveyAnswers`(또는 `answers`)에 척도·선호, `matchAvailability`(availableSlots에 date·hourStart·hourEnd 0~23), `participantMeta`(profile.studentId·birthYear·gender 등, 서버는 email·registrationToken·userUuid 저장 안 함). `matchType`이 `FRIEND`이면 `friendHobbySurvey`(메인·세부 취향 각 1~4) 필수.',
+          '로맨스(가치관) 설문 전용. `surveyData` 또는 `survey` 중 하나 필수. 친구 설문은 `POST /api/survey/friend/submit`.',
         properties: {
-          matchType: {
-            type: 'string',
-            enum: ['ROMANCE', 'FRIEND'],
-            description: '생략 시 ROMANCE',
-          },
-          friendHobbySurvey: {
-            $ref: '#/components/schemas/FriendHobbySurveyPayload',
-            description: '`matchType: FRIEND`일 때 필수. 별도 테이블 `friend_survey_submissions`에 동일 매칭 주차로 저장됩니다.',
-          },
           surveyData: {
             type: 'object',
             additionalProperties: true,
@@ -277,6 +268,53 @@ const swaggerDefinition = {
               '라이프스타일 척도·선호 + `availability` 또는 `matchAvailability`+`surveyAnswers` 패키지',
           },
           survey: { type: 'object', additionalProperties: true },
+        },
+      },
+      FriendSurveyCoreFields: {
+        type: 'object',
+        description:
+          '`surveyData`/`survey` 루트에 포함. [1] 메인 취미·[1-1] 세부(메인에 종속)·[2] 음주·[3] 담배·[4] 최애 음식. `mainHobbyDetail` 허용값은 `mainHobby`별로 다름(`friendSurveyValidation.js`와 동일).',
+        required: [
+          'mainHobby',
+          'mainHobbyDetail',
+          'drinking',
+          'smoking',
+          'favoriteFood',
+        ],
+        additionalProperties: true,
+        properties: {
+          mainHobby: {
+            type: 'string',
+            enum: ['GAME_PC', 'EXERCISE', 'CAFE', 'CULTURE'],
+            description:
+              'PC방·게임 / 운동·산책 / 카페·맛집 / 문화·여가',
+          },
+          mainHobbyDetail: {
+            type: 'string',
+            description:
+              '세부 취향(택1). GAME_PC: LOL_DUO, STEAM_COOP, PUBG, OVERWATCH2. EXERCISE: GYM, RUN_WALK, BALL_SPORTS, ACTIVE_FUN. CAFE: AESTHETIC_CAFE, DESSERT_TOUR, LOCAL_EATS, CAFE_STUDY. CULTURE: MOVIE_OTT, EXHIBITION_POPUP, LIVE_SHOW, ESCAPE_WORKSHOP.',
+          },
+          drinking: {
+            type: 'string',
+            enum: ['ALCOHOL_MAX', 'LIGHT_DRINK', 'PARTY_VIBE', 'NON_ALCOHOL'],
+          },
+          smoking: {
+            type: 'string',
+            enum: ['SMOKER', 'NON_SMOKER'],
+          },
+          favoriteFood: {
+            type: 'string',
+            enum: ['SPICY_BOLD', 'RICE_HEARTY', 'MEAT_GREASY', 'CLEAN_MEAL'],
+          },
+        },
+      },
+      FriendSurveySubmitRequest: {
+        type: 'object',
+        description:
+          '친구 매칭 설문. `surveyData` 또는 `survey` 중 하나 필수. 본문 루트는 `FriendSurveyCoreFields` 필수 키·enum + 만남 가능 시간(`availability` 또는 `matchAvailability`) 필수. 검증: `validateFriendSurveyPayload`.',
+        properties: {
+          surveyData: { allOf: [{ $ref: '#/components/schemas/FriendSurveyCoreFields' }] },
+          survey: { allOf: [{ $ref: '#/components/schemas/FriendSurveyCoreFields' }] },
         },
       },
       SurveySubmitResponse: {
@@ -300,47 +338,38 @@ const swaggerDefinition = {
       SurveyCurrentResponse: {
         type: 'object',
         properties: {
-          userId: { type: 'string', format: 'uuid', description: 'Identity.id = Trait.id' },
-          hasSurvey: { type: 'boolean', description: '`Trait.surveyData`가 객체로 저장돼 있으면 true' },
-          surveyData: {
-            type: 'object',
-            nullable: true,
-            additionalProperties: true,
-            description: 'DB 저장본(검증·정규화 후). 없으면 null',
+          userId: { type: 'string', format: 'uuid' },
+          meetingTargetPeriodStart: {
+            type: 'string',
+            format: 'date-time',
+            description: '이번 신청이 적용하는 만남 대상 주 시작(주간 제출 여부 판별에 사용)',
           },
-          gender: { type: 'string', nullable: true, description: '`Trait.gender`' },
-          matchType: {
+          activeWeeklyLane: {
             type: 'string',
             nullable: true,
             enum: ['ROMANCE', 'FRIEND'],
-            description: '가장 최근 `WeeklySurveySubmission`의 match_type',
+            description: '해당 만남 주에 로맨스/친구 주간 스냅샷 중 어느 레인이 잡혀 있는지',
           },
-          friendHobbySurvey: {
+          romance: {
             type: 'object',
-            nullable: true,
-            description:
-              '최근 주간 제출이 FRIEND일 때 `friend_survey_submissions`에서 조회. 없거나 ROMANCE면 null',
             properties: {
-              mainCategory: { type: 'integer', minimum: 1, maximum: 4 },
-              detailChoice: { type: 'integer', minimum: 1, maximum: 4 },
-              submittedAt: {
-                type: 'string',
-                format: 'date-time',
-                description: '해당 취미 설문 저장 시각',
-              },
+              hasSurvey: { type: 'boolean' },
+              surveyData: { type: 'object', nullable: true, additionalProperties: true },
+              gender: { type: 'string', nullable: true },
+              surveySubmittedAt: { type: 'string', format: 'date-time', nullable: true },
+              updatedAt: { type: 'string', format: 'date-time', nullable: true },
+              weeklySubmittedForTargetWeek: { type: 'boolean' },
             },
           },
-          surveySubmittedAt: {
-            type: 'string',
-            format: 'date-time',
-            nullable: true,
-            description: '`Trait.surveySubmittedAt`',
-          },
-          updatedAt: {
-            type: 'string',
-            format: 'date-time',
-            nullable: true,
-            description: '`Trait.updatedAt`',
+          friend: {
+            type: 'object',
+            properties: {
+              hasSurvey: { type: 'boolean' },
+              surveyData: { type: 'object', nullable: true, additionalProperties: true },
+              surveySubmittedAt: { type: 'string', format: 'date-time', nullable: true },
+              updatedAt: { type: 'string', format: 'date-time', nullable: true },
+              weeklySubmittedForTargetWeek: { type: 'boolean' },
+            },
           },
         },
       },
@@ -386,7 +415,13 @@ const swaggerDefinition = {
           submissionWindow: { type: 'object', additionalProperties: true },
           weeklySurveySubmittedForTargetWeek: {
             type: 'boolean',
-            description: '`WeeklySurveySubmission`이 대상 만남 주에 존재하면 true',
+            description:
+              '`week-status`는 로맨스 주간·`friend/week-status`는 친구 주간 스냅샷이 대상 만남 주에 있으면 true',
+          },
+          matchType: {
+            type: 'string',
+            enum: ['ROMANCE', 'FRIEND'],
+            description: '`GET /week-status`는 ROMANCE, `GET /friend/week-status`는 FRIEND 고정',
           },
           activeMatchingThisPeriod: {
             type: 'object',
@@ -710,6 +745,7 @@ const apis = [
   path.join(__dirname, '..', 'routes', 'schoolProof.js'),
   path.join(__dirname, '..', 'routes', 'stats.js'),
   path.join(__dirname, '..', 'routes', 'survey.js'),
+  path.join(__dirname, '..', 'routes', 'surveyFriend.js'),
   path.join(__dirname, '..', 'routes', 'match.js'),
   path.join(__dirname, '..', 'routes', 'kakao.js'),
   path.join(__dirname, '..', 'routes', 'analytics.js'),

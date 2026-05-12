@@ -43,8 +43,8 @@ model Identity {
   acquisitionSource String? @map("acquisition_source")
   createdAt DateTime @default(now())
   trait     Trait?
-  weeklySurveySubmissions WeeklySurveySubmission[]
-  friendSurveySubmissions FriendSurveySubmission[]
+  weeklySurveySubmissions        WeeklySurveySubmission[]
+  friendWeeklySurveySubmissions  FriendWeeklySurveySubmission[]
 
   schoolProofSubmissions SchoolProofSubmission[]
 
@@ -63,24 +63,26 @@ model Identity {
 model Trait {
   id                String    @id @db.Uuid
   identity          Identity  @relation(fields: [id], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  /// 설문 `gender`와 동기화. `male` | `female` (이성 매칭용).
+  /// 설문 `gender`와 동기화. `male` | `female` (이성 매칭용). 로맨스 설문 제출 시 갱신.
   gender            String?
+  /// 로맨스(가치관) 설문 JSON. `POST /api/survey/submit`만 갱신.
   surveyData        Json?
-  /// 사용자가 설문을 실제 제출한 시각. 관리자 보정 등 일반 Trait 업데이트와 분리해 주간 신청 여부를 판단합니다.
+  /// 친구(취미 등) 설문 JSON. `POST /api/survey/friend/submit`만 갱신.
+  friendSurveyData  Json?    @map("friend_survey_data")
+  /// 로맨스 설문 실제 제출 시각.
   surveySubmittedAt DateTime? @map("survey_submitted_at")
+  friendSurveySubmittedAt DateTime? @map("friend_survey_submitted_at")
   updatedAt         DateTime  @updatedAt
 
   @@index([surveySubmittedAt])
   @@map("traits")
 }
 
-/// 주차별 설문 제출 스냅샷. 한 유저가 같은 매칭 주에 다시 제출하면 최신 제출로 덮어씁니다.
+/// 로맨스 매칭용 주차별 설문 스냅샷. DB 테이블명 `weekly_survey_submissions`(레거시).
 model WeeklySurveySubmission {
   id                String   @id @default(uuid()) @db.Uuid
   identityId        String   @map("identity_id") @db.Uuid
   identity          Identity @relation(fields: [identityId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  /// ROMANCE | FRIEND. 같은 주차에 타입별로 별도 제출을 허용합니다.
-  matchType         String   @default("ROMANCE") @map("match_type")
   targetPeriodStart DateTime @map("target_period_start")
   targetPeriodEnd   DateTime @map("target_period_end")
   gender            String?
@@ -89,29 +91,27 @@ model WeeklySurveySubmission {
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
-  @@unique([identityId, matchType, targetPeriodStart])
-  @@index([matchType, targetPeriodStart, submittedAt])
+  @@unique([identityId, targetPeriodStart])
+  @@index([targetPeriodStart, submittedAt])
   @@map("weekly_survey_submissions")
 }
 
-/// 친구 매칭 설문: 메인 취미(택1)·세부 취향(택1). `WeeklySurveySubmission`(matchType FRIEND)와 동일 주차 키로 1행 유지.
-model FriendSurveySubmission {
+/// 친구 매칭용 주차별 설문 스냅샷.
+model FriendWeeklySurveySubmission {
   id                String   @id @default(uuid()) @db.Uuid
   identityId        String   @map("identity_id") @db.Uuid
   identity          Identity @relation(fields: [identityId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   targetPeriodStart DateTime @map("target_period_start")
   targetPeriodEnd   DateTime @map("target_period_end")
-  /// Step 1 — 1 PC방·게임, 2 운동·산책, 3 카페·맛집, 4 문화·여가
-  mainCategory      Int      @map("main_category")
-  /// Step 2 — Step 1 분기별 세부 문항에서 택1 (각 1~4)
-  detailChoice      Int      @map("detail_choice")
+  gender            String?
+  surveyData        Json     @map("survey_data")
   submittedAt       DateTime @map("submitted_at")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
   @@unique([identityId, targetPeriodStart])
-  @@index([identityId, submittedAt])
-  @@map("friend_survey_submissions")
+  @@index([targetPeriodStart, submittedAt])
+  @@map("friend_weekly_survey_submissions")
 }
 
 // --- 감사 로그 / 관리자 접근 (설계 주석) ---

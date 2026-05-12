@@ -896,29 +896,38 @@ Express 서버 진입점: `campusdrop_server/index.js`. 기본 포트는 환경 
 
 ### GET `/api/survey/me`
 
-**요약:** 현재 헤더 UUID(`Identity.id`)에 연결된 **`Trait.surveyData`** 를 그대로 돌려줍니다. 설문을 한 번도 저장하지 않았으면 `hasSurvey: false`, `surveyData: null`입니다.
+**요약:** 로맨스(`Trait.surveyData`)와 친구(`Trait.friendSurveyData`) 블록, 이번 신청이 적용하는 만남 주(`meetingTargetPeriodStart`)에 대한 **주간 스냅샷 여부**, 그리고 그 주에 잡힌 레인(`activeWeeklyLane`)을 반환합니다.
 
-**접근 조건:** `POST /api/survey/submit` 과 동일 — 학교 이메일(`@sju.ac.kr`)이 연결되어 있거나, `imageUuidAccessUntil` 이 아직 유효해야 합니다. 그렇지 않으면 아래와 같은 **`403`** (이미지 전용 세션 만료는 전역 미들웨어에서 `IMAGE_UUID_ACCESS_EXPIRED`).
+**접근 조건:** `POST /api/survey/submit` 과 동일 — 학교 이메일(`@sju.ac.kr`)이 연결되어 있거나, `imageUuidAccessUntil` 이 아직 유효해야 합니다.
 
-**응답 `200`**
+**응답 `200` (형식)**
 
 ```json
 {
   "userId": "550e8400-e29b-41d4-a716-446655440000",
-  "hasSurvey": true,
-  "surveyData": {
-    "surveyAnswers": {},
+  "meetingTargetPeriodStart": "2026-04-15T15:00:00.000Z",
+  "activeWeeklyLane": "ROMANCE",
+  "romance": {
+    "hasSurvey": true,
+    "surveyData": {},
     "gender": "male",
-    "availability": []
+    "surveySubmittedAt": "2026-04-10T08:00:00.000Z",
+    "updatedAt": "2026-04-10T08:00:00.000Z",
+    "weeklySubmittedForTargetWeek": true
   },
-  "gender": "male",
-  "updatedAt": "2026-04-10T08:00:00.000Z"
+  "friend": {
+    "hasSurvey": false,
+    "surveyData": null,
+    "surveySubmittedAt": null,
+    "updatedAt": "2026-04-10T08:00:00.000Z",
+    "weeklySubmittedForTargetWeek": false
+  }
 }
 ```
 
-(`surveyData`는 실제 DB에 들어 있는 설문 JSON입니다. `Trait` 행이 없으면 `hasSurvey` false, `surveyData`·`gender`·`updatedAt` 은 null.)
-
 ### POST `/api/survey/submit`
+
+**요약:** **로맨스(가치관) 설문만** 저장합니다. `matchType`·`friendHobbySurvey` 필드를 보내면 `400`입니다. 친구 설문은 **`POST /api/survey/friend/submit`** 을 사용합니다. 같은 만남 대상 주에 로맨스를 제출하면 해당 주의 친구 주간 스냅샷이 제거되고, 친구 제출 시에는 로맨스 주간 스냅샷이 제거됩니다(한 주에 한 레인).
 
 **요청 루트:** `surveyData` 또는 `survey` 중 하나에 객체 (`surveyData ?? survey`).
 
@@ -1097,7 +1106,13 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
 
 `x-user-uuid`는 `verify-code` 등으로 받은 **`Identity.id`** 와 같아야 합니다. 루트에 `survey` 키를 써도 동작은 동일합니다(`surveyData ?? survey`).
 
-문자열 선택지·복수선택·척도·하드/소프트 규칙의 단일 진실 소스: 루트 **`config/surveySemantics.v1.json`**, 검증 구현: **`campusdrop_server/lib/surveyValidation.js`**. 성공 시 서버가 `surveySchemaVersion`, `matchProfile` 등을 덮어써 저장합니다. 상대 나이 기준은 `phase6_partner_preferences.partner_age_preference`에 `["OLDER", "YOUNGER", "SAME_AGE"]` 중 하나 이상을 배열로 보냅니다(표시 라벨: 연상·연하·동갑). 내 학과는 `participantMeta.profile.department` 또는 루트 `profile.department`에 `GET /api/departments`가 반환한 학과명 중 하나를 문자열로 보냅니다.
+문자열 선택지·복수선택·척도·하드/소프트 규칙의 단일 진실 소스: 루트 **`config/surveySemantics.v1.json`**, 검증 구현: **`campusdrop_server/lib/surveyValidation.js`**. 성공 시 서버가 `surveySchemaVersion`, `matchProfile` 등을 덮어써 저장합니다.
+
+### POST `/api/survey/friend/submit`
+
+**요약:** 친구 매칭 설문을 `Trait.friendSurveyData` 및 **`friend_weekly_survey_submissions`** 에 저장합니다. 본문은 `surveyData` 또는 `survey`. 만남 가능 시간(`availability` 또는 `matchAvailability`)이 **필수**이며, 로맨스 설문과 같은 신청 창 규칙(`validateSurveyAvailabilityForCurrentWindow`)을 따릅니다. 가치관 척도 검증(`validateSurveyPayload`)은 거치지 않습니다.
+
+**고정 스키마(루트 필수·문자열 enum):** `mainHobby`, `mainHobbyDetail`, `drinking`, `smoking`, `favoriteFood`. 허용값은 서버 `campusdrop_server/lib/friendSurveyValidation.js` 및 OpenAPI `FriendSurveyCoreFields`와 동일합니다. `mainHobbyDetail`은 선택한 `mainHobby`에 맞는 값만 허용됩니다. 그 외 키(예: `participantMeta`)는 선택.
 
 ### GET `/api/departments`
 
@@ -1179,6 +1194,8 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
 
 **인증:** `x-user-uuid` 필수. 이미지 세션 만료 규칙은 설문과 동일.
 
+**로맨스 vs 친구:** `GET/POST /api/match/week-status`·`/request`는 **로맨스** 전용(`matchType`은 응답에 `ROMANCE` 고정, 쿼리/바디 `matchType`은 거부). 친구 매칭은 **`GET /api/match/friend/week-status`**, **`POST /api/match/friend/request`** 를 사용합니다. DB `matchings.match_type` 컬럼으로 풀을 구분합니다.
+
 ### GET `/api/match/test`
 
 **요약:** 더미 5명 순환 쌍으로 Python `POST /calculate-match` 호출 결과를 묶어 반환.
@@ -1245,7 +1262,7 @@ x-user-uuid: 550e8400-e29b-41d4-a716-446655440000
 
 ### POST `/api/match/request`
 
-**요약:** 동일 주기 풀에 대해 Python `batch-match`와 동일한 전역 매칭 후, 본인이 속한 쌍을 찾아 DB `matchings`에 저장하고 응답.
+**요약:** **로맨스** 실시간 매칭. 동일 주기 풀에 대해 Python `batch-match`와 동일한 전역 매칭 후, 본인이 속한 쌍을 찾아 DB `matchings`에 저장합니다. 요청 본문에 `matchType`을 보내면 `400`입니다(친구는 `POST /api/match/friend/request`).
 
 **요청 본문:** 생략 가능. `{}` 허용.
 
@@ -1881,15 +1898,19 @@ Docker로 띄울 때 **`/app/uploads`를 영구 볼륨에 마운트하지 않으
 
 | 메서드 | 경로 | 인증 | 비고 |
 |--------|------|------|------|
-| `GET` | `/api/survey/me` | **`x-user-uuid`** | 이미지 세션 만료 시 `403` 가능 |
-| `POST` | `/api/survey/submit` | **`x-user-uuid`** | 동일 |
+| `GET` | `/api/survey/me` | **`x-user-uuid`** | 로맨스·친구 블록 분리 응답 |
+| `POST` | `/api/survey/submit` | **`x-user-uuid`** | 로맨스 설문만 |
+| `POST` | `/api/survey/friend/submit` | **`x-user-uuid`** | 친구 설문 |
 
 ### `/api/match` (설문과 동일 미들웨어)
 
 | 메서드 | 경로 | 인증 | 비고 |
 |--------|------|------|------|
 | `GET` | `/api/match/test` | **`x-user-uuid`** | Python `calculate-match` 프록시 |
-| `POST` | `/api/match/request` | **`x-user-uuid`** | Python `batch-match` 동일 로직 |
+| `GET` | `/api/match/week-status` | **`x-user-uuid`** | 로맨스 주간·짝 상태 |
+| `GET` | `/api/match/friend/week-status` | **`x-user-uuid`** | 친구 주간·짝 상태 |
+| `POST` | `/api/match/request` | **`x-user-uuid`** | 로맨스 `batch-match` 동일 로직 |
+| `POST` | `/api/match/friend/request` | **`x-user-uuid`** | 친구 풀 |
 
 ### `/api/admin` (로그인 제외 **`Authorization: Bearer`**)
 

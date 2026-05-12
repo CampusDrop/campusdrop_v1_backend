@@ -22,8 +22,7 @@ const { meetingStartsAtFromMatchReport } = require('../lib/meetingStartsAtDerive
 const { normalizeTraitGender, traitGenderLabelKo } = require('../lib/genderPolicy');
 const {
   MATCH_TYPE_ROMANCE,
-  normalizeMatchType,
-  resolveMatchTypeOrDefault,
+  MATCH_TYPE_FRIEND,
 } = require('../lib/matchType');
 
 const router = express.Router();
@@ -46,6 +45,355 @@ async function postCalculateMatch(body) {
     return { ok: false, status, data, url };
   }
   return { ok: true, data, url };
+}
+
+/**
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @param {'ROMANCE' | 'FRIEND'} matchType
+ */
+async function handleWeekStatus(req, res, matchType) {
+  const self = req.user;
+  if (matchType === MATCH_TYPE_ROMANCE) {
+    if (req.query?.matchType != null || req.query?.match_type != null) {
+      return res.status(400).json({
+        error:
+          'matchType 쿼리는 지원하지 않습니다. 친구 매칭 상태는 GET /api/match/friend/week-status 를 사용하세요.',
+      });
+    }
+  }
+
+  const periodStart = getMatchingPeriodStart();
+  const periodEnd = getMatchingPeriodEnd(periodStart);
+  const targetPeriodStart = getSurveyTargetPeriodStartForApplicationPeriod(periodStart);
+  const meetingTargetPeriodEnd = getMatchingPeriodEnd(targetPeriodStart);
+  const submissionWindow = buildSurveySubmissionWindowForApplicationPeriod(periodStart);
+  const millisecondsUntilPeriodEnd = Math.max(0, periodEnd.getTime() - Date.now());
+
+  const selfSurvey =
+    matchType === MATCH_TYPE_ROMANCE ? self.trait?.surveyData : self.trait?.friendSurveyData;
+  const hasSurveyObject =
+    selfSurvey !== null && selfSurvey !== undefined && typeof selfSurvey === 'object';
+  const selfGender = normalizeTraitGender(self.trait?.gender);
+
+  let weeklySurveySubmittedForTargetWeek = false;
+  try {
+    const sub =
+      matchType === MATCH_TYPE_ROMANCE
+        ? await prisma.weeklySurveySubmission.findUnique({
+            where: {
+              identityId_targetPeriodStart: {
+                identityId: self.id,
+                targetPeriodStart,
+              },
+            },
+            select: { id: true },
+          })
+        : await prisma.friendWeeklySurveySubmission.findUnique({
+            where: {
+              identityId_targetPeriodStart: {
+                identityId: self.id,
+                targetPeriodStart,
+              },
+            },
+            select: { id: true },
+          });
+    weeklySurveySubmittedForTargetWeek = Boolean(sub);
+  } catch (err) {
+    console.error('match week-status weekly survey load error:', err);
+    return res.status(500).json({ error: '주차별 설문 제출 여부를 확인하지 못했습니다.' });
+  }
+
+  let row;
+  try {
+    row = await findUserMatchingInPeriod(prisma, self.id, periodStart, matchType);
+  } catch (err) {
+    console.error('match week-status matching load error:', err);
+    return res.status(500).json({ error: '매칭 이력을 불러오지 못했습니다.' });
+  }
+
+  let activeMatchingThisPeriod = null;
+  if (row) {
+    const isUserA = row.userAId === self.id;
+    const partnerId = isUserA ? row.userBId : row.userAId;
+    const partner = isUserA ? row.userB : row.userA;
+    const me = isUserA ? row.userA : row.userB;
+    activeMatchingThisPeriod = {
+      matchingId: row.id,
+      partnerId,
+      partnerNickname: partner?.nickname ?? null,
+      myNickname: me?.nickname ?? null,
+      score: row.score,
+      matchedAt: row.matchedAt.toISOString(),
+      meetingStartsAt: row.meetingStartsAt ? row.meetingStartsAt.toISOString() : null,
+      meetingVenueName: row.meetingVenueName ?? null,
+      cafeId: row.cafeId ?? null,
+      cafe: row.cafe ?? null,
+      periodStartStored: row.periodStart ? row.periodStart.toISOString() : null,
+    };
+  }
+
+  /** @type {string[]} */
+  const matchRequestPrecheckMessages = [];
+  if (!hasSurveyObject) {
+    matchRequestPrecheckMessages.push(
+      matchType === MATCH_TYPE_ROMANCE
+        ? '설문을 먼저 제출해 주세요.'
+        : '친구 설문을 먼저 제출해 주세요.',
+    );
+  }
+  if (matchType === MATCH_TYPE_ROMANCE && !selfGender) {
+    matchRequestPrecheckMessages.push(
+      '이성 매칭을 위해 설문에 남성/여성 성별이 필요합니다. 설문을 다시 제출해 주세요.',
+    );
+  }
+  if (!weeklySurveySubmittedForTargetWeek) {
+    matchRequestPrecheckMessages.push(
+      '이번 매칭 주기에 참여하려면 현재 신청 기간에 설문을 제출해 주세요.',
+    );
+  }
+
+  return res.status(200).json({
+    periodStart: periodStart.toISOString(),
+    periodEnd: periodEnd.toISOString(),
+    matchType,
+    millisecondsUntilPeriodEnd,
+    meetingTargetPeriodStart: targetPeriodStart.toISOString(),
+    meetingTargetPeriodEnd: meetingTargetPeriodEnd.toISOString(),
+    submissionWindow,
+    weeklySurveySubmittedForTargetWeek,
+    activeMatchingThisPeriod,
+    readyToCallMatchRequest: matchRequestPrecheckMessages.length === 0,
+    matchRequestPrecheckMessages,
+  });
+}
+
+/**
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @param {'ROMANCE' | 'FRIEND'} matchType
+ */
+async function handleMatchRequest(req, res, matchType) {
+  const self = req.user;
+
+  if (matchType === MATCH_TYPE_ROMANCE) {
+    if (req.body?.matchType != null || req.body?.match_type != null) {
+      return res.status(400).json({
+        error:
+          'matchType은 제거되었습니다. 친구 매칭은 POST /api/match/friend/request 를 사용하세요.',
+      });
+    }
+  }
+
+  const selfSurvey =
+    matchType === MATCH_TYPE_ROMANCE ? self.trait?.surveyData : self.trait?.friendSurveyData;
+  if (selfSurvey === null || selfSurvey === undefined || typeof selfSurvey !== 'object') {
+    return res.status(400).json({
+      error:
+        matchType === MATCH_TYPE_ROMANCE
+          ? '설문을 먼저 제출해 주세요.'
+          : '친구 설문을 먼저 제출해 주세요.',
+    });
+  }
+
+  const selfGender = normalizeTraitGender(self.trait?.gender);
+  if (matchType === MATCH_TYPE_ROMANCE && !selfGender) {
+    return res.status(400).json({
+      error:
+        '이성 매칭을 위해 설문에 남성/여성 성별이 필요합니다. 설문을 다시 제출해 주세요.',
+    });
+  }
+
+  const periodStart = getMatchingPeriodStart();
+  const periodEnd = getMatchingPeriodEnd(periodStart);
+  const targetPeriodStart = getSurveyTargetPeriodStartForApplicationPeriod(periodStart);
+  const submissionWindow = buildSurveySubmissionWindowForApplicationPeriod(periodStart);
+
+  let selfWeeklySubmission;
+  try {
+    selfWeeklySubmission =
+      matchType === MATCH_TYPE_ROMANCE
+        ? await prisma.weeklySurveySubmission.findUnique({
+            where: {
+              identityId_targetPeriodStart: {
+                identityId: self.id,
+                targetPeriodStart,
+              },
+            },
+            select: { id: true },
+          })
+        : await prisma.friendWeeklySurveySubmission.findUnique({
+            where: {
+              identityId_targetPeriodStart: {
+                identityId: self.id,
+                targetPeriodStart,
+              },
+            },
+            select: { id: true },
+          });
+  } catch (err) {
+    console.error('match request weekly survey load error:', err);
+    return res.status(500).json({ error: '주차별 설문 제출 여부를 확인하지 못했습니다.' });
+  }
+  if (!selfWeeklySubmission) {
+    return res.status(400).json({
+      error: '이번 매칭 주기에 참여하려면 현재 신청 기간에 설문을 제출해 주세요.',
+      submissionWindow,
+    });
+  }
+
+  /** @type {Awaited<ReturnType<typeof fetchPythonBatchPairs>>} */
+  let fetched;
+  try {
+    fetched = await fetchPythonBatchPairs(prisma, periodStart, {
+      lockSamePeriodPairsExceptUserId: self.id,
+      matchType,
+    });
+  } catch (err) {
+    console.error('match request batch-match error:', err.message);
+
+    if (axios.isAxiosError(err)) {
+      const pyStatus = err.response?.status;
+      const pyData = err.response?.data;
+      const netCode = err.code || (err.cause && /** @type {NodeJS.ErrnoException} */ (err.cause).code);
+      const isRefused = netCode === 'ECONNREFUSED' || /ECONNREFUSED/i.test(String(err.message));
+      const hint = isRefused
+        ? '호스트에서 Python을 모든 인터페이스에 바인딩하세요. 예: uvicorn app.main:app --host 0.0.0.0 --port 8000 (기본 127.0.0.1만이면 컨테이너·LAN IP 접속이 ECONNREFUSED 됩니다.)'
+        : undefined;
+      return res.status(502).json({
+        error: 'Python 매칭 서비스에 연결할 수 없습니다.',
+        pythonUrl: getMatchingBatchMatchUrl(),
+        detail: err.message,
+        pythonStatus: pyStatus ?? null,
+        pythonBody: pyData ?? null,
+        ...(hint ? { hint } : {}),
+      });
+    }
+
+    return res.status(500).json({ error: '매칭 처리 중 서버 오류가 발생했습니다.' });
+  }
+
+  if (fetched.skipped) {
+    if (fetched.skipReason === 'not_enough_binary_gender_users') {
+      return res.status(404).json({
+        error: '이성(남성·여성) 조건에 맞는 매칭 후보가 없습니다.',
+      });
+    }
+    if (fetched.skipReason === 'not_enough_users_for_type') {
+      return res.status(404).json({
+        error: '친구 매칭 후보가 부족합니다.',
+      });
+    }
+    return res.status(404).json({ error: '매칭할 다른 사용자가 없습니다.' });
+  }
+
+  const myPair = fetched.pairs.find(
+    (p) => p.user_a_id === self.id || p.user_b_id === self.id,
+  );
+
+  if (!myPair) {
+    return res.status(404).json({
+      error:
+        '전역 매칭에서 짝이 되지 않았습니다. (인원·하드 필터·과거 매칭 제약 등으로 이번 주기에 배정되지 않았을 수 있습니다.)',
+    });
+  }
+
+  const score = typeof myPair.score === 'number' ? myPair.score : Number(myPair.score);
+  if (!Number.isFinite(score) || score < MIN_MATCH_SCORE) {
+    return res.status(404).json({
+      error: `매칭 점수 ${MIN_MATCH_SCORE}점 이상인 상대가 없습니다.`,
+    });
+  }
+
+  const partnerId = myPair.user_a_id === self.id ? myPair.user_b_id : myPair.user_a_id;
+
+  let partner;
+  try {
+    partner = await prisma.identity.findUnique({
+      where: { id: partnerId },
+      include: { trait: true },
+    });
+  } catch (err) {
+    console.error('match request partner load error:', err);
+    return res.status(500).json({ error: '매칭 상대 정보를 불러오지 못했습니다.' });
+  }
+
+  const partnerSurveyOk =
+    matchType === MATCH_TYPE_ROMANCE
+      ? partner?.trait?.surveyData !== null &&
+        partner?.trait?.surveyData !== undefined &&
+        typeof partner.trait.surveyData === 'object'
+      : partner?.trait?.friendSurveyData !== null &&
+        partner?.trait?.friendSurveyData !== undefined &&
+        typeof partner.trait.friendSurveyData === 'object';
+
+  if (!partner || !partner.trait || !partnerSurveyOk) {
+    return res.status(500).json({ error: '매칭 상대 설문 정보를 찾을 수 없습니다.' });
+  }
+
+  const partnerLabel =
+    matchType === MATCH_TYPE_ROMANCE ? traitGenderLabelKo(partner.trait?.gender) || '상대' : '친구';
+  const partnerNickname =
+    typeof partner.nickname === 'string' && partner.nickname.trim() !== '' ? partner.nickname.trim() : null;
+  const partnerEmail =
+    typeof partner.email === 'string' && partner.email.trim() !== '' ? partner.email.trim() : null;
+  const partnerKakaoId =
+    typeof partner.kakaoId === 'string' && partner.kakaoId.trim() !== '' ? partner.kakaoId.trim() : null;
+  const partnerKakaoLinkPin =
+    typeof partner.kakaoLinkPin === 'string' && partner.kakaoLinkPin.trim() !== ''
+      ? partner.kakaoLinkPin.trim()
+      : null;
+
+  const best = {
+    partnerId,
+    partnerNickname,
+    partnerLabel,
+    partnerEmail,
+    partnerKakaoId,
+    partnerKakaoLinkPin,
+    score,
+    report: myPair.match_report,
+  };
+
+  const [userLo, userHi] = [self.id, partnerId].sort();
+
+  const reportSlim = slimMatchReportForDb(best.score, best.report);
+  const meetingStartsAt = meetingStartsAtFromMatchReport(reportSlim);
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await deleteMatchingsForUsersInPeriod(tx, periodStart, [self.id, partnerId], matchType);
+      await tx.matching.create({
+        data: {
+          userAId: userLo,
+          userBId: userHi,
+          matchType,
+          score: best.score,
+          matchedAt: new Date(),
+          periodStart,
+          matchReport: reportSlim,
+          ...(meetingStartsAt ? { meetingStartsAt } : {}),
+        },
+      });
+    });
+  } catch (err) {
+    console.error('match request persist error:', err);
+    return res.status(500).json({ error: '매칭 결과를 저장하지 못했습니다.' });
+  }
+
+  return res.status(200).json({
+    partnerId: best.partnerId,
+    partnerNickname: best.partnerNickname,
+    partnerLabel: best.partnerLabel,
+    partnerEmail: best.partnerEmail,
+    partnerKakaoId: best.partnerKakaoId,
+    partnerKakaoLinkPin: best.partnerKakaoLinkPin,
+    score: best.score,
+    report: reportSlim,
+    matchType,
+    periodStart: periodStart.toISOString(),
+    periodEnd: periodEnd.toISOString(),
+  });
 }
 
 /**
@@ -206,376 +554,44 @@ router.get('/test', async (req, res) => {
  * /api/match/week-status:
  *   get:
  *     tags: [Match]
- *     summary: 이번 매칭 운영 주·대상 만남 주·남은 시간·주간 설문·현재 주기 짝 여부
- *     description: |
- *       `periodStart`/`periodEnd`는 `POST /api/match/request`와 동일한 **운영 주(화 00:00 KST 앵커 기준 7일)**.
- *       `millisecondsUntilPeriodEnd`는 그 운영 주가 끝나기까지 남은 ms(0 이상).
- *       `meetingTargetPeriod*`는 이 운영 주에 제출한 설문이 적용되는 **만남 가능 날짜가 속한 주**(`surveyAvailability`와 동일).
- *       주당 매칭 **횟수 상한**은 두지 않았고, 같은 주에 `/match/request`를 다시 호출하면 짝이 갱신될 수 있습니다.
+ *     summary: 로맨스 매칭 주간 상태
+ *     description: 친구 매칭은 `GET /api/match/friend/week-status` — `matchType` 쿼리 미지원.
  *     security:
  *       - UserUuidAuth: []
- *     responses:
- *       200:
- *         description: 현재 주기 요약
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/MatchWeekStatusResponse'
- *       401:
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorMessage'
- *       500:
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorMessage'
  */
-router.get('/week-status', async (req, res) => {
-  const self = req.user;
-  const matchTypeIn = req.query?.matchType ?? req.query?.match_type;
-  const matchType = resolveMatchTypeOrDefault(matchTypeIn);
-  if (matchTypeIn != null && !normalizeMatchType(matchTypeIn)) {
-    return res.status(400).json({ error: 'matchType은 ROMANCE 또는 FRIEND 여야 합니다.' });
-  }
-  const periodStart = getMatchingPeriodStart();
-  const periodEnd = getMatchingPeriodEnd(periodStart);
-  const targetPeriodStart = getSurveyTargetPeriodStartForApplicationPeriod(periodStart);
-  const meetingTargetPeriodEnd = getMatchingPeriodEnd(targetPeriodStart);
-  const submissionWindow = buildSurveySubmissionWindowForApplicationPeriod(periodStart);
-  const nowMs = Date.now();
-  const millisecondsUntilPeriodEnd = Math.max(0, periodEnd.getTime() - nowMs);
+router.get('/week-status', (req, res) => handleWeekStatus(req, res, MATCH_TYPE_ROMANCE));
 
-  const selfSurvey = self.trait?.surveyData;
-  const hasSurveyObject =
-    selfSurvey !== null && selfSurvey !== undefined && typeof selfSurvey === 'object';
-  const selfGender = normalizeTraitGender(self.trait?.gender);
-
-  let weeklySurveySubmittedForTargetWeek = false;
-  try {
-    const sub = await prisma.weeklySurveySubmission.findUnique({
-      where: {
-        identityId_matchType_targetPeriodStart: {
-          identityId: self.id,
-          matchType,
-          targetPeriodStart,
-        },
-      },
-      select: { id: true },
-    });
-    weeklySurveySubmittedForTargetWeek = Boolean(sub);
-  } catch (err) {
-    console.error('match /week-status weekly survey load error:', err);
-    return res.status(500).json({ error: '주차별 설문 제출 여부를 확인하지 못했습니다.' });
-  }
-
-  let row;
-  try {
-    row = await findUserMatchingInPeriod(prisma, self.id, periodStart, matchType);
-  } catch (err) {
-    console.error('match /week-status matching load error:', err);
-    return res.status(500).json({ error: '매칭 이력을 불러오지 못했습니다.' });
-  }
-
-  let activeMatchingThisPeriod = null;
-  if (row) {
-    const isUserA = row.userAId === self.id;
-    const partnerId = isUserA ? row.userBId : row.userAId;
-    const partner = isUserA ? row.userB : row.userA;
-    const me = isUserA ? row.userA : row.userB;
-    activeMatchingThisPeriod = {
-      matchingId: row.id,
-      partnerId,
-      partnerNickname: partner?.nickname ?? null,
-      myNickname: me?.nickname ?? null,
-      score: row.score,
-      matchedAt: row.matchedAt.toISOString(),
-      meetingStartsAt: row.meetingStartsAt ? row.meetingStartsAt.toISOString() : null,
-      meetingVenueName: row.meetingVenueName ?? null,
-      cafeId: row.cafeId ?? null,
-      cafe: row.cafe ?? null,
-      periodStartStored: row.periodStart ? row.periodStart.toISOString() : null,
-    };
-  }
-
-  /** @type {string[]} */
-  const matchRequestPrecheckMessages = [];
-  if (!hasSurveyObject) {
-    matchRequestPrecheckMessages.push('설문을 먼저 제출해 주세요.');
-  }
-  if (matchType === MATCH_TYPE_ROMANCE && !selfGender) {
-    matchRequestPrecheckMessages.push(
-      '이성 매칭을 위해 설문에 남성/여성 성별이 필요합니다. 설문을 다시 제출해 주세요.',
-    );
-  }
-  if (!weeklySurveySubmittedForTargetWeek) {
-    matchRequestPrecheckMessages.push(
-      '이번 매칭 주기에 참여하려면 현재 신청 기간에 설문을 제출해 주세요.',
-    );
-  }
-
-  return res.status(200).json({
-    periodStart: periodStart.toISOString(),
-    periodEnd: periodEnd.toISOString(),
-    matchType,
-    millisecondsUntilPeriodEnd,
-    meetingTargetPeriodStart: targetPeriodStart.toISOString(),
-    meetingTargetPeriodEnd: meetingTargetPeriodEnd.toISOString(),
-    submissionWindow,
-    weeklySurveySubmittedForTargetWeek,
-    activeMatchingThisPeriod,
-    readyToCallMatchRequest: matchRequestPrecheckMessages.length === 0,
-    matchRequestPrecheckMessages,
-  });
-});
+/**
+ * @openapi
+ * /api/match/friend/week-status:
+ *   get:
+ *     tags: [Match]
+ *     summary: 친구 매칭 주간 상태
+ *     security:
+ *       - UserUuidAuth: []
+ */
+router.get('/friend/week-status', (req, res) => handleWeekStatus(req, res, MATCH_TYPE_FRIEND));
 
 /**
  * @openapi
  * /api/match/request:
  *   post:
  *     tags: [Match]
- *     summary: 전역 점수 우선 그리디 매칭 1건 (Python batch-match와 동일 로직, 만남 가능 시간 겹침 필수)
+ *     summary: 로맨스 실시간 매칭 1건
  *     security:
  *       - UserUuidAuth: []
- *     requestBody:
- *       required: false
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             description: 본문 없이 `{}` 가능. 매칭은 `Trait.surveyData.availability`(또는 `matchAvailability` 변환분) 기준으로 겹치는 1시간 슬롯이 있는 쌍만 고려한다.
- *     responses:
- *       200:
- *         description: 최고 점수 상대 1명
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/MatchRequestResponse'
- *       400:
- *         description: 본인 설문 없음
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorMessage'
- *       401:
- *         description: 세션 무효
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorMessage'
- *       404:
- *         description: 배치 풀 부족·전역 매칭에서 짝 없음·50점 미만만 해당하는 경우 등
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorMessage'
- *       500:
- *         description: 후보 조회 실패 또는 루프 내 예외
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorMessage'
- *       502:
- *         description: Python 연결 실패 또는 유효 결과 없음
- *         content:
- *           application/json:
- *             schema:
- *               oneOf:
- *                 - $ref: '#/components/schemas/MatchRequest502Network'
- *                 - $ref: '#/components/schemas/ErrorMessage'
  */
-router.post('/request', async (req, res) => {
-  const self = req.user;
-  const matchTypeIn = req.body?.matchType ?? req.body?.match_type;
-  const matchType = resolveMatchTypeOrDefault(matchTypeIn);
-  if (matchTypeIn != null && !normalizeMatchType(matchTypeIn)) {
-    return res.status(400).json({ error: 'matchType은 ROMANCE 또는 FRIEND 여야 합니다.' });
-  }
-  const selfSurvey = self.trait?.surveyData;
-  if (selfSurvey === null || selfSurvey === undefined || typeof selfSurvey !== 'object') {
-    return res.status(400).json({ error: '설문을 먼저 제출해 주세요.' });
-  }
+router.post('/request', (req, res) => handleMatchRequest(req, res, MATCH_TYPE_ROMANCE));
 
-  const selfGender = normalizeTraitGender(self.trait?.gender);
-  if (matchType === MATCH_TYPE_ROMANCE && !selfGender) {
-    return res.status(400).json({
-      error:
-        '이성 매칭을 위해 설문에 남성/여성 성별이 필요합니다. 설문을 다시 제출해 주세요.',
-    });
-  }
-
-  const periodStart = getMatchingPeriodStart();
-  const periodEnd = getMatchingPeriodEnd(periodStart);
-  const targetPeriodStart = getSurveyTargetPeriodStartForApplicationPeriod(periodStart);
-  const submissionWindow = buildSurveySubmissionWindowForApplicationPeriod(periodStart);
-
-  let selfWeeklySubmission;
-  try {
-    selfWeeklySubmission = await prisma.weeklySurveySubmission.findUnique({
-      where: {
-        identityId_matchType_targetPeriodStart: {
-          identityId: self.id,
-          matchType,
-          targetPeriodStart,
-        },
-      },
-      select: { id: true },
-    });
-  } catch (err) {
-    console.error('match /request weekly survey load error:', err);
-    return res.status(500).json({ error: '주차별 설문 제출 여부를 확인하지 못했습니다.' });
-  }
-  if (!selfWeeklySubmission) {
-    return res.status(400).json({
-      error: '이번 매칭 주기에 참여하려면 현재 신청 기간에 설문을 제출해 주세요.',
-      submissionWindow,
-    });
-  }
-
-  /** @type {Awaited<ReturnType<typeof fetchPythonBatchPairs>>} */
-  let fetched;
-  try {
-    fetched = await fetchPythonBatchPairs(prisma, periodStart, {
-      lockSamePeriodPairsExceptUserId: self.id,
-      matchType,
-    });
-  } catch (err) {
-    console.error('match /request batch-match error:', err.message);
-
-    if (axios.isAxiosError(err)) {
-      const pyStatus = err.response?.status;
-      const pyData = err.response?.data;
-      const netCode = err.code || (err.cause && /** @type {NodeJS.ErrnoException} */ (err.cause).code);
-      const isRefused = netCode === 'ECONNREFUSED' || /ECONNREFUSED/i.test(String(err.message));
-      const hint = isRefused
-        ? '호스트에서 Python을 모든 인터페이스에 바인딩하세요. 예: uvicorn app.main:app --host 0.0.0.0 --port 8000 (기본 127.0.0.1만이면 컨테이너·LAN IP 접속이 ECONNREFUSED 됩니다.)'
-        : undefined;
-      return res.status(502).json({
-        error: 'Python 매칭 서비스에 연결할 수 없습니다.',
-        pythonUrl: getMatchingBatchMatchUrl(),
-        detail: err.message,
-        pythonStatus: pyStatus ?? null,
-        pythonBody: pyData ?? null,
-        ...(hint ? { hint } : {}),
-      });
-    }
-
-    return res.status(500).json({ error: '매칭 처리 중 서버 오류가 발생했습니다.' });
-  }
-
-  if (fetched.skipped) {
-    if (fetched.skipReason === 'not_enough_binary_gender_users') {
-      return res.status(404).json({
-        error: '이성(남성·여성) 조건에 맞는 매칭 후보가 없습니다.',
-      });
-    }
-    if (fetched.skipReason === 'not_enough_users_for_type') {
-      return res.status(404).json({
-        error: '친구 매칭 후보가 부족합니다.',
-      });
-    }
-    return res.status(404).json({ error: '매칭할 다른 사용자가 없습니다.' });
-  }
-
-  const myPair = fetched.pairs.find(
-    (p) => p.user_a_id === self.id || p.user_b_id === self.id,
-  );
-
-  if (!myPair) {
-    return res.status(404).json({
-      error:
-        '전역 매칭에서 짝이 되지 않았습니다. (인원·하드 필터·과거 매칭 제약 등으로 이번 주기에 배정되지 않았을 수 있습니다.)',
-    });
-  }
-
-  const score = typeof myPair.score === 'number' ? myPair.score : Number(myPair.score);
-  if (!Number.isFinite(score) || score < MIN_MATCH_SCORE) {
-    return res.status(404).json({
-      error: `매칭 점수 ${MIN_MATCH_SCORE}점 이상인 상대가 없습니다.`,
-    });
-  }
-
-  const partnerId = myPair.user_a_id === self.id ? myPair.user_b_id : myPair.user_a_id;
-
-  let partner;
-  try {
-    partner = await prisma.identity.findUnique({
-      where: { id: partnerId },
-      include: { trait: true },
-    });
-  } catch (err) {
-    console.error('match /request partner load error:', err);
-    return res.status(500).json({ error: '매칭 상대 정보를 불러오지 못했습니다.' });
-  }
-
-  if (!partner || !partner.trait) {
-    return res.status(500).json({ error: '매칭 상대 설문 정보를 찾을 수 없습니다.' });
-  }
-
-  const partnerLabel =
-    matchType === MATCH_TYPE_ROMANCE ? traitGenderLabelKo(partner.trait?.gender) || '상대' : '친구';
-  const partnerNickname =
-    typeof partner.nickname === 'string' && partner.nickname.trim() !== '' ? partner.nickname.trim() : null;
-  const partnerEmail =
-    typeof partner.email === 'string' && partner.email.trim() !== '' ? partner.email.trim() : null;
-  const partnerKakaoId =
-    typeof partner.kakaoId === 'string' && partner.kakaoId.trim() !== '' ? partner.kakaoId.trim() : null;
-  const partnerKakaoLinkPin =
-    typeof partner.kakaoLinkPin === 'string' && partner.kakaoLinkPin.trim() !== ''
-      ? partner.kakaoLinkPin.trim()
-      : null;
-
-  const best = {
-    partnerId,
-    partnerNickname,
-    partnerLabel,
-    partnerEmail,
-    partnerKakaoId,
-    partnerKakaoLinkPin,
-    score,
-    report: myPair.match_report,
-  };
-
-  const [userLo, userHi] = [self.id, partnerId].sort();
-
-  const reportSlim = slimMatchReportForDb(best.score, best.report);
-  const meetingStartsAt = meetingStartsAtFromMatchReport(reportSlim);
-
-  try {
-    await prisma.$transaction(async (tx) => {
-      await deleteMatchingsForUsersInPeriod(tx, periodStart, [self.id, partnerId], matchType);
-      await tx.matching.create({
-        data: {
-          userAId: userLo,
-          userBId: userHi,
-          matchType,
-          score: best.score,
-          matchedAt: new Date(),
-          periodStart,
-          matchReport: reportSlim,
-          ...(meetingStartsAt ? { meetingStartsAt } : {}),
-        },
-      });
-    });
-  } catch (err) {
-    console.error('match /request persist error:', err);
-    return res.status(500).json({ error: '매칭 결과를 저장하지 못했습니다.' });
-  }
-
-  return res.status(200).json({
-    partnerId: best.partnerId,
-    partnerNickname: best.partnerNickname,
-    partnerLabel: best.partnerLabel,
-    partnerEmail: best.partnerEmail,
-    partnerKakaoId: best.partnerKakaoId,
-    partnerKakaoLinkPin: best.partnerKakaoLinkPin,
-    score: best.score,
-    report: reportSlim,
-    matchType,
-    periodStart: periodStart.toISOString(),
-    periodEnd: periodEnd.toISOString(),
-  });
-});
+/**
+ * @openapi
+ * /api/match/friend/request:
+ *   post:
+ *     tags: [Match]
+ *     summary: 친구 실시간 매칭 1건
+ *     security:
+ *       - UserUuidAuth: []
+ */
+router.post('/friend/request', (req, res) => handleMatchRequest(req, res, MATCH_TYPE_FRIEND));
 
 module.exports = router;

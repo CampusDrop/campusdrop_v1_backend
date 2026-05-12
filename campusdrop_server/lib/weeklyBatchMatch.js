@@ -20,7 +20,7 @@ const { slimMatchReportForDb } = require('./slimMatchReport');
 const { meetingStartsAtFromMatchReport } = require('./meetingStartsAtDerive');
 const { isBinaryTraitGender, normalizeTraitGender } = require('./genderPolicy');
 const { assignCafesToPairs } = require('./cafeAssignment');
-const { MATCH_TYPE_ROMANCE } = require('./matchType');
+const { MATCH_TYPE_ROMANCE, MATCH_TYPE_FRIEND } = require('./matchType');
 
 const DEFAULT_BATCH_TIMEOUT_MS = 300_000;
 
@@ -42,24 +42,33 @@ async function loadEligibleTraits(options = {}) {
   const periodStart = options.periodStart || getMatchingPeriodStart();
   const matchType = options.matchType || MATCH_TYPE_ROMANCE;
   const targetPeriodStart = getSurveyTargetPeriodStartForApplicationPeriod(periodStart);
-  const submissions = await prismaClient.weeklySurveySubmission.findMany({
-    where: { targetPeriodStart, matchType },
-    include: {
-      identity: {
-        select: {
-          id: true,
-          nickname: true,
-          email: true,
-          kakaoId: true,
-          kakaoLinkPin: true,
-          birthYear: true,
-          department: true,
-          blockedAt: true,
-          createdAt: true,
-        },
+
+  const submissionInclude = {
+    identity: {
+      select: {
+        id: true,
+        nickname: true,
+        email: true,
+        kakaoId: true,
+        kakaoLinkPin: true,
+        birthYear: true,
+        department: true,
+        blockedAt: true,
+        createdAt: true,
       },
     },
-  });
+  };
+
+  const submissions =
+    matchType === MATCH_TYPE_ROMANCE
+      ? await prismaClient.weeklySurveySubmission.findMany({
+          where: { targetPeriodStart },
+          include: submissionInclude,
+        })
+      : await prismaClient.friendWeeklySurveySubmission.findMany({
+          where: { targetPeriodStart },
+          include: submissionInclude,
+        });
   return submissions
     .map((s) => ({
       id: s.identityId,

@@ -5,8 +5,12 @@ const {
   validateSurveyPayload,
   identityProfileColumnsFromSurveyData,
 } = require('../lib/surveyValidation');
-const { validateSurveyAvailabilityForCurrentWindow } = require('../lib/surveyAvailabilityWindow');
+const {
+  validateSurveyAvailabilityForCurrentWindow,
+  getSurveyTargetPeriodStartForApplicationPeriod,
+} = require('../lib/surveyAvailabilityWindow');
 const { upsertWeeklySurveySubmission } = require('../lib/weeklySurveySubmission');
+const { getMatchingPeriodStart } = require('../lib/matchPolicy');
 const { writeAccessLog } = require('../lib/accessLog');
 const { storePinForIdentity } = require('../lib/pinSession');
 const { surveySchoolAccessOk, SURVEY_ACCESS_DENIED } = require('../lib/surveyAccess');
@@ -14,16 +18,7 @@ const { encryptPhoneForStorage, decryptPhoneFromStorage } = require('../lib/phon
 const { assertSolapiFriendTalkEnv, sendFriendTalkCta } = require('../lib/solapiFriendTalkSend');
 const templates = require('../lib/friendTalkTemplates');
 const { publicApiBase, buildAcquisitionButtons } = require('../lib/friendTalkRsvp');
-const {
-  normalizeMatchType,
-  resolveMatchTypeOrDefault,
-  MATCH_TYPE_FRIEND,
-  MATCH_TYPE_ROMANCE,
-} = require('../lib/matchType');
-const {
-  validateFriendHobbySurvey,
-  upsertFriendSurveySubmission,
-} = require('../lib/friendSurveySubmission');
+const { MATCH_TYPE_FRIEND, MATCH_TYPE_ROMANCE } = require('../lib/matchType');
 
 const router = express.Router();
 
@@ -38,37 +33,10 @@ function phoneFromExistingIdentity(user) {
   }
 }
 
-/**
- * `Trait` 한 행 → `GET /api/survey/me` JSON 본문.
- * @param {string} userId `Identity.id` (= `Trait.id`)
- * @param {{
- *   surveyData: unknown;
- *   gender: string | null;
- *   matchType: string | null;
- *   surveySubmittedAt: Date | string | null;
- *   updatedAt: Date | string;
- * } | null} row
- * @param {{ mainCategory: number; detailChoice: number; submittedAt: string } | null} friendHobbySurvey
- */
-function surveyMePayloadFromTraitRow(userId, row, friendHobbySurvey = null) {
-  const hasSurvey = Boolean(
-    row &&
-      row.surveyData !== null &&
-      row.surveyData !== undefined &&
-      typeof row.surveyData === 'object',
+function hasJsonSurvey(value) {
+  return Boolean(
+    value !== null && value !== undefined && typeof value === 'object' && !Array.isArray(value),
   );
-  return {
-    userId,
-    hasSurvey,
-    surveyData: hasSurvey ? row.surveyData : null,
-    gender: row?.gender ?? null,
-    matchType: row?.matchType ?? null,
-    surveySubmittedAt: row?.surveySubmittedAt
-      ? new Date(row.surveySubmittedAt).toISOString()
-      : null,
-    updatedAt: row?.updatedAt ? new Date(row.updatedAt).toISOString() : null,
-    friendHobbySurvey,
-  };
 }
 
 /**
@@ -76,20 +44,10 @@ function surveyMePayloadFromTraitRow(userId, row, friendHobbySurvey = null) {
  * /api/survey/me:
  *   get:
  *     tags: [Survey]
- *     summary: 현재 세션에 저장된 설문 본문(`Trait.surveyData`) 조회
+ *     summary: 로맨스·친구 Trait 및 이번 신청 주차의 주간 제출 여부
  *     description: |
- *       **인증:** `x-user-uuid` (미들웨어 `requireUserUuid`).
- *
- *       **응답 요약**
- *       - `hasSurvey` / `surveyData`: `Trait.surveyData`가 객체로 있으면 저장됨으로 간주. 없으면 `hasSurvey` false, `surveyData` null.
- *       - `gender`: `Trait.gender` (저장된 설문 기준).
- *       - `matchType`: 최근 주간 제출(`WeeklySurveySubmission`)의 타입. 없으면 null.
- *       - `friendHobbySurvey`: 최근 제출이 `FRIEND`이고 `friend_survey_submissions` 행이 있으면 `{ mainCategory, detailChoice, submittedAt }` (취미 설문 택1 값). 메인 1~4 = PC방·게임 / 운동·산책 / 카페·맛집 / 문화·여가.
- *       - `surveySubmittedAt`, `updatedAt`: ISO 8601 문자열 또는 null.
- *
- *       **403:** 학교 소속 미충족(`surveySchoolAccessOk` false)이거나, 이메일·증빙 없이 `imageUuidAccessUntil`만 쓰는 계정에서 그 기한 만료 시 `IMAGE_UUID_ACCESS_EXPIRED` 등.
- *
- *       설문 **제출 가능 기간·날짜 선택지**는 인증 없이 `GET /api/survey/availability-window` 참고.
+ *       `romance`는 가치관 설문(`Trait.surveyData`), `friend`는 친구 설문(`Trait.friendSurveyData`).
+ *       `activeWeeklyLane`은 현재 신청 기간이 적용하는 만남 대상 주에 대한 주간 스냅샷이 어느 쪽인지(동시에 둘 다 있으면 안 됨).
  *     security:
  *       - UserUuidAuth: []
  *     responses:
@@ -99,22 +57,6 @@ function surveyMePayloadFromTraitRow(userId, row, friendHobbySurvey = null) {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/SurveyCurrentResponse'
- *       401:
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorMessage'
- *       403:
- *         description: 이메일 없음 + 이미지 세션 무효·만료, 또는 `IMAGE_UUID_ACCESS_EXPIRED`
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorMessage'
- *       500:
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorMessage'
  */
 router.get('/me', async (req, res) => {
   if (!surveySchoolAccessOk(req.user)) {
@@ -122,54 +64,77 @@ router.get('/me', async (req, res) => {
   }
 
   try {
-    const [traitRow, weeklyRow] = await Promise.all([
+    const periodStart = getMatchingPeriodStart();
+    const targetPeriodStart = getSurveyTargetPeriodStartForApplicationPeriod(periodStart);
+
+    const [traitRow, romanceWeekly, friendWeekly] = await Promise.all([
       prisma.trait.findUnique({
         where: { id: req.user.id },
-        select: { surveyData: true, gender: true, surveySubmittedAt: true, updatedAt: true },
+        select: {
+          surveyData: true,
+          friendSurveyData: true,
+          gender: true,
+          surveySubmittedAt: true,
+          friendSurveySubmittedAt: true,
+          updatedAt: true,
+        },
       }),
-      prisma.weeklySurveySubmission.findFirst({
-        where: { identityId: req.user.id },
-        orderBy: [{ submittedAt: 'desc' }, { updatedAt: 'desc' }, { createdAt: 'desc' }],
-        select: { matchType: true, targetPeriodStart: true },
-      }),
-    ]);
-
-    /** @type {{ mainCategory: number; detailChoice: number; submittedAt: string } | null} */
-    let friendHobbySurvey = null;
-    if (
-      weeklyRow?.matchType === MATCH_TYPE_FRIEND &&
-      weeklyRow.targetPeriodStart != null
-    ) {
-      const fsRow = await prisma.friendSurveySubmission.findUnique({
+      prisma.weeklySurveySubmission.findUnique({
         where: {
           identityId_targetPeriodStart: {
             identityId: req.user.id,
-            targetPeriodStart: weeklyRow.targetPeriodStart,
+            targetPeriodStart,
           },
         },
-        select: {
-          mainCategory: true,
-          detailChoice: true,
-          submittedAt: true,
+        select: { id: true, submittedAt: true },
+      }),
+      prisma.friendWeeklySurveySubmission.findUnique({
+        where: {
+          identityId_targetPeriodStart: {
+            identityId: req.user.id,
+            targetPeriodStart,
+          },
         },
-      });
-      if (fsRow) {
-        friendHobbySurvey = {
-          mainCategory: fsRow.mainCategory,
-          detailChoice: fsRow.detailChoice,
-          submittedAt: new Date(fsRow.submittedAt).toISOString(),
-        };
-      }
+        select: { id: true, submittedAt: true },
+      }),
+    ]);
+
+    /** @type {'ROMANCE' | 'FRIEND' | null} */
+    let activeWeeklyLane = null;
+    if (romanceWeekly && friendWeekly) {
+      const ra = new Date(romanceWeekly.submittedAt).getTime();
+      const fa = new Date(friendWeekly.submittedAt).getTime();
+      activeWeeklyLane = ra >= fa ? MATCH_TYPE_ROMANCE : MATCH_TYPE_FRIEND;
+    } else if (romanceWeekly) {
+      activeWeeklyLane = MATCH_TYPE_ROMANCE;
+    } else if (friendWeekly) {
+      activeWeeklyLane = MATCH_TYPE_FRIEND;
     }
 
-    const body = surveyMePayloadFromTraitRow(
-      req.user.id,
-      {
-        ...(traitRow || {}),
-        matchType: weeklyRow?.matchType ?? null,
+    const body = {
+      userId: req.user.id,
+      activeWeeklyLane,
+      meetingTargetPeriodStart: targetPeriodStart.toISOString(),
+      romance: {
+        hasSurvey: hasJsonSurvey(traitRow?.surveyData),
+        surveyData: hasJsonSurvey(traitRow?.surveyData) ? traitRow.surveyData : null,
+        gender: traitRow?.gender ?? null,
+        surveySubmittedAt: traitRow?.surveySubmittedAt
+          ? new Date(traitRow.surveySubmittedAt).toISOString()
+          : null,
+        updatedAt: traitRow?.updatedAt ? new Date(traitRow.updatedAt).toISOString() : null,
+        weeklySubmittedForTargetWeek: Boolean(romanceWeekly),
       },
-      friendHobbySurvey,
-    );
+      friend: {
+        hasSurvey: hasJsonSurvey(traitRow?.friendSurveyData),
+        surveyData: hasJsonSurvey(traitRow?.friendSurveyData) ? traitRow.friendSurveyData : null,
+        surveySubmittedAt: traitRow?.friendSurveySubmittedAt
+          ? new Date(traitRow.friendSurveySubmittedAt).toISOString()
+          : null,
+        updatedAt: traitRow?.updatedAt ? new Date(traitRow.updatedAt).toISOString() : null,
+        weeklySubmittedForTargetWeek: Boolean(friendWeekly),
+      },
+    };
 
     await writeAccessLog({
       actorType: 'user_session',
@@ -178,7 +143,10 @@ router.get('/me', async (req, res) => {
       resource: 'GET /api/survey/me',
       ip: req.ip || null,
       userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
-      metadata: { hasSurvey: body.hasSurvey },
+      metadata: {
+        romanceHasSurvey: body.romance.hasSurvey,
+        friendHasSurvey: body.friend.hasSurvey,
+      },
     });
 
     return res.status(200).json(body);
@@ -193,67 +161,31 @@ router.get('/me', async (req, res) => {
  * /api/survey/submit:
  *   post:
  *     tags: [Survey]
- *     summary: 로그인 유저의 Trait 설문 저장 + 카카오 챗봇 연동용 4자리 PIN 발급 (`GET /api/auth/pin`과 동일)
+ *     summary: 로맨스(가치관) 설문 저장 — `POST /api/survey/friend/submit`은 친구 전용
  *     security:
  *       - UserUuidAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/SurveySubmitRequest'
- *     responses:
- *       200:
- *         description: 저장 완료
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/SurveySubmitResponse'
- *       400:
- *         description: payload 누락·검증 실패
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorMessage'
- *       401:
- *         description: 세션 무효
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorMessage'
- *       403:
- *         description: |
- *           학교 이메일·승인된 증빙·유효한 이미지 가입 세션 없음. 또는 설문·매칭 라우트에서 `IMAGE_UUID_ACCESS_EXPIRED`
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorMessage'
- *       404:
- *         description: Trait upsert 실패(P2025)
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorMessage'
- *       500:
- *         description: 서버 오류
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorMessage'
  */
 router.post('/submit', async (req, res) => {
   if (!surveySchoolAccessOk(req.user)) {
     return res.status(403).json(SURVEY_ACCESS_DENIED);
   }
 
-  const { surveyData, survey } = req.body ?? {};
   const matchTypeIn = req.body?.matchType ?? req.body?.match_type;
-  const payload = surveyData ?? survey;
-  const matchType = resolveMatchTypeOrDefault(matchTypeIn);
-
-  if (matchTypeIn != null && !normalizeMatchType(matchTypeIn)) {
-    return res.status(400).json({ error: 'matchType은 ROMANCE 또는 FRIEND 여야 합니다.' });
+  if (matchTypeIn != null) {
+    return res.status(400).json({
+      error:
+        'matchType은 더 이상 이 엔드포인트에서 받지 않습니다. 로맨스 설문만 `POST /api/survey/submit`, 친구는 `POST /api/survey/friend/submit`을 사용하세요.',
+    });
   }
+  if (req.body?.friendHobbySurvey != null || req.body?.friend_hobby_survey != null) {
+    return res.status(400).json({
+      error:
+        'friendHobbySurvey는 로맨스 설문 엔드포인트에서 받지 않습니다. 친구 설문은 `POST /api/survey/friend/submit`과 고정 스키마(`mainHobby` 등)를 사용하세요.',
+    });
+  }
+
+  const { surveyData, survey } = req.body ?? {};
+  const payload = surveyData ?? survey;
 
   if (payload === undefined || payload === null) {
     return res.status(400).json({
@@ -271,17 +203,6 @@ router.post('/submit', async (req, res) => {
       error: windowValidation.error,
       availabilityWindow: windowValidation.window,
     });
-  }
-
-  const friendHobbyRaw = req.body?.friendHobbySurvey ?? req.body?.friend_hobby_survey;
-  /** @type {{ ok: true, data: { mainCategory: number, detailChoice: number } } | null} */
-  let friendHobbyValidated = null;
-  if (matchType === MATCH_TYPE_FRIEND) {
-    const fh = validateFriendHobbySurvey(friendHobbyRaw);
-    if (!fh.ok) {
-      return res.status(400).json({ error: fh.error });
-    }
-    friendHobbyValidated = fh;
   }
 
   try {
@@ -305,27 +226,11 @@ router.post('/submit', async (req, res) => {
       });
       const weekly = await upsertWeeklySurveySubmission(tx, {
         identityId: req.user.id,
-        matchType,
         surveyData: validation.data,
         gender: surveyGender,
         submittedAt: surveySubmittedAt,
         availabilityWindow: windowValidation.window,
       });
-
-      const targetPeriodStart = new Date(windowValidation.window.target.periodStart);
-      if (matchType === MATCH_TYPE_ROMANCE) {
-        await tx.friendSurveySubmission.deleteMany({
-          where: { identityId: req.user.id, targetPeriodStart },
-        });
-      } else if (matchType === MATCH_TYPE_FRIEND && friendHobbyValidated) {
-        await upsertFriendSurveySubmission(tx, {
-          identityId: req.user.id,
-          submittedAt: surveySubmittedAt,
-          mainCategory: friendHobbyValidated.data.mainCategory,
-          detailChoice: friendHobbyValidated.data.detailChoice,
-          availabilityWindow: windowValidation.window,
-        });
-      }
 
       const profileCols = identityProfileColumnsFromSurveyData(validation.data);
       let latestPhoneForNotification = profileCols.phone || phoneFromExistingIdentity(req.user);

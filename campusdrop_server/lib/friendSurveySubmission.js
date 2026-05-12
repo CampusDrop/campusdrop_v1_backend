@@ -48,50 +48,6 @@ function validateFriendHobbySurvey(raw) {
   return { ok: true, data: { mainCategory, detailChoice } };
 }
 
-/**
- * @param {import('@prisma/client').Prisma.TransactionClient} tx
- * @param {{
- *   identityId: string,
- *   submittedAt: Date,
- *   mainCategory: number,
- *   detailChoice: number,
- *   availabilityWindow: ReturnType<import('./surveyAvailabilityWindow').buildSurveyAvailabilityWindow>,
- * }} params
- */
-async function upsertFriendSurveySubmission(tx, params) {
-  const targetPeriodStart = new Date(params.availabilityWindow.target.periodStart);
-  const targetPeriodEnd = new Date(params.availabilityWindow.target.periodEnd);
-  const where = {
-    identityId_targetPeriodStart: {
-      identityId: params.identityId,
-      targetPeriodStart,
-    },
-  };
-  const existing = await tx.friendSurveySubmission.findUnique({ where });
-  if (!existing) {
-    return tx.friendSurveySubmission.create({
-      data: {
-        identityId: params.identityId,
-        targetPeriodStart,
-        targetPeriodEnd,
-        mainCategory: params.mainCategory,
-        detailChoice: params.detailChoice,
-        submittedAt: params.submittedAt,
-      },
-    });
-  }
-  return tx.friendSurveySubmission.update({
-    where,
-    data: {
-      targetPeriodEnd,
-      mainCategory: params.mainCategory,
-      detailChoice: params.detailChoice,
-      submittedAt: params.submittedAt,
-    },
-  });
-}
-
 module.exports = {
   validateFriendHobbySurvey,
-  upsertFriendSurveySubmission,
 };

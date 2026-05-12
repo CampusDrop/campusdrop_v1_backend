@@ -1,5 +1,10 @@
-# 통합 배포: repo 루트(campusdrop_backend)에서 실행
-# cp .env.example .env 후 값 수정 → docker compose up -d --build
+# 통합 배포: 레포 루트(campusdrop_backend)에서 실행
+#   cp .env.example .env 후 값 수정
+#
+# EC2/프로덕 갱신(권장 한 줄):  
+#   git pull origin main && docker compose up -d --build server
+# server 이미지는 campusdrop_server(Prisma migrations 포함)를 다시 복사하고,
+# 컨테이너 기동 시 entrypoint가 npx prisma migrate deploy 후 node를 띄움(RDS면 .env의 DATABASE_URL).
 #
 # Python 매칭 API(`matching`)는 기본 스택에서 빠짐. 필요 시:
 #   docker compose --profile matching up -d
@@ -85,6 +90,18 @@ services:
       - server_uploads:/app/uploads
     ports:
       - "${SERVER_PUBLISH_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3000/',(r)=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
     depends_on:
       db:
         condition: service_healthy

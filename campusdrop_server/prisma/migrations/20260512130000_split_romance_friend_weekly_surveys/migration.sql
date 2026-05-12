@@ -4,7 +4,8 @@ DELETE FROM "weekly_survey_submissions" WHERE "match_type" = 'FRIEND';
 
 DROP INDEX IF EXISTS "weekly_survey_submissions_match_type_target_period_start_submitted_at_idx";
 
-ALTER TABLE "weekly_survey_submissions" DROP CONSTRAINT "weekly_survey_submissions_identity_id_match_type_target_period_start_key";
+-- 20260511110000 유니크는 UNIQUE INDEX로 생성됨(DROP CONSTRAINT 불가). PG는 긴 식별자를 63자로 자르지만 DROP INDEX에 동일 전체 이름을 쓰면 동일하게 잘린 이름과 매칭됨.
+DROP INDEX IF EXISTS "weekly_survey_submissions_identity_id_match_type_target_period_start_key";
 
 ALTER TABLE "weekly_survey_submissions" DROP COLUMN "match_type";
 

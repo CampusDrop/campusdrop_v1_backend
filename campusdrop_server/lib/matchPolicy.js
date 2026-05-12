@@ -3,6 +3,8 @@
  */
 const MIN_MATCH_SCORE = 50;
 const { MATCH_TYPE_ROMANCE } = require('./matchType');
+const { resolveMeetingStartsAt } = require('./meetingStartsAtDerive');
+const { CHAT_OPEN_AFTER_MS, isWithinUserChatWindow } = require('./meetChatRoom');
 
 /** 매칭 주기 앵커(매주 동일 시각 기준 7일 구간). KST 2026-04-14 00:00(화요일). */
 const MATCHING_PERIOD_ANCHOR_ISO = '2026-04-14T00:00:00.000+09:00';
@@ -193,6 +195,23 @@ async function deleteMatchingsForUsersInPeriod(
   });
 }
 
+/** @type {import('@prisma/client').Prisma.MatchingSelect} */
+const USER_MATCHING_MEET_CHAT_SELECT = {
+  id: true,
+  userAId: true,
+  userBId: true,
+  score: true,
+  matchedAt: true,
+  meetingStartsAt: true,
+  meetingVenueName: true,
+  cafeId: true,
+  periodStart: true,
+  matchReport: true,
+  userA: { select: { id: true, nickname: true } },
+  userB: { select: { id: true, nickname: true } },
+  cafe: { select: { id: true, name: true, naverPlaceUrl: true, isActive: true } },
+};
+
 /**
  * 현재 매칭 운영 주(`periodStart` ~)에 사용자가 포함된 `Matching` 1건(있을 때).
  * @param {import('@prisma/client').PrismaClient} prisma
@@ -221,21 +240,49 @@ async function findUserMatchingInPeriod(
         },
       ],
     },
-    select: {
-      id: true,
-      userAId: true,
-      userBId: true,
-      score: true,
-      matchedAt: true,
-      meetingStartsAt: true,
-      meetingVenueName: true,
-      cafeId: true,
-      periodStart: true,
-      userA: { select: { id: true, nickname: true } },
-      userB: { select: { id: true, nickname: true } },
-      cafe: { select: { id: true, name: true, naverPlaceUrl: true, isActive: true } },
-    },
+    select: USER_MATCHING_MEET_CHAT_SELECT,
   });
+}
+
+/** `my-qr-token` 등: 최근 매칭만 스캔(과거 이력 폭주 방지). */
+const MEET_CHAT_CANDIDATE_LIMIT = 40;
+
+/**
+ * `/api/meet-chat/my-qr-token` 등: `matchingId` 없이 본인 짝을 찾을 때 사용.
+ * 운영 주(`periodStart`)와 무관하게 **소개팅 시각** 기준으로 고릅니다.
+ * - 채팅 종료 시각(`정각 + CHAT_OPEN_AFTER`)이 지난 약속은 제외
+ * - 여러 후보 중 지금 채팅 창이 열린 행 우선, 없으면 가장 빠른 약속 1건
+ * 강제 매칭·지난주 배정·이번주 미팅 등 주 경계에 덜 취약합니다.
+ *
+ * @param {import('@prisma/client').PrismaClient} prisma
+ * @param {string} userId
+ * @param {string} [matchType]
+ * @param {Date} [now]
+ */
+async function findUserMatchingForMeetChat(prisma, userId, matchType = MATCH_TYPE_ROMANCE, now = new Date()) {
+  const candidates = await prisma.matching.findMany({
+    where: { matchType, OR: [{ userAId: userId }, { userBId: userId }] },
+    select: USER_MATCHING_MEET_CHAT_SELECT,
+    orderBy: { matchedAt: 'desc' },
+    take: MEET_CHAT_CANDIDATE_LIMIT,
+  });
+
+  const tNow = now.getTime();
+  /** @type {Array<{ row: (typeof candidates)[number], meetingAt: Date }>} */
+  const stillRelevant = [];
+  for (const row of candidates) {
+    const meetingAt = resolveMeetingStartsAt(row);
+    if (!meetingAt || Number.isNaN(meetingAt.getTime())) continue;
+    if (meetingAt.getTime() + CHAT_OPEN_AFTER_MS < tNow) continue;
+    stillRelevant.push({ row, meetingAt });
+  }
+  if (stillRelevant.length === 0) return null;
+
+  for (const x of stillRelevant) {
+    if (isWithinUserChatWindow(now, x.meetingAt)) return x.row;
+  }
+  stillRelevant.sort((a, b) => a.meetingAt.getTime() - b.meetingAt.getTime());
+  return stillRelevant[0].row;
 }
 
 module.exports = {
@@ -250,4 +297,5 @@ module.exports = {
   getUserIdsMatchedInPeriod,
   deleteMatchingsForUsersInPeriod,
   findUserMatchingInPeriod,
+  findUserMatchingForMeetChat,
 };

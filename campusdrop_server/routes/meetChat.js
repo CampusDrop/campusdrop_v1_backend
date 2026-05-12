@@ -6,7 +6,7 @@ const { requireUserUuid } = require('../lib/requireUserUuid');
 const { verifyMeetChatQrToken, meetChatQrSecret, signMeetChatQrToken } = require('../lib/meetChatQr');
 const { resolveMeetingStartsAt } = require('../lib/meetingStartsAtDerive');
 const { getChatWindow, isWithinUserChatWindow, formatMeetChatRoomTitle } = require('../lib/meetChatRoom');
-const { findUserMatchingInPeriod, getMatchingPeriodStart } = require('../lib/matchPolicy');
+const { findUserMatchingForMeetChat } = require('../lib/matchPolicy');
 
 const router = express.Router();
 
@@ -174,7 +174,8 @@ router.get('/access', requireUserUuid, async (req, res) => {
  *     summary: 로그인 유저 본인 매칭용 채팅 QR JWT 발급
  *     description: |
  *       물리 QR 없이 앱에서 `/meet/chat` 등으로 진입할 때 사용합니다.
- *       `matchingId` 생략 시 이번 매칭 운영 주(`getMatchingPeriodStart`) 기준 본인 짝 1건에 대해 발급합니다.
+ *       `matchingId` 생략 시: 본인의 최근 `Matching` 후보 중 **소개팅 시각·채팅 허용 창**으로 짝 1건을 고릅니다(`findUserMatchingForMeetChat`).
+ *       운영 주(`periodStart`)와 무관하며 강제 매칭·주 경계에도 동일하게 동작합니다.
  *       이때 짝이 없으면 200·`hasMatching: false`·`qrToken` null (에러 아님).
  *       `matchingId` 지정 시 해당 매칭의 참가자(A/B)인 경우에만 발급합니다.
  *     security:
@@ -221,9 +222,8 @@ router.get('/my-qr-token', requireUserUuid, async (req, res) => {
     }
     matchingId = row.id;
   } else {
-    const periodStart = getMatchingPeriodStart();
     try {
-      row = await findUserMatchingInPeriod(prisma, uid, periodStart);
+      row = await findUserMatchingForMeetChat(prisma, uid);
     } catch (err) {
       console.error('meetChat /my-qr-token period match:', err);
       return res.status(500).json({ error: '매칭 정보를 불러오지 못했습니다.' });

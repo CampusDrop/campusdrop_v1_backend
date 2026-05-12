@@ -925,6 +925,14 @@ Express 서버 진입점: `campusdrop_server/index.js`. 기본 포트는 환경 
 }
 ```
 
+### GET `/api/survey/me/romance`
+
+**요약:** 로맨스 설문만 조회합니다. 응답은 `GET /api/survey/me`의 `romance` 필드와 같은 레인 스키마(`hasSurvey`, `surveyData`, `gender`, `surveySubmittedAt`, `updatedAt`, `weeklySubmittedForTargetWeek`, `latestWeeklySubmission`)에 더해 **`userId`**, **`matchType`**(`ROMANCE`), **`meetingTargetPeriodStart`**가 붙습니다. Trait(`Trait.surveyData`)가 있으면 그것을 쓰고, 없으면 같은 레인에서 **가장 최근 주간 스냅샷**(`weekly_survey_submissions`, `submittedAt` 내림차순 첫 행)으로 본문을 보강합니다.
+
+### GET `/api/survey/me/friend`
+
+**요약:** 친구 설문만 조회합니다. 응답은 `GET /api/survey/me`의 `friend` 필드와 같은 레인 스키마에 **`userId`**, **`matchType`**(`FRIEND`), **`meetingTargetPeriodStart`**가 붙습니다. Trait(`Trait.friendSurveyData`) 우선, 없으면 **`friend_weekly_survey_submissions`**에서 가장 최근 행으로 보강합니다.
+
 ### POST `/api/survey/submit`
 
 **요약:** **로맨스(가치관) 설문만** 저장합니다. `matchType`·`friendHobbySurvey` 필드를 보내면 `400`입니다. 친구 설문은 **`POST /api/survey/friend/submit`** 을 사용합니다. 같은 만남 대상 주에 로맨스를 제출하면 해당 주의 친구 주간 스냅샷이 제거되고, 친구 제출 시에는 로맨스 주간 스냅샷이 제거됩니다(한 주에 한 레인).
@@ -1899,6 +1907,8 @@ Docker로 띄울 때 **`/app/uploads`를 영구 볼륨에 마운트하지 않으
 | 메서드 | 경로 | 인증 | 비고 |
 |--------|------|------|------|
 | `GET` | `/api/survey/me` | **`x-user-uuid`** | 로맨스·친구 블록 분리 응답 |
+| `GET` | `/api/survey/me/romance` | **`x-user-uuid`** | 로맨스 레인만(최신 Trait + 최근 주간 스냅샷) |
+| `GET` | `/api/survey/me/friend` | **`x-user-uuid`** | 친구 레인만(동일 규칙) |
 | `POST` | `/api/survey/submit` | **`x-user-uuid`** | 로맨스 설문만 |
 | `POST` | `/api/survey/friend/submit` | **`x-user-uuid`** | 친구 설문 |
 

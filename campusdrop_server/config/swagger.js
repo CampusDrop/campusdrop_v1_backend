@@ -359,6 +359,17 @@ const swaggerDefinition = {
               surveySubmittedAt: { type: 'string', format: 'date-time', nullable: true },
               updatedAt: { type: 'string', format: 'date-time', nullable: true },
               weeklySubmittedForTargetWeek: { type: 'boolean' },
+              latestWeeklySubmission: {
+                type: 'object',
+                nullable: true,
+                description: '해당 레인에서 `submittedAt` 기준 가장 최근 주간 스냅샷(메타만)',
+                properties: {
+                  id: { type: 'string', format: 'uuid' },
+                  targetPeriodStart: { type: 'string', format: 'date-time' },
+                  targetPeriodEnd: { type: 'string', format: 'date-time' },
+                  submittedAt: { type: 'string', format: 'date-time' },
+                },
+              },
             },
           },
           friend: {
@@ -366,9 +377,50 @@ const swaggerDefinition = {
             properties: {
               hasSurvey: { type: 'boolean' },
               surveyData: { type: 'object', nullable: true, additionalProperties: true },
+              gender: { type: 'string', nullable: true },
               surveySubmittedAt: { type: 'string', format: 'date-time', nullable: true },
               updatedAt: { type: 'string', format: 'date-time', nullable: true },
               weeklySubmittedForTargetWeek: { type: 'boolean' },
+              latestWeeklySubmission: {
+                type: 'object',
+                nullable: true,
+                description: '해당 레인에서 `submittedAt` 기준 가장 최근 주간 스냅샷(메타만)',
+                properties: {
+                  id: { type: 'string', format: 'uuid' },
+                  targetPeriodStart: { type: 'string', format: 'date-time' },
+                  targetPeriodEnd: { type: 'string', format: 'date-time' },
+                  submittedAt: { type: 'string', format: 'date-time' },
+                },
+              },
+            },
+          },
+        },
+      },
+      SurveyLaneMeResponse: {
+        type: 'object',
+        description: '`GET /api/survey/me/romance` · `GET /api/survey/me/friend` 단일 레인 응답',
+        properties: {
+          userId: { type: 'string', format: 'uuid' },
+          matchType: { type: 'string', enum: ['ROMANCE', 'FRIEND'] },
+          meetingTargetPeriodStart: { type: 'string', format: 'date-time' },
+          hasSurvey: { type: 'boolean' },
+          surveyData: { type: 'object', nullable: true, additionalProperties: true },
+          gender: {
+            type: 'string',
+            nullable: true,
+            description: '로맨스 설문에서 설정한 성별. 친구 전용 응답에서는 보통 null',
+          },
+          surveySubmittedAt: { type: 'string', format: 'date-time', nullable: true },
+          updatedAt: { type: 'string', format: 'date-time', nullable: true },
+          weeklySubmittedForTargetWeek: { type: 'boolean' },
+          latestWeeklySubmission: {
+            type: 'object',
+            nullable: true,
+            properties: {
+              id: { type: 'string', format: 'uuid' },
+              targetPeriodStart: { type: 'string', format: 'date-time' },
+              targetPeriodEnd: { type: 'string', format: 'date-time' },
+              submittedAt: { type: 'string', format: 'date-time' },
             },
           },
         },

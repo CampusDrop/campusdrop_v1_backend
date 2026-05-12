@@ -39,15 +39,246 @@ function hasJsonSurvey(value) {
   );
 }
 
+function isoOrNull(d) {
+  return d ? new Date(d).toISOString() : null;
+}
+
+/** @param {{ id: string; targetPeriodStart: Date; targetPeriodEnd: Date; submittedAt: Date } | null} row */
+function weeklySummaryFromRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    targetPeriodStart: new Date(row.targetPeriodStart).toISOString(),
+    targetPeriodEnd: new Date(row.targetPeriodEnd).toISOString(),
+    submittedAt: new Date(row.submittedAt).toISOString(),
+  };
+}
+
+function loadLatestRomanceWeekly(identityId) {
+  return prisma.weeklySurveySubmission.findFirst({
+    where: { identityId },
+    orderBy: { submittedAt: 'desc' },
+    select: {
+      id: true,
+      targetPeriodStart: true,
+      targetPeriodEnd: true,
+      submittedAt: true,
+      surveyData: true,
+    },
+  });
+}
+
+function loadLatestFriendWeekly(identityId) {
+  return prisma.friendWeeklySurveySubmission.findFirst({
+    where: { identityId },
+    orderBy: { submittedAt: 'desc' },
+    select: {
+      id: true,
+      targetPeriodStart: true,
+      targetPeriodEnd: true,
+      submittedAt: true,
+      surveyData: true,
+    },
+  });
+}
+
+/**
+ * Trait JSON이 비어 있을 때 같은 레인의 가장 최근 주간 스냅샷으로 설문 본문을 보강합니다.
+ */
+function buildRomanceLane(traitRow, weeklyForTargetWeek, latestWeekly) {
+  const fromTrait = hasJsonSurvey(traitRow?.surveyData);
+  const data = fromTrait
+    ? traitRow.surveyData
+    : latestWeekly && hasJsonSurvey(latestWeekly.surveyData)
+      ? latestWeekly.surveyData
+      : null;
+  const hasSurvey = hasJsonSurvey(data);
+  const submittedAt = fromTrait ? traitRow?.surveySubmittedAt : latestWeekly?.submittedAt ?? null;
+  return {
+    hasSurvey,
+    surveyData: hasSurvey ? data : null,
+    gender: traitRow?.gender ?? null,
+    surveySubmittedAt: isoOrNull(submittedAt),
+    updatedAt: isoOrNull(submittedAt),
+    weeklySubmittedForTargetWeek: Boolean(weeklyForTargetWeek),
+    latestWeeklySubmission: weeklySummaryFromRow(latestWeekly),
+  };
+}
+
+function buildFriendLane(traitRow, weeklyForTargetWeek, latestWeekly) {
+  const fromTrait = hasJsonSurvey(traitRow?.friendSurveyData);
+  const data = fromTrait
+    ? traitRow.friendSurveyData
+    : latestWeekly && hasJsonSurvey(latestWeekly.surveyData)
+      ? latestWeekly.surveyData
+      : null;
+  const hasSurvey = hasJsonSurvey(data);
+  const submittedAt = fromTrait
+    ? traitRow?.friendSurveySubmittedAt
+    : latestWeekly?.submittedAt ?? null;
+  return {
+    hasSurvey,
+    surveyData: hasSurvey ? data : null,
+    gender: traitRow?.gender ?? null,
+    surveySubmittedAt: isoOrNull(submittedAt),
+    updatedAt: isoOrNull(submittedAt),
+    weeklySubmittedForTargetWeek: Boolean(weeklyForTargetWeek),
+    latestWeeklySubmission: weeklySummaryFromRow(latestWeekly),
+  };
+}
+
+/**
+ * @openapi
+ * /api/survey/me/romance:
+ *   get:
+ *     tags: [Survey]
+ *     summary: 로맨스 설문 최신 상태(Trait + 가장 최근 주간 스냅샷 메타)
+ *     security:
+ *       - UserUuidAuth: []
+ *     responses:
+ *       200:
+ *         description: 조회 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SurveyLaneMeResponse'
+ */
+router.get('/me/romance', async (req, res) => {
+  if (!surveySchoolAccessOk(req.user)) {
+    return res.status(403).json(SURVEY_ACCESS_DENIED);
+  }
+
+  try {
+    const periodStart = getMatchingPeriodStart();
+    const targetPeriodStart = getSurveyTargetPeriodStartForApplicationPeriod(periodStart);
+
+    const [traitRow, romanceWeekly, latestRomanceWeekly] = await Promise.all([
+      prisma.trait.findUnique({
+        where: { id: req.user.id },
+        select: {
+          surveyData: true,
+          gender: true,
+          surveySubmittedAt: true,
+        },
+      }),
+      prisma.weeklySurveySubmission.findUnique({
+        where: {
+          identityId_targetPeriodStart: {
+            identityId: req.user.id,
+            targetPeriodStart,
+          },
+        },
+        select: { id: true, submittedAt: true },
+      }),
+      loadLatestRomanceWeekly(req.user.id),
+    ]);
+
+    const lane = buildRomanceLane(traitRow, romanceWeekly, latestRomanceWeekly);
+    const body = {
+      userId: req.user.id,
+      matchType: MATCH_TYPE_ROMANCE,
+      meetingTargetPeriodStart: targetPeriodStart.toISOString(),
+      ...lane,
+    };
+
+    await writeAccessLog({
+      actorType: 'user_session',
+      actorId: req.user.id,
+      action: 'TRAIT_SURVEY_READ',
+      resource: 'GET /api/survey/me/romance',
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: { romanceHasSurvey: lane.hasSurvey },
+    });
+
+    return res.status(200).json(body);
+  } catch (err) {
+    console.error('survey GET /me/romance error:', err);
+    return res.status(500).json({ error: '설문 조회 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * @openapi
+ * /api/survey/me/friend:
+ *   get:
+ *     tags: [Survey]
+ *     summary: 친구 설문 최신 상태(Trait + 가장 최근 주간 스냅샷 메타)
+ *     security:
+ *       - UserUuidAuth: []
+ *     responses:
+ *       200:
+ *         description: 조회 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SurveyLaneMeResponse'
+ */
+router.get('/me/friend', async (req, res) => {
+  if (!surveySchoolAccessOk(req.user)) {
+    return res.status(403).json(SURVEY_ACCESS_DENIED);
+  }
+
+  try {
+    const periodStart = getMatchingPeriodStart();
+    const targetPeriodStart = getSurveyTargetPeriodStartForApplicationPeriod(periodStart);
+
+    const [traitRow, friendWeekly, latestFriendWeekly] = await Promise.all([
+      prisma.trait.findUnique({
+        where: { id: req.user.id },
+        select: {
+          gender: true,
+          friendSurveyData: true,
+          friendSurveySubmittedAt: true,
+        },
+      }),
+      prisma.friendWeeklySurveySubmission.findUnique({
+        where: {
+          identityId_targetPeriodStart: {
+            identityId: req.user.id,
+            targetPeriodStart,
+          },
+        },
+        select: { id: true, submittedAt: true },
+      }),
+      loadLatestFriendWeekly(req.user.id),
+    ]);
+
+    const lane = buildFriendLane(traitRow, friendWeekly, latestFriendWeekly);
+    const body = {
+      userId: req.user.id,
+      matchType: MATCH_TYPE_FRIEND,
+      meetingTargetPeriodStart: targetPeriodStart.toISOString(),
+      ...lane,
+    };
+
+    await writeAccessLog({
+      actorType: 'user_session',
+      actorId: req.user.id,
+      action: 'TRAIT_SURVEY_READ',
+      resource: 'GET /api/survey/me/friend',
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: { friendHasSurvey: lane.hasSurvey },
+    });
+
+    return res.status(200).json(body);
+  } catch (err) {
+    console.error('survey GET /me/friend error:', err);
+    return res.status(500).json({ error: '설문 조회 중 오류가 발생했습니다.' });
+  }
+});
+
 /**
  * @openapi
  * /api/survey/me:
  *   get:
  *     tags: [Survey]
- *     summary: 로맨스·친구 Trait 및 이번 신청 주차의 주간 제출 여부
+ *     summary: 로맨스·친구 최신 설문 요약(합본)
  *     description: |
- *       `romance`는 가치관 설문(`Trait.surveyData`), `friend`는 친구 설문(`Trait.friendSurveyData`).
- *       `activeWeeklyLane`은 현재 신청 기간이 적용하는 만남 대상 주에 대한 주간 스냅샷이 어느 쪽인지(동시에 둘 다 있으면 안 됨).
+ *       각 레인의 본문은 Trait를 우선하고, Trait가 비어 있으면 해당 레인의 가장 최근 주간 스냅샷으로 보강합니다.
+ *       `updatedAt`은 레인별 설문 제출 시각과 동일합니다.
+ *       `activeWeeklyLane`은 이번 만남 대상 주에 대한 주간 스냅샷이 어느 레인인지(둘 다 있으면 더 늦게 제출한 쪽).
  *     security:
  *       - UserUuidAuth: []
  *     responses:
@@ -67,37 +298,39 @@ router.get('/me', async (req, res) => {
     const periodStart = getMatchingPeriodStart();
     const targetPeriodStart = getSurveyTargetPeriodStartForApplicationPeriod(periodStart);
 
-    const [traitRow, romanceWeekly, friendWeekly] = await Promise.all([
-      prisma.trait.findUnique({
-        where: { id: req.user.id },
-        select: {
-          surveyData: true,
-          friendSurveyData: true,
-          gender: true,
-          surveySubmittedAt: true,
-          friendSurveySubmittedAt: true,
-          updatedAt: true,
-        },
-      }),
-      prisma.weeklySurveySubmission.findUnique({
-        where: {
-          identityId_targetPeriodStart: {
-            identityId: req.user.id,
-            targetPeriodStart,
+    const [traitRow, romanceWeekly, friendWeekly, latestRomanceWeekly, latestFriendWeekly] =
+      await Promise.all([
+        prisma.trait.findUnique({
+          where: { id: req.user.id },
+          select: {
+            surveyData: true,
+            friendSurveyData: true,
+            gender: true,
+            surveySubmittedAt: true,
+            friendSurveySubmittedAt: true,
           },
-        },
-        select: { id: true, submittedAt: true },
-      }),
-      prisma.friendWeeklySurveySubmission.findUnique({
-        where: {
-          identityId_targetPeriodStart: {
-            identityId: req.user.id,
-            targetPeriodStart,
+        }),
+        prisma.weeklySurveySubmission.findUnique({
+          where: {
+            identityId_targetPeriodStart: {
+              identityId: req.user.id,
+              targetPeriodStart,
+            },
           },
-        },
-        select: { id: true, submittedAt: true },
-      }),
-    ]);
+          select: { id: true, submittedAt: true },
+        }),
+        prisma.friendWeeklySurveySubmission.findUnique({
+          where: {
+            identityId_targetPeriodStart: {
+              identityId: req.user.id,
+              targetPeriodStart,
+            },
+          },
+          select: { id: true, submittedAt: true },
+        }),
+        loadLatestRomanceWeekly(req.user.id),
+        loadLatestFriendWeekly(req.user.id),
+      ]);
 
     /** @type {'ROMANCE' | 'FRIEND' | null} */
     let activeWeeklyLane = null;
@@ -115,25 +348,8 @@ router.get('/me', async (req, res) => {
       userId: req.user.id,
       activeWeeklyLane,
       meetingTargetPeriodStart: targetPeriodStart.toISOString(),
-      romance: {
-        hasSurvey: hasJsonSurvey(traitRow?.surveyData),
-        surveyData: hasJsonSurvey(traitRow?.surveyData) ? traitRow.surveyData : null,
-        gender: traitRow?.gender ?? null,
-        surveySubmittedAt: traitRow?.surveySubmittedAt
-          ? new Date(traitRow.surveySubmittedAt).toISOString()
-          : null,
-        updatedAt: traitRow?.updatedAt ? new Date(traitRow.updatedAt).toISOString() : null,
-        weeklySubmittedForTargetWeek: Boolean(romanceWeekly),
-      },
-      friend: {
-        hasSurvey: hasJsonSurvey(traitRow?.friendSurveyData),
-        surveyData: hasJsonSurvey(traitRow?.friendSurveyData) ? traitRow.friendSurveyData : null,
-        surveySubmittedAt: traitRow?.friendSurveySubmittedAt
-          ? new Date(traitRow.friendSurveySubmittedAt).toISOString()
-          : null,
-        updatedAt: traitRow?.updatedAt ? new Date(traitRow.updatedAt).toISOString() : null,
-        weeklySubmittedForTargetWeek: Boolean(friendWeekly),
-      },
+      romance: buildRomanceLane(traitRow, romanceWeekly, latestRomanceWeekly),
+      friend: buildFriendLane(traitRow, friendWeekly, latestFriendWeekly),
     };
 
     await writeAccessLog({

@@ -224,13 +224,13 @@ async function buildRsvpButtons(matchingId, identityId, phase, baseUrl) {
   const no = await createFriendTalkRsvpLink({ matchingId, identityId, phase, choice: 'no' });
   return [
     {
-      buttonName: '참여 가능해요 !',
+      buttonName: '참여 가능!',
       buttonType: 'WL',
       linkMo: buildShortRsvpUrl(baseUrl, yes),
       linkPc: buildShortRsvpUrl(baseUrl, yes),
     },
     {
-      buttonName: '시간이 안돼요 ㅠㅠ',
+      buttonName: '시간 안돼요',
       buttonType: 'WL',
       linkMo: buildShortRsvpUrl(baseUrl, no),
       linkPc: buildShortRsvpUrl(baseUrl, no),
@@ -239,10 +239,10 @@ async function buildRsvpButtons(matchingId, identityId, phase, baseUrl) {
 }
 
 const ACQUISITION_BUTTONS = [
-  { slug: 'everytime', label: '에브리타임에서 봤어요 🏫' },
-  { slug: 'instagram', label: '인스타그램/SNS에서 봤어요 📱' },
-  { slug: 'friend', label: '친구나 지인이 추천해 줬어요 🗣️' },
-  { slug: 'poster', label: '포스터나 전단지를 봤어요 🪧' },
+  { slug: 'everytime', label: '에브리타임 🏫' },
+  { slug: 'instagram', label: '인스타/SNS 📱' },
+  { slug: 'friend', label: '친구 추천 🗣️' },
+  { slug: 'poster', label: '포스터·전단 🪧' },
 ];
 
 /**
@@ -268,9 +268,9 @@ async function buildAcquisitionButtons(identityId, baseUrl) {
 }
 
 const FEEDBACK_BUTTONS = [
-  { slug: 'similar', label: '다음에도 비슷한 분과! 👍' },
-  { slug: 'different', label: '다른 성향의 분과! 🔄' },
-  { slug: 'neutral', label: '무난한 만남이었어요 🙂' },
+  { slug: 'similar', label: '비슷한 분!' },
+  { slug: 'different', label: '다른 성향!' },
+  { slug: 'neutral', label: '무난했어요' },
 ];
 
 /**

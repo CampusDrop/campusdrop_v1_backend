@@ -1,5 +1,5 @@
 const express = require('express');
-const { assertSolapiFriendTalkEnv, sendFriendTalkCta } = require('../lib/solapiFriendTalkSend');
+const { assertSolapiFriendTalkEnv, sendFriendTalkCta, isWithinKakaoFriendTalkSendWindow } = require('../lib/solapiFriendTalkSend');
 const { prisma } = require('../lib/prisma');
 const {
   publicApiBase,
@@ -129,6 +129,13 @@ router.post('/match-day-eve-reminder', async (req, res) => {
     }
     return res.status(502).json({ ok: false, error: e });
   }
+  if (sent.queued) {
+    return res.json({
+      ok: true,
+      queued: true,
+      message: '허용 시간대(KST 08:01~20:49) 밖이면 오전 8시 1분에 발송됩니다.',
+    });
+  }
   return res.json({ ok: true, result: sent.result });
 });
 
@@ -238,13 +245,30 @@ router.post('/match-complete', async (req, res) => {
     }
 
     try {
-      const rA = await sendFriendTalkCta({ to: phoneUserA, text, buttons: btnA });
-      const rB = await sendFriendTalkCta({ to: phoneUserB, text, buttons: btnB });
+      if (isWithinKakaoFriendTalkSendWindow()) {
+        const rA = await sendFriendTalkCta({ to: phoneUserA, text, buttons: btnA });
+        const rB = await sendFriendTalkCta({ to: phoneUserB, text, buttons: btnB });
+        return res.json({
+          ok: true,
+          result: { userA: rA, userB: rB },
+          meetingTime,
+          meetingPlace,
+        });
+      }
+      void (async () => {
+        try {
+          await sendFriendTalkCta({ to: phoneUserA, text, buttons: btnA });
+          await sendFriendTalkCta({ to: phoneUserB, text, buttons: btnB });
+        } catch (err) {
+          console.error('friend-talk match-complete deferred:', err);
+        }
+      })();
       return res.json({
         ok: true,
-        result: { userA: rA, userB: rB },
+        queued: true,
         meetingTime,
         meetingPlace,
+        message: '허용 시간대(KST 08:01~20:49) 밖이면 오전 8시 1분(KST) 이후에 순차 발송됩니다.',
       });
     } catch (err) {
       return solapiRouteError(res, err);
@@ -269,8 +293,18 @@ router.post('/match-complete', async (req, res) => {
   }
 
   try {
-    const result = await sendFriendTalkCta({ to, text });
-    return res.json({ ok: true, result });
+    if (isWithinKakaoFriendTalkSendWindow()) {
+      const result = await sendFriendTalkCta({ to, text });
+      return res.json({ ok: true, result });
+    }
+    void sendFriendTalkCta({ to, text }).catch((err) =>
+      console.error('friend-talk match-complete deferred:', err),
+    );
+    return res.json({
+      ok: true,
+      queued: true,
+      message: '허용 시간대(KST 08:01~20:49) 밖이면 오전 8시 1분(KST) 이후에 발송됩니다.',
+    });
   } catch (err) {
     return solapiRouteError(res, err);
   }

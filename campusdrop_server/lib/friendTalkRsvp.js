@@ -7,6 +7,7 @@ const {
   FRIEND_TALK_IMG_DAY_EVE,
   FRIEND_TALK_IMG_MATCH_FAIL,
   FRIEND_TALK_IMG_MATCH_SUCCESS,
+  isWithinKakaoFriendTalkSendWindow,
 } = require('./solapiFriendTalkSend');
 const templates = require('./friendTalkTemplates');
 const { resolveMatchMeetingDisplay } = require('./meetingDisplay');
@@ -340,16 +341,42 @@ async function resolveAfterMondayUpdate(matchingId) {
     return;
   }
   const anyNo = mondayOutcome === MONDAY_OUTCOME_CANCELLED;
-  await sendMondayOutcomeMessages(rsvp);
-  await prisma.matchingFriendTalkRsvp.update({
-    where: { matchingId },
-    data: {
-      skipDayEveReminder: anyNo,
-      mondayOutcomeSent: true,
-      mondayOutcome,
-      mondayOutcomeSentAt: new Date(),
+  const claimed = await prisma.matchingFriendTalkRsvp.updateMany({
+    where: {
+      matchingId,
+      mondayOutcomeSent: false,
+      mondayOutcome: null,
+      mondayRsvpUserA: a,
+      mondayRsvpUserB: b,
     },
+    data: { mondayOutcome, skipDayEveReminder: anyNo },
   });
+  if (claimed.count === 0) {
+    return;
+  }
+
+  void (async () => {
+    try {
+      await sendMondayOutcomeMessages(rsvp);
+      await prisma.matchingFriendTalkRsvp.update({
+        where: { matchingId },
+        data: {
+          mondayOutcomeSent: true,
+          mondayOutcomeSentAt: new Date(),
+        },
+      });
+    } catch (e) {
+      console.error('monday outcome friendtalk', e);
+      try {
+        await prisma.matchingFriendTalkRsvp.updateMany({
+          where: { matchingId, mondayOutcomeSent: false },
+          data: { mondayOutcome: null, skipDayEveReminder: false },
+        });
+      } catch (revertErr) {
+        console.error('monday outcome friendtalk revert', revertErr);
+      }
+    }
+  })();
 }
 
 function canSendDayEveReminder(rsvp) {
@@ -464,7 +491,7 @@ async function handleRsvpClick({ matchingId, identityId, phase, choice }) {
 /**
  * 6번(전날) 친구톡 — 버튼 없음. 수동 API·크론 공통.
  * @param {string} matchingId
- * @returns {Promise<{ ok: true, result: { userA: unknown, userB: unknown } } | { ok: false, error: string }>}
+ * @returns {Promise<{ ok: true, result: { userA: unknown, userB: unknown } } | { ok: true, queued: true } | { ok: false, error: string }>}
  */
 async function sendDayEveReminderForMatching(matchingId) {
   const missingEnv = assertSolapiFriendTalkEnv();
@@ -501,32 +528,45 @@ async function sendDayEveReminderForMatching(matchingId) {
     meetingPlace: meeting.meetingPlace,
   });
 
-  try {
-    const kakaoImageId = await getKakaoFriendTalkImageIdFromEnv(FRIEND_TALK_IMG_DAY_EVE);
-    const rA = await sendFriendTalkCta({
-      to: rsvp.phoneUserA,
-      text,
-      kakaoImageId: kakaoImageId || undefined,
-    });
-    const rB = await sendFriendTalkCta({
-      to: rsvp.phoneUserB,
-      text,
-      kakaoImageId: kakaoImageId || undefined,
-    });
-    await prisma.matchingFriendTalkRsvp.update({
-      where: { matchingId },
-      data: { dayEveReminderSentAt: new Date() },
-    });
-    return { ok: true, result: { userA: rA, userB: rB } };
-  } catch (err) {
-    return {
-      ok: false,
-      error:
-        err && err.message
-          ? String(err.message)
-          : 'Solapi 발송 중 오류가 발생했습니다.',
-    };
+  async function doSendDayEve() {
+    try {
+      const kakaoImageId = await getKakaoFriendTalkImageIdFromEnv(FRIEND_TALK_IMG_DAY_EVE);
+      const rA = await sendFriendTalkCta({
+        to: rsvp.phoneUserA,
+        text,
+        kakaoImageId: kakaoImageId || undefined,
+      });
+      const rB = await sendFriendTalkCta({
+        to: rsvp.phoneUserB,
+        text,
+        kakaoImageId: kakaoImageId || undefined,
+      });
+      await prisma.matchingFriendTalkRsvp.update({
+        where: { matchingId },
+        data: { dayEveReminderSentAt: new Date() },
+      });
+      return { ok: true, result: { userA: rA, userB: rB } };
+    } catch (err) {
+      return {
+        ok: false,
+        error:
+          err && err.message
+            ? String(err.message)
+            : 'Solapi 발송 중 오류가 발생했습니다.',
+      };
+    }
   }
+
+  if (isWithinKakaoFriendTalkSendWindow()) {
+    return await doSendDayEve();
+  }
+
+  void doSendDayEve().then((r) => {
+    if (!r.ok) {
+      console.error('[sendDayEveReminderForMatching] deferred send failed:', r.error);
+    }
+  });
+  return { ok: true, queued: true };
 }
 
 module.exports = {

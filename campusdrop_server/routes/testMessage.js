@@ -20,17 +20,24 @@ router.post('/test-message', async (req, res) => {
   const text =
     '[캠퍼스드롭 매칭 완료! 💘]\n드디어 매칭이 성사되었습니다!\n- 시간: 오늘 오후 6시\n- 장소: 세종대 후문 커피니\n설레는 만남 되시길 바랍니다!';
 
-  try {
-    const result = await sendFriendTalkCta({ to: from, text });
-    return res.json({ ok: true, result });
-  } catch (err) {
-    if (err && err.code === 'SOLAPI_CONFIG') {
-      return res.status(500).json({ ok: false, error: err.message || String(err) });
+  void (async () => {
+    try {
+      const result = await sendFriendTalkCta({ to: from, text });
+      console.log('[test-message] friend talk sent:', result);
+    } catch (err) {
+      if (err && err.code === 'SOLAPI_CONFIG') {
+        console.error('[test-message]', err.message || err);
+        return;
+      }
+      console.error('[test-message] send error:', err);
     }
-    const name = err && err.name ? String(err.name) : 'Error';
-    const messageText = err && err.message ? String(err.message) : String(err);
-    return res.status(502).json({ ok: false, error: { name, message: messageText } });
-  }
+  })();
+  return res.json({
+    ok: true,
+    accepted: true,
+    message:
+      '발송 요청을 접수했습니다. 허용 시간대(KST 08:01~20:49) 밖이면 오전 8시 1분(KST)에 발송되며, 결과는 서버 로그를 확인하세요.',
+  });
 });
 
 module.exports = router;

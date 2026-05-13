@@ -1,4 +1,9 @@
 const CoolsmsMessageService = require('coolsms-node-sdk').default;
+const {
+  msUntilKakaoFriendTalkSendWindowOpens,
+  delayMs,
+  isWithinKakaoFriendTalkSendWindow,
+} = require('./kakaoFriendTalkSendWindow');
 
 /** 전날 확인(6번) 이미지 — 로컬 경로 또는 https URL */
 const FRIEND_TALK_IMG_DAY_EVE = 'FRIEND_TALK_IMG_DAY_EVE';
@@ -119,6 +124,15 @@ async function sendFriendTalkCta({ to, text, buttons, kakaoImageId }) {
     e.code = 'SOLAPI_CONFIG';
     throw e;
   }
+  const waitMs = msUntilKakaoFriendTalkSendWindowOpens();
+  if (waitMs > 0) {
+    console.log(
+      `[solapiFriendTalk] 발송 허용 시간대(KST 08:01~20:49) 밖 — 약 ${Math.ceil(
+        waitMs / 60000,
+      )}분 후(다음 오전 8:01 KST)에 친구톡 발송`,
+    );
+    await delayMs(waitMs);
+  }
   const useImage = Boolean(kakaoImageId && String(kakaoImageId).trim());
   /** @type {{ pfId: string, buttons?: KakaoFriendTalkButton[], imageId?: string }} */
   const kakaoOptions = {
@@ -150,4 +164,6 @@ module.exports = {
   FRIEND_TALK_IMG_DAY_EVE,
   FRIEND_TALK_IMG_MATCH_FAIL,
   FRIEND_TALK_IMG_MATCH_SUCCESS,
+  isWithinKakaoFriendTalkSendWindow,
+  msUntilKakaoFriendTalkSendWindowOpens,
 };

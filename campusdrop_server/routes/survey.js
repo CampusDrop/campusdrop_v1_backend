@@ -482,27 +482,29 @@ router.post('/submit', async (req, res) => {
       txResult.shouldSendFirstWeeklySurveyConfirmed &&
       txResult.phoneForFirstWeeklySurveyConfirmed
     ) {
-      try {
-        const miss = assertSolapiFriendTalkEnv();
-        if (miss) {
-          console.warn('survey first-week friendtalk skipped:', miss);
-        } else {
-          const intro = `${templates.WAITLIST_AND_QUEUE_TEXT}\n\n${templates.FIRST_SURVEY_ACQUISITION_TAIL}`;
-          const base = publicApiBase();
-          const to = txResult.phoneForFirstWeeklySurveyConfirmed;
-          if (!base) {
-            await sendFriendTalkCta({ to, text: intro });
-          } else {
-            const buttons = await buildAcquisitionButtons(req.user.id, base);
-            if (buttons && buttons.length > 0) {
-              await sendFriendTalkCta({ to, text: intro, buttons });
-            } else {
+      const miss = assertSolapiFriendTalkEnv();
+      if (miss) {
+        console.warn('survey first-week friendtalk skipped:', miss);
+      } else {
+        void (async () => {
+          try {
+            const intro = `${templates.WAITLIST_AND_QUEUE_TEXT}\n\n${templates.FIRST_SURVEY_ACQUISITION_TAIL}`;
+            const base = publicApiBase();
+            const to = txResult.phoneForFirstWeeklySurveyConfirmed;
+            if (!base) {
               await sendFriendTalkCta({ to, text: intro });
+            } else {
+              const buttons = await buildAcquisitionButtons(req.user.id, base);
+              if (buttons && buttons.length > 0) {
+                await sendFriendTalkCta({ to, text: intro, buttons });
+              } else {
+                await sendFriendTalkCta({ to, text: intro });
+              }
             }
+          } catch (notifyErr) {
+            console.error('survey submit first-week friendtalk error:', notifyErr);
           }
-        }
-      } catch (notifyErr) {
-        console.error('survey submit first-week friendtalk error:', notifyErr);
+        })();
       }
     }
 

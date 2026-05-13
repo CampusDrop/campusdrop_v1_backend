@@ -27,6 +27,7 @@ const {
   sendMatchSuccessFriendTalkForAllInPeriod,
   sendMatchFailureFriendTalkForUnmatchedInPeriod,
 } = require('../lib/adminMatchFriendTalk');
+const { assertSolapiFriendTalkEnv } = require('../lib/solapiFriendTalkSend');
 const { buildSurveySubmissionWindowForApplicationPeriod } = require('../lib/surveyAvailabilityWindow');
 const { surveyDataToLifestyleUser } = require('../lib/surveyToLifestyleUser');
 const { surveyDataToAvailabilitySlots } = require('../lib/surveyAvailabilitySlots');
@@ -1773,25 +1774,38 @@ router.post('/friend-talk/send-match-success', async (req, res) => {
     if (!parsed.ok) {
       return res.status(400).json({ error: parsed.error });
     }
-    const result = await sendMatchSuccessFriendTalkForAllInPeriod({
-      periodStart: parsed.value,
+    const miss = assertSolapiFriendTalkEnv();
+    if (miss) {
+      return res.status(500).json({ error: miss });
+    }
+    const periodStart = parsed.value;
+    void (async () => {
+      try {
+        const result = await sendMatchSuccessFriendTalkForAllInPeriod({ periodStart });
+        await writeAccessLog({
+          actorType: 'admin',
+          actorId: req.admin.adminId,
+          action: 'ADMIN_FRIEND_TALK_MATCH_SUCCESS',
+          resource: 'friend-talk',
+          ip: req.ip || null,
+          userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+          metadata: {
+            sent: result.sent,
+            skippedCount: Array.isArray(result.skipped) ? result.skipped.length : 0,
+            failedCount: result.failed.length,
+            matchingCount: result.matchingCount,
+            periodStart: result.periodStart,
+          },
+        });
+      } catch (err) {
+        console.error('admin POST /friend-talk/send-match-success (background):', err);
+      }
+    })();
+    return res.status(202).json({
+      accepted: true,
+      message:
+        '친구톡 일괄 발송을 백그라운드에서 시작했습니다. 허용 시간대(KST 08:01~20:49) 밖이면 오전 8시 1분까지 대기 후 순차 발송합니다.',
     });
-    await writeAccessLog({
-      actorType: 'admin',
-      actorId: req.admin.adminId,
-      action: 'ADMIN_FRIEND_TALK_MATCH_SUCCESS',
-      resource: 'friend-talk',
-      ip: req.ip || null,
-      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
-      metadata: {
-        sent: result.sent,
-        skippedCount: Array.isArray(result.skipped) ? result.skipped.length : 0,
-        failedCount: result.failed.length,
-        matchingCount: result.matchingCount,
-        periodStart: result.periodStart,
-      },
-    });
-    return res.status(200).json(result);
   } catch (err) {
     console.error('admin POST /friend-talk/send-match-success:', err);
     return res.status(500).json({ error: '친구톡 발송 처리 중 오류가 발생했습니다.' });
@@ -1807,28 +1821,42 @@ router.post('/friend-talk/send-match-failure', async (req, res) => {
     if (!parsed.ok) {
       return res.status(400).json({ error: parsed.error });
     }
-    const result = await sendMatchFailureFriendTalkForUnmatchedInPeriod({
-      periodStart: parsed.value,
-    });
-    if (!result.ok) {
-      return res.status(500).json({ error: result.error });
+    const miss = assertSolapiFriendTalkEnv();
+    if (miss) {
+      return res.status(500).json({ error: miss });
     }
-    await writeAccessLog({
-      actorType: 'admin',
-      actorId: req.admin.adminId,
-      action: 'ADMIN_FRIEND_TALK_MATCH_FAILURE',
-      resource: 'friend-talk',
-      ip: req.ip || null,
-      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
-      metadata: {
-        sent: result.sent,
-        skipped: result.skipped,
-        failedCount: result.failed.length,
-        eligibleCount: result.eligibleCount,
-        periodStart: result.periodStart,
-      },
+    const periodStart = parsed.value;
+    void (async () => {
+      try {
+        const result = await sendMatchFailureFriendTalkForUnmatchedInPeriod({ periodStart });
+        if (!result.ok) {
+          console.error('admin POST /friend-talk/send-match-failure (background):', result.error);
+          return;
+        }
+        await writeAccessLog({
+          actorType: 'admin',
+          actorId: req.admin.adminId,
+          action: 'ADMIN_FRIEND_TALK_MATCH_FAILURE',
+          resource: 'friend-talk',
+          ip: req.ip || null,
+          userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+          metadata: {
+            sent: result.sent,
+            skipped: result.skipped,
+            failedCount: result.failed.length,
+            eligibleCount: result.eligibleCount,
+            periodStart: result.periodStart,
+          },
+        });
+      } catch (err) {
+        console.error('admin POST /friend-talk/send-match-failure (background):', err);
+      }
+    })();
+    return res.status(202).json({
+      accepted: true,
+      message:
+        '미매칭 안내 친구톡 일괄 발송을 백그라운드에서 시작했습니다. 허용 시간대(KST 08:01~20:49) 밖이면 오전 8시 1분까지 대기 후 순차 발송합니다.',
     });
-    return res.status(200).json(result);
   } catch (err) {
     console.error('admin POST /friend-talk/send-match-failure:', err);
     return res.status(500).json({ error: '친구톡 발송 처리 중 오류가 발생했습니다.' });

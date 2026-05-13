@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { msUntilKakaoFriendTalkSendWindowOpens } = require('./kakaoFriendTalkSendWindow');
 
 const KAKAO_TOKEN_URL = 'https://kauth.kakao.com/oauth/token';
 const KAKAO_USER_ME = 'https://kapi.kakao.com/v2/user/me';
@@ -196,6 +197,11 @@ async function sendKakaoTalkDefaultTextMemo(accessToken, text) {
     const err = new Error('KAKAO_MEMO');
     err.code = 'KAKAO_MEMO';
     throw err;
+  }
+
+  const waitMs = msUntilKakaoFriendTalkSendWindowOpens();
+  if (waitMs > 0) {
+    await sleep(waitMs);
   }
 
   const url = kakaoWebLinkBaseUrl();

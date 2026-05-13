@@ -1,5 +1,9 @@
 const { validateSurveyAvailabilityForCurrentWindow } = require('./surveyAvailabilityWindow');
 const { surveyDataToAvailabilitySlots } = require('./surveyAvailabilitySlots');
+const {
+  mergeRootProfileWithParticipantMeta,
+  validateParticipantMetaProfilePhone,
+} = require('./surveyValidation');
 
 /** @typedef {'GAME_PC'|'EXERCISE'|'CAFE'|'CULTURE'} FriendMainHobby */
 /** @typedef {'LOL_DUO'|'STEAM_COOP'|'PUBG'|'OVERWATCH2'} FriendDetailGamePc */
@@ -107,6 +111,15 @@ function validateFriendSurveyPayload(surveyData) {
   const core = validateFriendSurveyCoreFields(data);
   if (!core.ok) {
     return core;
+  }
+
+  const participantMetaMerged = mergeRootProfileWithParticipantMeta(
+    Object.prototype.hasOwnProperty.call(data, 'participantMeta') ? data.participantMeta : undefined,
+    Object.prototype.hasOwnProperty.call(data, 'profile') ? data.profile : undefined,
+  );
+  const phoneErr = validateParticipantMetaProfilePhone(participantMetaMerged);
+  if (phoneErr) {
+    return { ok: false, error: phoneErr };
   }
 
   const slots = surveyDataToAvailabilitySlots(data);

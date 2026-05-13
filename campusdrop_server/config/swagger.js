@@ -139,11 +139,12 @@ const swaggerDefinition = {
           profile: {
             type: 'object',
             description:
-              '선택. 이메일 연결 시 `Identity`·`Trait.gender`에 반영',
+              '선택. 이메일 연결 시 `Identity`·`Trait.gender`에 반영. 학교 계정 등에 번호가 아직 없으면 `profile.phone`(010 시작 11자리) 필수 또는 설문으로 이미 번호 저장됐을 경우 생략 가능',
             properties: {
               studentId: { type: 'string' },
               birthYear: { type: 'string' },
               gender: { type: 'string', description: '남성·여성 등(서버에서 male/female로 정규화)' },
+              phone: { type: 'string', description: '010 시작 휴대폰 번호(DB에 번호 없을 때 필요)' },
             },
           },
         },
@@ -259,7 +260,7 @@ const swaggerDefinition = {
       SurveySubmitRequest: {
         type: 'object',
         description:
-          '로맨스(가치관) 설문 전용. `surveyData` 또는 `survey` 중 하나 필수. 친구 설문은 `POST /api/survey/friend/submit`.',
+          '로맨스(가치관) 설문 전용. `surveyData` 또는 `survey` 중 하나 필수. 친구 설문은 `POST /api/survey/friend/submit`. 본문에 `participantMeta.profile.phone`(010 시작 11자리) 필수 — 루트 `profile.phone`만 보내도 동일하게 병합되어 인정됩니다.',
         properties: {
           surveyData: {
             type: 'object',
@@ -311,7 +312,7 @@ const swaggerDefinition = {
       FriendSurveySubmitRequest: {
         type: 'object',
         description:
-          '친구 매칭 설문. `surveyData` 또는 `survey` 중 하나 필수. 본문 루트는 `FriendSurveyCoreFields` 필수 키·enum + 만남 가능 시간(`availability` 또는 `matchAvailability`) 필수. 검증: `validateFriendSurveyPayload`.',
+          '친구 매칭 설문. `surveyData` 또는 `survey` 중 하나 필수. 본문 루트는 `FriendSurveyCoreFields` 필수 키·enum + 만남 가능 시간(`availability` 또는 `matchAvailability`) 필수. `participantMeta.profile.phone`(010 시작 11자리) 필수 — 루트 `profile.phone`만 보내도 동일하게 병합되어 인정됩니다. 검증: `validateFriendSurveyPayload`.',
         properties: {
           surveyData: { allOf: [{ $ref: '#/components/schemas/FriendSurveyCoreFields' }] },
           survey: { allOf: [{ $ref: '#/components/schemas/FriendSurveyCoreFields' }] },

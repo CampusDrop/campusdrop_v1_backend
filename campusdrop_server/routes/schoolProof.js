@@ -9,6 +9,7 @@ const {
 } = require('../lib/schoolProofMulter');
 const { isSjuAcKrEmail, normalizeEmail } = require('../lib/sjuEmail');
 const { computeImageUuidAccessUntil } = require('../lib/imageUuidAccess');
+const { encryptPhoneForStorage, normalizePhone01 } = require('../lib/phoneCrypto');
 
 const router = express.Router();
 const upload = createSchoolProofUploader();
@@ -57,6 +58,9 @@ function handleMulterSingle(req, res, next) {
  *               image:
  *                 type: string
  *                 format: binary
+ *               phone:
+ *                 type: string
+ *                 description: '010 시작 휴대폰 번호(DB에 전화번호가 아직 없을 때 필수)'
  *     responses:
  *       201:
  *         description: 저장됨
@@ -79,6 +83,51 @@ router.post('/school-proof', requireUserUuid, handleMulterSingle, async (req, re
   if (!req.file) {
     return res.status(400).json({ error: 'multipart 필드 image(단일 파일)가 필요합니다.' });
   }
+
+  /** @type {{ phoneEncrypted?: string }} */
+  let phoneIdentityPatch = {};
+  try {
+    if (!req.user.phoneEncrypted) {
+      const phoneRaw = req.body?.phone != null ? String(req.body.phone).trim() : '';
+      if (!phoneRaw) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (_) {
+          /* ignore */
+        }
+        return res.status(400).json({
+          error:
+            '휴대폰번호(phone 폼 필드, 010 시작 11자리)가 필요합니다. 학교 증빙 제출과 함께 입력해 주세요.',
+        });
+      }
+      const digits = normalizePhone01(phoneRaw);
+      if (!digits) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (_) {
+          /* ignore */
+        }
+        return res.status(400).json({
+          error: 'phone은 010으로 시작하는 휴대폰 11자리여야 합니다.',
+        });
+      }
+      phoneIdentityPatch.phoneEncrypted = encryptPhoneForStorage(digits);
+    }
+  } catch (encryptErr) {
+    try {
+      fs.unlinkSync(req.file.path);
+    } catch (_) {
+      /* ignore */
+    }
+    if (encryptErr && encryptErr.message === 'PHONE_ENCRYPTION_KEY_INVALID') {
+      return res.status(500).json({
+        error: '전화번호 저장 암호화 키가 설정되지 않았습니다. 서버 설정을 확인해 주세요.',
+      });
+    }
+    console.error('school-proof phone encrypt:', encryptErr);
+    return res.status(500).json({ error: '전화번호 처리 중 오류가 발생했습니다.' });
+  }
+
   const draft = req.schoolProofDraft;
   if (!draft || !draft.id || !draft.relativePath) {
     try {
@@ -107,6 +156,12 @@ router.post('/school-proof', requireUserUuid, handleMulterSingle, async (req, re
     });
     const em = idRow?.email != null ? normalizeEmail(String(idRow.email)) : '';
     const hasSju = Boolean(em && isSjuAcKrEmail(em));
+
+    /** @type {{ imageUuidAccessUntil?: Date; phoneEncrypted?: string }} */
+    const identityData = {};
+    if (phoneIdentityPatch.phoneEncrypted) {
+      identityData.phoneEncrypted = phoneIdentityPatch.phoneEncrypted;
+    }
     if (!hasSju && !idRow?.schoolProofVerifiedAt) {
       const rawUntil = idRow?.imageUuidAccessUntil;
       const untilMs =
@@ -114,11 +169,15 @@ router.post('/school-proof', requireUserUuid, handleMulterSingle, async (req, re
           ? new Date(rawUntil).getTime()
           : 0;
       if (untilMs < Date.now()) {
-        await prisma.identity.update({
-          where: { id: req.user.id },
-          data: { imageUuidAccessUntil: computeImageUuidAccessUntil() },
-        });
+        identityData.imageUuidAccessUntil = computeImageUuidAccessUntil();
       }
+    }
+
+    if (Object.keys(identityData).length > 0) {
+      await prisma.identity.update({
+        where: { id: req.user.id },
+        data: identityData,
+      });
     }
 
     return res.status(201).json({

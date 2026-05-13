@@ -1,5 +1,6 @@
 const { normalizeTraitGender } = require('./genderPolicy');
 const { normalizeDepartment } = require('./departments');
+const { normalizePhone01 } = require('./phoneCrypto');
 
 const MAX_STUDENT_ID_LEN = 64;
 const MAX_BIRTH_YEAR_LEN = 16;
@@ -7,7 +8,7 @@ const MAX_BIRTH_YEAR_LEN = 16;
 /**
  * 가입 직후(이메일/이미지) 프로필. 설문 없이 `Identity`·`Trait.gender`에 반영.
  * @param {unknown} raw — JSON 본문의 `profile` 객체 또는 multipart 문자열 파싱 결과
- * @returns {{ ok: true, studentId?: string, birthYear?: string, department?: string, genderTrait: 'male' | 'female' | null } | { ok: false, error: string }}
+ * @returns {{ ok: true, studentId?: string, birthYear?: string, department?: string, phone?: string, genderTrait: 'male' | 'female' | null } | { ok: false, error: string }}
  */
 function parseSignupProfile(raw) {
   if (raw === undefined || raw === null || raw === '') {
@@ -32,11 +33,23 @@ function parseSignupProfile(raw) {
     return { ok: false, error: 'profile.department는 등록된 학과 목록 중 하나여야 합니다.' };
   }
   const genderTrait = normalizeTraitGender(o.gender);
-  /** @type {{ ok: true, studentId?: string, birthYear?: string, department?: string, genderTrait: 'male' | 'female' | null }} */
+  let normalizedSignupPhone = null;
+  const phoneRaw = o.phone != null ? String(o.phone).trim() : '';
+  if (phoneRaw) {
+    normalizedSignupPhone = normalizePhone01(phoneRaw);
+    if (!normalizedSignupPhone) {
+      return {
+        ok: false,
+        error: 'profile.phone은 010으로 시작하는 휴대폰 11자리여야 합니다.',
+      };
+    }
+  }
+  /** @type {{ ok: true, studentId?: string, birthYear?: string, department?: string, phone?: string, genderTrait: 'male' | 'female' | null }} */
   const out = { ok: true, genderTrait };
   if (sid) out.studentId = sid;
   if (by) out.birthYear = by;
   if (department) out.department = department;
+  if (normalizedSignupPhone) out.phone = normalizedSignupPhone;
   return out;
 }
 

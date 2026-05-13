@@ -94,6 +94,11 @@ function surveyV3(o = {}) {
     },
     gender: o.gender ?? 'male',
     availability: o.availability ?? SAMPLE_AVAILABILITY,
+    participantMeta: {
+      profile: {
+        phone: '01000000001',
+      },
+    },
   };
 }
 

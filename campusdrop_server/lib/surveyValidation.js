@@ -204,6 +204,37 @@ function mergePhaseSurveyObjects(primary, secondary) {
 }
 
 /**
+ * 루트 `profile`을 `participantMeta.profile`와 병합(루트가 우선). 로맨스·친구 설문 공통.
+ * @param {unknown} participantMeta
+ * @param {unknown} rootProfile
+ */
+function mergeRootProfileWithParticipantMeta(participantMeta, rootProfile) {
+  if (
+    rootProfile !== undefined &&
+    rootProfile !== null &&
+    typeof rootProfile === 'object' &&
+    !Array.isArray(rootProfile)
+  ) {
+    const pmBase =
+      participantMeta !== undefined &&
+      participantMeta !== null &&
+      typeof participantMeta === 'object' &&
+      !Array.isArray(participantMeta)
+        ? { .../** @type {Record<string, unknown>} */ (participantMeta) }
+        : {};
+    const existingProfile =
+      pmBase.profile && typeof pmBase.profile === 'object' && !Array.isArray(pmBase.profile)
+        ? { .../** @type {Record<string, unknown>} */ (pmBase.profile) }
+        : {};
+    return {
+      ...pmBase,
+      profile: { ...existingProfile, .../** @type {Record<string, unknown>} */ (rootProfile) },
+    };
+  }
+  return participantMeta;
+}
+
+/**
  * @param {Record<string, unknown>} surveyData
  * @returns {{ ok: true, mergedPhases: Record<string, Record<string, unknown>>, matchAvailability: unknown, participantMeta: unknown, gender: unknown, availability: unknown } | { ok: false, error: string }}
  */
@@ -237,28 +268,7 @@ function splitClientSurveyPackage(surveyData) {
     };
   }
 
-  if (
-    rootProfile !== undefined &&
-    rootProfile !== null &&
-    typeof rootProfile === 'object' &&
-    !Array.isArray(rootProfile)
-  ) {
-    const pmBase =
-      participantMeta !== undefined &&
-      participantMeta !== null &&
-      typeof participantMeta === 'object' &&
-      !Array.isArray(participantMeta)
-        ? { .../** @type {Record<string, unknown>} */ (participantMeta) }
-        : {};
-    const existingProfile =
-      pmBase.profile && typeof pmBase.profile === 'object' && !Array.isArray(pmBase.profile)
-        ? { .../** @type {Record<string, unknown>} */ (pmBase.profile) }
-        : {};
-    participantMeta = {
-      ...pmBase,
-      profile: { ...existingProfile, .../** @type {Record<string, unknown>} */ (rootProfile) },
-    };
-  }
+  participantMeta = mergeRootProfileWithParticipantMeta(participantMeta, rootProfile);
 
   const sa =
     surveyAnswers !== undefined && surveyAnswers !== null && typeof surveyAnswers === 'object' && !Array.isArray(surveyAnswers)
@@ -402,16 +412,18 @@ function validateParticipantMetaProfileDepartment(pm) {
 
 /** @param {unknown} pm */
 function validateParticipantMetaProfilePhone(pm) {
+  const missingMsg =
+    'participantMeta.profile.phone은 필수입니다. 010으로 시작하는 휴대폰 11자리를 입력해 주세요.';
   if (pm === null || pm === undefined || typeof pm !== 'object' || Array.isArray(pm)) {
-    return null;
+    return missingMsg;
   }
   const profileRaw = /** @type {Record<string, unknown>} */ (pm).profile;
   if (!profileRaw || typeof profileRaw !== 'object' || Array.isArray(profileRaw)) {
-    return null;
+    return missingMsg;
   }
   const phoneRaw = /** @type {Record<string, unknown>} */ (profileRaw).phone;
   if (phoneRaw === undefined || phoneRaw === null || String(phoneRaw).trim() === '') {
-    return null;
+    return missingMsg;
   }
   return normalizePhone01(phoneRaw)
     ? null
@@ -832,6 +844,8 @@ module.exports = {
   validateSurveyPayload,
   unwrapSurveyPayload,
   splitClientSurveyPackage,
+  mergeRootProfileWithParticipantMeta,
+  validateParticipantMetaProfilePhone,
   matchAvailabilityToLegacySlots,
   normalizeParticipantMetaForStorage,
   identityProfileColumnsFromSurveyData,

@@ -13,6 +13,7 @@ const { requireImageUuidAccessForSurveyApis } = require('./lib/imageUuidAccess')
 const { disconnectRedis } = require('./lib/redis');
 const { scheduleMeetingFeedbackFriendTalkCron } = require('./lib/meetingFeedbackFriendTalkCron');
 const { scheduleFriendTalkDayEveCron } = require('./lib/friendTalkDayEveCron');
+const { schedulePurgeIdentitiesWithoutPhoneCron } = require('./lib/purgeIdentitiesWithoutPhoneCron');
 const swaggerUi = require('swagger-ui-express');
 const { buildSwaggerSpec } = require('./config/swagger');
 
@@ -142,6 +143,7 @@ const server = app.listen(PORT, HOST, () => {
 
     scheduleMeetingFeedbackFriendTalkCron();
     scheduleFriendTalkDayEveCron();
+    schedulePurgeIdentitiesWithoutPhoneCron();
 });
 
 async function shutdown() {

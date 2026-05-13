@@ -21,7 +21,7 @@ const { traitGenderLabelKo } = require('../lib/genderPolicy');
 const { parsePrivacyPolicyAgreed } = require('../lib/privacyPolicyConsent');
 const { exchangeKakaoCode, fetchKakaoUserId } = require('../lib/kakaoOAuth');
 const { userHasSchoolVerification } = require('../lib/surveyAccess');
-const { decryptPhoneFromStorage } = require('../lib/phoneCrypto');
+const { decryptPhoneFromStorage, encryptPhoneForStorage } = require('../lib/phoneCrypto');
 const { registerNewUser } = require('../lib/nickname');
 
 const router = express.Router();
@@ -527,6 +527,16 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
         include: { trait: true },
       });
 
+      const dupEmailOwnerMerge = Boolean(emailOwner && emailOwner.id !== sessionIdentityId);
+      const hasPhoneBeforeLink =
+        Boolean(prof.phone) ||
+        Boolean(sessionIdentity.phoneEncrypted) ||
+        (dupEmailOwnerMerge && Boolean(emailOwner.phoneEncrypted));
+
+      if (!hasPhoneBeforeLink) {
+        throw new Error('VERIFY_CODE_PHONE_REQUIRED');
+      }
+
       if (emailOwner && emailOwner.id !== sessionIdentityId) {
         if (emailOwner.blockedAt) {
           throw new Error('EMAIL_OWNER_BLOCKED');
@@ -565,7 +575,9 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
         if (!emailOwner.meetingPlace && sessionIdentity.meetingPlace) {
           ownerUpdate.meetingPlace = sessionIdentity.meetingPlace;
         }
-        if (!emailOwner.phoneEncrypted && sessionIdentity.phoneEncrypted) {
+        if (prof.phone) {
+          ownerUpdate.phoneEncrypted = encryptPhoneForStorage(prof.phone);
+        } else if (!emailOwner.phoneEncrypted && sessionIdentity.phoneEncrypted) {
           ownerUpdate.phoneEncrypted = sessionIdentity.phoneEncrypted;
         }
         if (!emailOwner.trait?.gender) {
@@ -606,6 +618,9 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
         imageUuidAccessUntil: null,
         privacyPolicyAgreed: true,
       };
+      if (prof.phone) {
+        sessionUpdate.phoneEncrypted = encryptPhoneForStorage(prof.phone);
+      }
       if (prof.studentId) sessionUpdate.studentId = prof.studentId;
       if (prof.birthYear) sessionUpdate.birthYear = prof.birthYear;
       if (prof.department) sessionUpdate.department = prof.department;
@@ -645,6 +660,17 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
     ) {
       return res.status(400).json({
         error: '해당 학교 이메일은 다른 계정에서 이미 사용 중입니다. 해당 카카오 계정으로 로그인해 주세요.',
+      });
+    }
+    if (err instanceof Error && err.message === 'VERIFY_CODE_PHONE_REQUIRED') {
+      return res.status(400).json({
+        error:
+          '학교 이메일 연결에는 휴대폰번호가 필요합니다. `profile.phone`(010 시작 11자리)을 보내 주거나, 설문 저장으로 번호가 이미 있는 경우 생략됩니다.',
+      });
+    }
+    if (err instanceof Error && err.message === 'PHONE_ENCRYPTION_KEY_INVALID') {
+      return res.status(500).json({
+        error: '전화번호 저장 암호화 키가 설정되지 않았습니다. 서버 설정을 확인해 주세요.',
       });
     }
     return res.status(500).json({ error: '인증 처리 중 오류가 발생했습니다.' });

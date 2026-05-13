@@ -58,6 +58,7 @@ function minimalSurvey(phase1Overrides = {}, phase3Overrides = {}, phase6Overrid
     },
     gender: '남성',
     availability: [{ date: '2026-04-20', time_slot: '11:00-12:00' }],
+    participantMeta: { profile: { phone: '01012345678' } },
   };
 }
 
@@ -94,7 +95,7 @@ test('partner_age_preference allows duplicates and preserves order', () => {
 
 test('invalid participantMeta.profile.department → 400', () => {
   const p = minimalSurvey();
-  p.participantMeta = { profile: { department: '없는학과', gender: '남성' } };
+  p.participantMeta = { profile: { department: '없는학과', gender: '남성', phone: '01012345678' } };
   const r = validateSurveyPayload(p);
   assert.equal(r.ok, false);
   assert.ok(String(r.error).includes('department'));
@@ -129,13 +130,40 @@ test('minimal valid payload → ok + nested surveyAnswers', () => {
   assert.equal(r.data.matchProfile.smoking.label, 'NON_SMOKER');
 });
 
+test('participantMeta.profile.phone 누락 → 400', () => {
+  const p = minimalSurvey();
+  delete p.participantMeta;
+  const r = validateSurveyPayload(p);
+  assert.equal(r.ok, false);
+  assert.ok(String(r.error).includes('phone'));
+});
+
+test('participantMeta.profile.phone 만 있으면 루트 profile로도 통과', () => {
+  const p = minimalSurvey();
+  delete p.participantMeta;
+  p.profile = { phone: '01012345678' };
+  const r = validateSurveyPayload(p);
+  assert.equal(r.ok, true);
+});
+
+test('participantMeta.profile.phone 형식 오류 → 400', () => {
+  const p = minimalSurvey();
+  p.participantMeta = { profile: { phone: '0212345678' } };
+  const r = validateSurveyPayload(p);
+  assert.equal(r.ok, false);
+  assert.ok(String(r.error).includes('010'));
+});
+
 test('participantMeta.profile.department → stored profile + identity columns', () => {
   const p = minimalSurvey();
-  p.participantMeta = { profile: { department: '컴퓨터공학과', gender: '남성' } };
+  p.participantMeta = { profile: { department: '컴퓨터공학과', gender: '남성', phone: '01012345678' } };
   const r = validateSurveyPayload(p);
   assert.equal(r.ok, true);
   assert.equal(r.data.participantMeta.profile.department, '컴퓨터공학과');
-  assert.deepEqual(identityProfileColumnsFromSurveyData(r.data), { department: '컴퓨터공학과' });
+  assert.deepEqual(identityProfileColumnsFromSurveyData(r.data), {
+    department: '컴퓨터공학과',
+    phone: '01012345678',
+  });
 });
 
 test('religion NONE → faith_depth 생략 가능', () => {

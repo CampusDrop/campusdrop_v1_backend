@@ -34,9 +34,24 @@ assert.equal(
 const withSlot = {
   ...baseCore,
   availability: [{ date: '2030-01-01', time_slot: 'evening' }],
+  participantMeta: { profile: { phone: '01012345678' } },
 };
 
 assert.equal(validateFriendSurveyPayload({ ...baseCore }).ok, false);
+assert.equal(
+  validateFriendSurveyPayload({
+    ...baseCore,
+    availability: [{ date: '2030-01-01', time_slot: 'evening' }],
+  }).ok,
+  false,
+);
 assert.equal(validateFriendSurveyPayload(withSlot).ok, true);
+
+const withSlotRootPhone = {
+  ...baseCore,
+  availability: [{ date: '2030-01-01', time_slot: 'evening' }],
+  profile: { phone: '01012345678' },
+};
+assert.equal(validateFriendSurveyPayload(withSlotRootPhone).ok, true);
 
 console.log('friendSurveyValidation tests ok');

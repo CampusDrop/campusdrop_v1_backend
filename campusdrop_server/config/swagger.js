@@ -139,12 +139,22 @@ const swaggerDefinition = {
           profile: {
             type: 'object',
             description:
-              '선택. 이메일 연결 시 `Identity`·`Trait.gender`에 반영. 학교 계정 등에 번호가 아직 없으면 `profile.phone`(010 시작 11자리) 필수 또는 설문으로 이미 번호 저장됐을 경우 생략 가능',
+              '학교 이메일을 **처음** 이 카카오 세션에 연결할 때 필수 객체. 선택 필드로 studentId 등을 함께 보낼 수 있습니다.',
+            required: ['phone'],
             properties: {
               studentId: { type: 'string' },
               birthYear: { type: 'string' },
               gender: { type: 'string', description: '남성·여성 등(서버에서 male/female로 정규화)' },
-              phone: { type: 'string', description: '010 시작 휴대폰 번호(DB에 번호 없을 때 필요)' },
+              department: {
+                type: 'string',
+                nullable: true,
+                description: '등록 학과 문자열 중 하나(선택). 잘못된 값은 400',
+              },
+              phone: {
+                type: 'string',
+                description:
+                  '필수. 비숫자는 제거 후 `010` 접두 포함 11숫자(휴대폰 번호 형식만 허용). 예 `01012345678`, `010-1234-5678`.',
+              },
             },
           },
         },

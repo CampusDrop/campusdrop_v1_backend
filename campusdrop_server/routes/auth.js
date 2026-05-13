@@ -392,7 +392,8 @@ router.post('/send-code', requireUserUuid, async (req, res) => {
  *     security:
  *       - UserUuidAuth: []
  *     summary: |
- *       카카오 로그인(x-user-uuid)된 계정에 학교 이메일(@sju.ac.kr)을 연결합니다. 최초 연결 시 privacyPolicyAgreed true 필수.
+ *       카카오 로그인(x-user-uuid)된 계정에 학교 이메일(@sju.ac.kr)을 연결합니다. 최초 연결 시 privacyPolicyAgreed true·JSON `profile`(필수) 및 `profile.phone`(010 포함 11자리 휴대폰) 필수.
+ *       이미 동일 학교 메일만 코드 재검증하는 경우에는 profile 없이 진행 가능합니다.
  *       linkUuid는 현재 세션과 같을 때만 허용(호환용). 이메일이 다른 계정에 이미 있으면 거절합니다.
  *     requestBody:
  *       required: true
@@ -509,7 +510,7 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
       });
     }
 
-    const prof = parseSignupProfile(req.body?.profile);
+    const prof = parseSignupProfile(req.body?.profile, { phoneRequired: true });
     if (!prof.ok) {
       return res.status(400).json({ error: prof.error });
     }
@@ -526,16 +527,6 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
         where: { email: normalized },
         include: { trait: true },
       });
-
-      const dupEmailOwnerMerge = Boolean(emailOwner && emailOwner.id !== sessionIdentityId);
-      const hasPhoneBeforeLink =
-        Boolean(prof.phone) ||
-        Boolean(sessionIdentity.phoneEncrypted) ||
-        (dupEmailOwnerMerge && Boolean(emailOwner.phoneEncrypted));
-
-      if (!hasPhoneBeforeLink) {
-        throw new Error('VERIFY_CODE_PHONE_REQUIRED');
-      }
 
       if (emailOwner && emailOwner.id !== sessionIdentityId) {
         if (emailOwner.blockedAt) {
@@ -575,11 +566,7 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
         if (!emailOwner.meetingPlace && sessionIdentity.meetingPlace) {
           ownerUpdate.meetingPlace = sessionIdentity.meetingPlace;
         }
-        if (prof.phone) {
-          ownerUpdate.phoneEncrypted = encryptPhoneForStorage(prof.phone);
-        } else if (!emailOwner.phoneEncrypted && sessionIdentity.phoneEncrypted) {
-          ownerUpdate.phoneEncrypted = sessionIdentity.phoneEncrypted;
-        }
+        ownerUpdate.phoneEncrypted = encryptPhoneForStorage(prof.phone);
         if (!emailOwner.trait?.gender) {
           const candidateGender = prof.genderTrait ?? sessionIdentity.trait?.gender ?? null;
           if (candidateGender != null) {
@@ -618,9 +605,7 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
         imageUuidAccessUntil: null,
         privacyPolicyAgreed: true,
       };
-      if (prof.phone) {
-        sessionUpdate.phoneEncrypted = encryptPhoneForStorage(prof.phone);
-      }
+      sessionUpdate.phoneEncrypted = encryptPhoneForStorage(prof.phone);
       if (prof.studentId) sessionUpdate.studentId = prof.studentId;
       if (prof.birthYear) sessionUpdate.birthYear = prof.birthYear;
       if (prof.department) sessionUpdate.department = prof.department;
@@ -660,12 +645,6 @@ router.post('/verify-code', requireUserUuid, async (req, res) => {
     ) {
       return res.status(400).json({
         error: '해당 학교 이메일은 다른 계정에서 이미 사용 중입니다. 해당 카카오 계정으로 로그인해 주세요.',
-      });
-    }
-    if (err instanceof Error && err.message === 'VERIFY_CODE_PHONE_REQUIRED') {
-      return res.status(400).json({
-        error:
-          '학교 이메일 연결에는 휴대폰번호가 필요합니다. `profile.phone`(010 시작 11자리)을 보내 주거나, 설문 저장으로 번호가 이미 있는 경우 생략됩니다.',
       });
     }
     if (err instanceof Error && err.message === 'PHONE_ENCRYPTION_KEY_INVALID') {

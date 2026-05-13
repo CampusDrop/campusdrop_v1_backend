@@ -38,6 +38,7 @@ const { resolveSchoolProofAbsolutePath } = require('../lib/schoolProofMulter');
 const { kstWallClockToUtc, utcToKstSlot } = require('../lib/kstMeetingInstant');
 const { signMeetChatQrToken, meetChatQrSecret } = require('../lib/meetChatQr');
 const { decryptPhoneFromStorage } = require('../lib/phoneCrypto');
+const { runPurgeIdentitiesWithoutPhoneJob } = require('../lib/purgeIdentitiesWithoutPhoneCron');
 
 const CAFE_NAME_MAX_LEN = 200;
 const CAFE_URL_MAX_LEN = 1000;
@@ -792,6 +793,37 @@ router.get('/users', async (req, res) => {
   } catch (err) {
     console.error('admin GET /users error:', err);
     return res.status(500).json({ error: '유저 목록 조회 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/users/purge-without-phone:
+ *   post:
+ *     tags: [Admin]
+ *     summary: 전화번호 미등록 Identity 일괄 삭제
+ *     description: |
+ *       `phone_encrypted`가 null 또는 빈 문자열인 계정만 대상으로, 관련 비-FK 행 정리 후 삭제합니다.
+ *       일별 크론(`purgeIdentitiesWithoutPhoneCron`)과 동일한 로직입니다.
+ *     security:
+ *       - AdminBearerAuth: []
+ */
+router.post('/users/purge-without-phone', async (req, res) => {
+  try {
+    const { candidateCount, deletedCount } = await runPurgeIdentitiesWithoutPhoneJob();
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin.adminId,
+      action: 'ADMIN_PURGE_IDENTITIES_WITHOUT_PHONE',
+      resource: 'POST /api/admin/users/purge-without-phone',
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: { candidateCount, deletedCount },
+    });
+    return res.status(200).json({ candidateCount, deletedCount });
+  } catch (err) {
+    console.error('admin POST /users/purge-without-phone:', err);
+    return res.status(500).json({ error: '전화번호 없는 계정 삭제 작업 중 오류가 발생했습니다.' });
   }
 });
 

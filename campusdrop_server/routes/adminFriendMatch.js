@@ -442,7 +442,7 @@ router.delete('/friend-match/groups/:id', async (req, res) => {
  * 친구 소그룹 강제 매칭 — 3~5명 한 그룹. 해당 주기에 포함된 사용자의 기존 친구 그룹·FRIEND 1:1 매칭을 제거 후 생성.
  */
 router.post('/friend-match/groups/force', async (req, res) => {
-  const body = req.body && typeof body === 'object' ? req.body : {};
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
   const idsParsed = parseFriendGroupIdentityIds(body.identityIds ?? body.identity_ids);
   if (!idsParsed.ok) {
     return res.status(400).json({ error: idsParsed.error });

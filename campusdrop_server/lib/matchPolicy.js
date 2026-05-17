@@ -216,6 +216,32 @@ async function deleteFriendGroupMatchingsForPeriod(prisma, periodStart) {
 }
 
 /**
+ * 해당 매칭 주에 `userIds` 중 한 명이라도 포함된 친구 소그룹 매칭 행을 삭제합니다(멤버는 cascade).
+ * 강제 재배치·관리 삭제 시 이중 소속을 막기 위해 사용합니다.
+ * @param {import('@prisma/client').PrismaClient | import('@prisma/client').Prisma.TransactionClient} prisma
+ * @param {Date} periodStart
+ * @param {string[]} userIds
+ * @returns {Promise<{ deletedGroupIds: string[] }>}
+ */
+async function deleteFriendGroupMatchingsTouchingUsers(prisma, periodStart, userIds) {
+  const ids = [...new Set(userIds)].filter(Boolean);
+  if (ids.length === 0) return { deletedGroupIds: [] };
+
+  const members = await prisma.friendGroupMember.findMany({
+    where: {
+      identityId: { in: ids },
+      matching: { periodStart },
+    },
+    select: { friendGroupMatchingId: true },
+  });
+  const groupIds = [...new Set(members.map((m) => m.friendGroupMatchingId))];
+  if (groupIds.length === 0) return { deletedGroupIds: [] };
+
+  await prisma.friendGroupMatching.deleteMany({ where: { id: { in: groupIds } } });
+  return { deletedGroupIds: groupIds };
+}
+
+/**
  * FRIEND 레거시 1:1 `matchings` + 과거 모든 `friend_group_matchings`(이번 주 제외) 속 쌍.
  * @param {import('@prisma/client').PrismaClient} prisma
  * @param {Date} periodStart
@@ -376,6 +402,7 @@ module.exports = {
   deleteMatchingsForUsersInPeriod,
   findUserFriendGroupMembershipInPeriod,
   deleteFriendGroupMatchingsForPeriod,
+  deleteFriendGroupMatchingsTouchingUsers,
   findUserMatchingInPeriod,
   findUserMatchingForMeetChat,
 };

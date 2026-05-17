@@ -1,4 +1,7 @@
+'use strict';
+
 const express = require('express');
+const { Prisma } = require('@prisma/client');
 const { prisma } = require('../lib/prisma');
 const { writeAccessLog } = require('../lib/accessLog');
 const {
@@ -26,6 +29,15 @@ const {
 const { runWeeklyBatchMatch } = require('../lib/weeklyBatchMatch');
 const { MATCH_TYPE_FRIEND } = require('../lib/matchType');
 const { buildSurveySubmissionWindowForApplicationPeriod } = require('../lib/surveyAvailabilityWindow');
+const {
+  deleteMatchingsForUsersInPeriod,
+  deleteFriendGroupMatchingsTouchingUsers,
+} = require('../lib/matchPolicy');
+const { parseMatchedSlotInput } = require('../lib/parseMatchedSlotInput');
+const { kstWallClockToUtc, utcToKstSlot } = require('../lib/kstMeetingInstant');
+const { buildFriendMatchMatchedDecisionV1 } = require('../lib/friendMatchDecision');
+
+const CAFE_NAME_MAX_LEN = 200;
 
 const router = express.Router();
 
@@ -45,6 +57,42 @@ function parsePeriodStartQuery(raw) {
     return { ok: /** @type {const} */ (false), error: 'periodStart는 유효한 ISO 날짜여야 합니다.' };
   }
   return { ok: /** @type {const} */ (true), value: d };
+}
+
+/**
+ * 관리자 본문 `periodStart` / 기본 현재 매칭 주.
+ * @param {unknown} body
+ */
+function periodStartFromFriendAdminBody(body) {
+  const b = body && typeof body === 'object' ? body : {};
+  const parsed = parsePeriodStartQuery(b.periodStart ?? b.period_start ?? null);
+  if (!parsed.ok) return parsed;
+  return { ok: true, value: parsed.value ?? getMatchingPeriodStart() };
+}
+
+/** @param {unknown} rawIds */
+function parseFriendGroupIdentityIds(rawIds) {
+  if (!Array.isArray(rawIds) || rawIds.length === 0) {
+    return { ok: false, error: 'identityIds는 UUID 문자열 배열이어야 합니다.' };
+  }
+  const seen = new Set();
+  const ids = [];
+  for (let i = 0; i < rawIds.length; i += 1) {
+    const item = rawIds[i];
+    const s = String(item).trim().toLowerCase();
+    if (!isUuid(s)) {
+      return { ok: false, error: `identityIds[${i}]는 유효한 UUID가 아닙니다.` };
+    }
+    if (seen.has(s)) {
+      return { ok: false, error: 'identityIds에 중복된 UUID가 있습니다.' };
+    }
+    seen.add(s);
+    ids.push(s);
+  }
+  if (ids.length < 3 || ids.length > 5) {
+    return { ok: false, error: 'identityIds는 서로 다른 3~5명만 허용됩니다.' };
+  }
+  return { ok: true, value: ids };
 }
 
 /** 친구 매칭 운영 대시보드: KPI·퍼널·신청 창 메타 */
@@ -338,6 +386,246 @@ router.get('/friend-match/access-logs', async (req, res) => {
   } catch (err) {
     console.error('admin GET friend-match/access-logs:', err);
     return res.status(500).json({ error: '감사 로그를 불러오지 못했습니다.' });
+  }
+});
+
+/** 친구 소그룹 매칭 1건 삭제 (`friend_group_matchings.id`). 멤버는 cascade 삭제 */
+router.delete('/friend-match/groups/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!isUuid(String(id))) {
+    return res.status(400).json({ error: '유효한 매칭 UUID가 아닙니다.' });
+  }
+  try {
+    const row = await prisma.friendGroupMatching.findUnique({
+      where: { id: String(id).trim() },
+      select: {
+        id: true,
+        periodStart: true,
+        members: { select: { identityId: true, sortOrder: true } },
+      },
+    });
+    if (!row) {
+      return res.status(404).json({ error: '친구 소그룹 매칭을 찾을 수 없습니다.' });
+    }
+    await prisma.friendGroupMatching.delete({ where: { id: row.id } });
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin.adminId,
+      action: 'ADMIN_FRIEND_GROUP_MATCH_DELETE',
+      resource: `FriendGroupMatching:${row.id}`,
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: {
+        periodStart: row.periodStart ? row.periodStart.toISOString() : null,
+        memberIdentityIds: row.members.sort((a, b) => a.sortOrder - b.sortOrder).map((m) => m.identityId),
+      },
+    });
+    return res.status(200).json({
+      matchType: MATCH_TYPE_FRIEND,
+      message: '친구 소그룹 매칭이 삭제되었습니다.',
+      deleted: {
+        id: row.id,
+        periodStart: row.periodStart ? row.periodStart.toISOString() : null,
+        identityIds: row.members.sort((a, b) => a.sortOrder - b.sortOrder).map((m) => m.identityId),
+      },
+    });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+      return res.status(404).json({ error: '친구 소그룹 매칭을 찾을 수 없습니다.' });
+    }
+    console.error('admin DELETE friend-match/groups/:id:', err);
+    return res.status(500).json({ error: '친구 소그룹 매칭 삭제 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * 친구 소그룹 강제 매칭 — 3~5명 한 그룹. 해당 주기에 포함된 사용자의 기존 친구 그룹·FRIEND 1:1 매칭을 제거 후 생성.
+ */
+router.post('/friend-match/groups/force', async (req, res) => {
+  const body = req.body && typeof body === 'object' ? req.body : {};
+  const idsParsed = parseFriendGroupIdentityIds(body.identityIds ?? body.identity_ids);
+  if (!idsParsed.ok) {
+    return res.status(400).json({ error: idsParsed.error });
+  }
+  /** @type {string[]} */
+  const identityIds = idsParsed.value;
+
+  const psParsed = periodStartFromFriendAdminBody(body);
+  if (!psParsed.ok) {
+    return res.status(400).json({ error: psParsed.error });
+  }
+  /** @type {Date} */
+  const periodStart = psParsed.value;
+
+  const matchedSlotParsed = parseMatchedSlotInput(body.matchedSlot ?? body.matched_slot);
+  if (!matchedSlotParsed.ok) {
+    return res.status(400).json({ error: matchedSlotParsed.error });
+  }
+  const matchedSlot = matchedSlotParsed.value;
+
+  /** @type {Date | null} */
+  let meetingStartsAt = null;
+  const msRaw = body.meetingStartsAt ?? body.meeting_starts_at;
+  if (msRaw !== undefined && msRaw !== null && String(msRaw).trim() !== '') {
+    const d = new Date(String(msRaw));
+    if (Number.isNaN(d.getTime())) {
+      return res.status(400).json({ error: 'meetingStartsAt는 유효한 ISO-8601 날짜여야 합니다.' });
+    }
+    meetingStartsAt = d;
+  } else if (matchedSlot) {
+    const inst = kstWallClockToUtc(matchedSlot.date, matchedSlot.hourStart);
+    meetingStartsAt = inst;
+  }
+
+  /** @type {string | null} */
+  let meetingVenueName = null;
+  const venueIn = body.meetingVenueName ?? body.meeting_venue_name;
+  if (venueIn !== undefined && venueIn !== null) {
+    if (typeof venueIn !== 'string') {
+      return res.status(400).json({ error: 'meetingVenueName은 문자열이어야 합니다.' });
+    }
+    const t = venueIn.trim();
+    meetingVenueName = t.length > 0 ? t.slice(0, CAFE_NAME_MAX_LEN) : null;
+  }
+
+  /** @type {string | null} */
+  let cafeId = null;
+  const cafeIdIn = body.cafeId ?? body.cafe_id;
+  if (cafeIdIn !== undefined && cafeIdIn !== null && cafeIdIn !== '') {
+    if (typeof cafeIdIn !== 'string' || !isUuid(cafeIdIn)) {
+      return res.status(400).json({ error: 'cafeId는 유효한 UUID여야 합니다.' });
+    }
+    const cafeRow = await prisma.cafe.findUnique({
+      where: { id: cafeIdIn },
+      select: { id: true, name: true },
+    });
+    if (!cafeRow) {
+      return res.status(404).json({ error: 'cafeId에 해당하는 카페를 찾을 수 없습니다.' });
+    }
+    cafeId = cafeRow.id;
+    if (venueIn === undefined) {
+      meetingVenueName = cafeRow.name;
+    }
+  }
+
+  try {
+    const [identityRows, traitRows] = await Promise.all([
+      prisma.identity.findMany({
+        where: { id: { in: identityIds } },
+        select: { id: true, blockedAt: true, createdAt: true },
+      }),
+      prisma.trait.findMany({
+        where: { id: { in: identityIds } },
+        select: { id: true },
+      }),
+    ]);
+
+    if (identityRows.length !== identityIds.length) {
+      return res.status(404).json({ error: '존재하지 않는 유저가 포함되어 있습니다.' });
+    }
+    if (identityRows.some((r) => r.blockedAt)) {
+      return res.status(400).json({ error: '차단된 계정은 강제 매칭할 수 없습니다.' });
+    }
+    if (traitRows.length !== identityIds.length) {
+      return res.status(400).json({
+        error: '모든 유저에 Trait(설문) 레코드가 있어야 친구 소그룹 강제 매칭을 할 수 있습니다.',
+      });
+    }
+
+    identityRows.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    const membersBySubmittedAtAsc = identityRows.map((r) => ({
+      identityId: r.id,
+      submittedAt: r.createdAt.toISOString(),
+    }));
+
+    /** @type {{ date: string, time_slot: string } | null} */
+    let slotForDecision = null;
+    if (matchedSlot) {
+      slotForDecision = { date: matchedSlot.date, time_slot: matchedSlot.time_slot };
+    } else if (meetingStartsAt) {
+      const k = utcToKstSlot(meetingStartsAt);
+      if (k) slotForDecision = { date: k.date, time_slot: k.time_slot };
+    }
+
+    const gs = /** @type {3 | 4 | 5} */ (identityIds.length);
+    const matchDecision = buildFriendMatchMatchedDecisionV1({
+      lane: 'HOBBY',
+      slot: slotForDecision,
+      minAvailableCount: null,
+      groupSizeChosen: gs,
+      membersBySubmittedAtAsc,
+    });
+
+    const created = await prisma.$transaction(async (tx) => {
+      const cleared = await deleteFriendGroupMatchingsTouchingUsers(tx, periodStart, identityIds);
+      await deleteMatchingsForUsersInPeriod(tx, periodStart, identityIds, MATCH_TYPE_FRIEND);
+
+      const row = await tx.friendGroupMatching.create({
+        data: {
+          periodStart,
+          matchedAt: new Date(),
+          meetingStartsAt,
+          cafeId,
+          meetingVenueName,
+          matchDecision:
+            typeof matchDecision === 'object' && matchDecision !== null
+              ? /** @type {import('@prisma/client').Prisma.InputJsonValue} */ (
+                  /** @type {object} */ (matchDecision)
+                )
+              : {},
+          members: {
+            create: identityRows.map((r, sortOrder) => ({
+              identityId: r.id,
+              sortOrder,
+            })),
+          },
+        },
+        include: {
+          members: { orderBy: { sortOrder: 'asc' }, select: { identityId: true, sortOrder: true } },
+          cafe: { select: { id: true, name: true } },
+        },
+      });
+      return { row, clearedGroupIds: cleared.deletedGroupIds };
+    });
+
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin.adminId,
+      action: 'ADMIN_FRIEND_GROUP_FORCE_MATCH',
+      resource: `FriendGroupMatching:${created.row.id}`,
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: {
+        periodStart: periodStart.toISOString(),
+        identityIds,
+        clearedPriorFriendGroupIds: created.clearedGroupIds,
+        meetingStartsAt: meetingStartsAt ? meetingStartsAt.toISOString() : null,
+        meetingVenueName,
+        cafeId,
+        matchedSlot,
+      },
+    });
+
+    const { row } = created;
+    return res.status(201).json({
+      matchType: MATCH_TYPE_FRIEND,
+      message: '친구 소그룹 강제 매칭이 등록되었습니다.',
+      replacedPriorFriendGroupIds: created.clearedGroupIds,
+      friendGroupMatching: {
+        id: row.id,
+        periodStart: row.periodStart.toISOString(),
+        matchedAt: row.matchedAt.toISOString(),
+        meetingStartsAt: row.meetingStartsAt ? row.meetingStartsAt.toISOString() : null,
+        meetingVenueName: row.meetingVenueName ?? null,
+        cafeId: row.cafeId ?? null,
+        cafe: row.cafe ?? null,
+        memberIdentityIds: row.members.map((m) => m.identityId),
+        matchDecision: row.matchDecision ?? null,
+      },
+    });
+  } catch (err) {
+    console.error('admin POST friend-match/groups/force:', err);
+    return res.status(500).json({ error: '친구 소그룹 강제 매칭 저장 중 오류가 발생했습니다.' });
   }
 });
 

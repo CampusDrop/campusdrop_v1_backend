@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { prisma } = require('./prisma');
+const { decryptPhoneFromStorage } = require('./phoneCrypto');
 const {
   sendFriendTalkCta,
   assertSolapiFriendTalkEnv,
@@ -10,7 +11,8 @@ const {
   isWithinKakaoFriendTalkSendWindow,
 } = require('./solapiFriendTalkSend');
 const templates = require('./friendTalkTemplates');
-const { resolveMatchMeetingDisplay } = require('./meetingDisplay');
+const { resolveMatchMeetingDisplay, resolveFriendGroupMeetingDisplay } = require('./meetingDisplay');
+const { matchSuccessSendPlanFromResolvedAt } = require('./friendGroupAttendanceSchedule');
 
 const RSVP_YES = 'YES';
 const RSVP_NO = 'NO';
@@ -22,6 +24,9 @@ const SHORT_LINK_MAX_CREATE_ATTEMPTS = 5;
 
 const ACQUISITION_SLUGS = ['everytime', 'instagram', 'friend', 'poster'];
 const FEEDBACK_SLUGS = ['similar', 'different', 'neutral'];
+
+/** 친구 소그룹: 전날 안내·매칭 성사(성공 안내) 모두 참석 YES 최소 인원 */
+const FRIEND_GROUP_QUORUM_YES = 3;
 
 function rsvpSecret() {
   return String(process.env.FRIEND_TALK_RSVP_SECRET || '').trim();
@@ -188,11 +193,18 @@ function parseRsvpToken(token) {
   if (Math.floor(Date.now() / 1000) > Number(exp)) {
     return { ok: false, error: '링크가 만료되었습니다.' };
   }
-  if (phase !== 'monday' && phase !== 'acquisition' && phase !== 'feedback') {
+  if (phase !== 'monday' && phase !== 'acquisition' && phase !== 'feedback' && phase !== 'friend_group_attend') {
     return { ok: false, error: '유효하지 않은 링크입니다.' };
   }
   const choiceStr = String(choice);
-  if (phase === 'monday') {
+  if (phase === 'friend_group_attend') {
+    if (choiceStr !== 'yes' && choiceStr !== 'no') {
+      return { ok: false, error: '유효하지 않은 링크입니다.' };
+    }
+    if (!matchingId) {
+      return { ok: false, error: '유효하지 않은 링크입니다.' };
+    }
+  } else if (phase === 'monday') {
     if (choiceStr !== 'yes' && choiceStr !== 'no') {
       return { ok: false, error: '유효하지 않은 링크입니다.' };
     }
@@ -212,6 +224,41 @@ function parseRsvpToken(token) {
     }
   }
   return { ok: true, data: { matchingId: matchingId || null, identityId, phase, choice: choiceStr } };
+}
+
+/**
+ * 친구 소그룹 참석 확인(토큰의 matchingId = friendGroupMatchingId).
+ * @param {string} friendGroupMatchingId
+ * @param {string} identityId
+ * @param {string} baseUrl
+ */
+async function buildFriendGroupAttendButtons(friendGroupMatchingId, identityId, baseUrl) {
+  const yes = await createFriendTalkRsvpLink({
+    matchingId: friendGroupMatchingId,
+    identityId,
+    phase: 'friend_group_attend',
+    choice: 'yes',
+  });
+  const no = await createFriendTalkRsvpLink({
+    matchingId: friendGroupMatchingId,
+    identityId,
+    phase: 'friend_group_attend',
+    choice: 'no',
+  });
+  return [
+    {
+      buttonName: '참여 가능!',
+      buttonType: 'WL',
+      linkMo: buildShortRsvpUrl(baseUrl, yes),
+      linkPc: buildShortRsvpUrl(baseUrl, yes),
+    },
+    {
+      buttonName: '시간 안돼요',
+      buttonType: 'WL',
+      linkMo: buildShortRsvpUrl(baseUrl, no),
+      linkPc: buildShortRsvpUrl(baseUrl, no),
+    },
+  ];
 }
 
 /**
@@ -330,39 +377,67 @@ async function sendMondayOutcomeMessages(rsvp) {
   await sendFriendTalkCta({ to: rsvp.phoneUserB, text: declineAck, kakaoImageId: imgBad });
 }
 
-async function resolveAfterMondayUpdate(matchingId) {
-  const rsvp = await prisma.matchingFriendTalkRsvp.findUnique({ where: { matchingId } });
-  if (!rsvp || rsvp.mondayOutcome || rsvp.mondayOutcomeSent) {
-    return;
-  }
-  const { mondayRsvpUserA: a, mondayRsvpUserB: b } = rsvp;
-  const mondayOutcome = mondayOutcomeFromRsvps(a, b);
-  if (!mondayOutcome) {
-    return;
-  }
-  const anyNo = mondayOutcome === MONDAY_OUTCOME_CANCELLED;
-  const claimed = await prisma.matchingFriendTalkRsvp.updateMany({
-    where: {
-      matchingId,
-      mondayOutcomeSent: false,
-      mondayOutcome: null,
-      mondayRsvpUserA: a,
-      mondayRsvpUserB: b,
-    },
-    data: { mondayOutcome, skipDayEveReminder: anyNo },
-  });
-  if (claimed.count === 0) {
+/**
+ * 7번: 당일 KST 23:00까지 미응답은 NO. 양쪽 확정 후 KST 20:30 미만이면 결과 즉시, 이후면 익일 08:01 예약.
+ * @param {string} matchingId
+ */
+async function evaluateRomanceMondayResolution(matchingId) {
+  const now = new Date();
+  let rsvp = await prisma.matchingFriendTalkRsvp.findUnique({ where: { matchingId } });
+  if (!rsvp || rsvp.mondayOutcomeSent || rsvp.mondayOutcome != null) {
     return;
   }
 
-  void (async () => {
+  if (rsvp.mondayRsvpDueAt && now.getTime() >= rsvp.mondayRsvpDueAt.getTime()) {
+    const patch = {};
+    if (rsvp.mondayRsvpUserA == null) patch.mondayRsvpUserA = RSVP_NO;
+    if (rsvp.mondayRsvpUserB == null) patch.mondayRsvpUserB = RSVP_NO;
+    if (Object.keys(patch).length) {
+      await prisma.matchingFriendTalkRsvp.update({ where: { matchingId }, data: patch });
+      rsvp = await prisma.matchingFriendTalkRsvp.findUnique({ where: { matchingId } });
+      if (!rsvp) {
+        return;
+      }
+    }
+  }
+
+  const a = rsvp.mondayRsvpUserA;
+  const b = rsvp.mondayRsvpUserB;
+  if (a == null || b == null) {
+    return;
+  }
+
+  const outcome = mondayOutcomeFromRsvps(a, b);
+  if (!outcome) {
+    return;
+  }
+
+  const anyNo = outcome === MONDAY_OUTCOME_CANCELLED;
+  const resolvedAt = new Date();
+  const plan = matchSuccessSendPlanFromResolvedAt(resolvedAt);
+
+  if (plan.mode === 'immediate') {
+    const claimed = await prisma.matchingFriendTalkRsvp.updateMany({
+      where: {
+        matchingId,
+        mondayOutcomeSent: false,
+        mondayOutcome: null,
+        mondayRsvpUserA: a,
+        mondayRsvpUserB: b,
+      },
+      data: { mondayOutcome: outcome, skipDayEveReminder: anyNo },
+    });
+    if (claimed.count === 0) {
+      return;
+    }
     try {
-      await sendMondayOutcomeMessages(rsvp);
+      await sendMondayOutcomeMessages({ ...rsvp, mondayRsvpUserA: a, mondayRsvpUserB: b });
       await prisma.matchingFriendTalkRsvp.update({
         where: { matchingId },
         data: {
           mondayOutcomeSent: true,
           mondayOutcomeSentAt: new Date(),
+          mondayOutcomeScheduledSendAt: null,
         },
       });
     } catch (e) {
@@ -376,7 +451,67 @@ async function resolveAfterMondayUpdate(matchingId) {
         console.error('monday outcome friendtalk revert', revertErr);
       }
     }
-  })();
+    return;
+  }
+
+  await prisma.matchingFriendTalkRsvp.updateMany({
+    where: {
+      matchingId,
+      mondayOutcomeSent: false,
+      mondayOutcome: null,
+      mondayRsvpUserA: a,
+      mondayRsvpUserB: b,
+    },
+    data: {
+      mondayOutcome: outcome,
+      skipDayEveReminder: anyNo,
+      mondayOutcomeScheduledSendAt: plan.scheduledAt,
+    },
+  });
+}
+
+async function runRomanceMondayRsvpDeadlineJob() {
+  const now = new Date();
+  const rows = await prisma.matchingFriendTalkRsvp.findMany({
+    where: {
+      mondayRsvpDueAt: { lte: now },
+      mondayOutcomeSent: false,
+      mondayOutcome: null,
+    },
+    select: { matchingId: true },
+  });
+  for (const r of rows) {
+    try {
+      await evaluateRomanceMondayResolution(r.matchingId);
+    } catch (e) {
+      console.error('[romanceMondayRsvpDeadline]', r.matchingId, e && e.message);
+    }
+  }
+}
+
+async function runRomanceMondayOutcomeScheduledSendJob() {
+  const now = new Date();
+  const rows = await prisma.matchingFriendTalkRsvp.findMany({
+    where: {
+      mondayOutcomeScheduledSendAt: { lte: now },
+      mondayOutcomeSent: false,
+    },
+  });
+  for (const r of rows) {
+    try {
+      await sendMondayOutcomeMessages(r);
+      await prisma.matchingFriendTalkRsvp.update({
+        where: { matchingId: r.matchingId },
+        data: {
+          mondayOutcomeSent: true,
+          mondayOutcomeSentAt: new Date(),
+          mondayOutcomeScheduledSendAt: null,
+        },
+      });
+    } catch (e) {
+      console.error('[romanceMondayOutcomeScheduledSend]', r.matchingId, e && e.message);
+    }
+  }
 }
 
 function canSendDayEveReminder(rsvp) {
@@ -449,6 +584,41 @@ async function handleRsvpClick({ matchingId, identityId, phase, choice }) {
     return handleFeedbackClick(matchingId, identityId, choice);
   }
 
+  if (phase === 'friend_group_attend') {
+    if (!matchingId) {
+      return { ok: false, error: '유효하지 않은 링크입니다.' };
+    }
+    const fgId = matchingId;
+    const member = await prisma.friendGroupMember.findUnique({
+      where: {
+        friendGroupMatchingId_identityId: {
+          friendGroupMatchingId: fgId,
+          identityId,
+        },
+      },
+      include: { matching: { select: { id: true, attendanceResolvedAt: true } } },
+    });
+    if (!member || !member.matching) {
+      return { ok: false, error: '소그룹 매칭을 찾을 수 없습니다.' };
+    }
+    if (member.matching.attendanceResolvedAt) {
+      return { ok: true };
+    }
+    const value = choice === 'yes' || choice === 'YES' ? RSVP_YES : RSVP_NO;
+    await prisma.friendGroupMember.update({
+      where: {
+        friendGroupMatchingId_identityId: {
+          friendGroupMatchingId: fgId,
+          identityId,
+        },
+      },
+      data: { attendanceRsvp: value },
+    });
+    const { evaluateFriendGroupAttendanceResolution } = require('./friendGroupMatchSuccessFriendTalk');
+    await evaluateFriendGroupAttendanceResolution(fgId);
+    return { ok: true };
+  }
+
   if (!matchingId) {
     return { ok: false, error: '유효하지 않은 링크입니다.' };
   }
@@ -481,7 +651,7 @@ async function handleRsvpClick({ matchingId, identityId, phase, choice }) {
       where: { matchingId },
       data,
     });
-    await resolveAfterMondayUpdate(matchingId);
+    await evaluateRomanceMondayResolution(matchingId);
     return { ok: true };
   }
 
@@ -569,6 +739,126 @@ async function sendDayEveReminderForMatching(matchingId) {
   return { ok: true, queued: true };
 }
 
+async function decryptPhoneForFriendTalk(identityId) {
+  const row = await prisma.identity.findUnique({
+    where: { id: identityId },
+    select: { phoneEncrypted: true, blockedAt: true },
+  });
+  if (!row || row.blockedAt || !row.phoneEncrypted) {
+    return null;
+  }
+  try {
+    return decryptPhoneFromStorage(row.phoneEncrypted);
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * 친구 소그룹 6번(전날) — 참석 YES가 최소 인원 이상일 때, 1:1과 동일 본문·이미지.
+ * @param {string} friendGroupMatchingId
+ */
+async function sendDayEveReminderForFriendGroup(friendGroupMatchingId) {
+  const missingEnv = assertSolapiFriendTalkEnv();
+  if (missingEnv) {
+    return { ok: false, error: missingEnv };
+  }
+
+  const group = await prisma.friendGroupMatching.findUnique({
+    where: { id: friendGroupMatchingId },
+    include: {
+      members: {
+        include: { identity: { select: { blockedAt: true } } },
+      },
+    },
+  });
+  if (!group) {
+    return { ok: false, error: '소그룹 매칭을 찾을 수 없습니다.' };
+  }
+  if (group.dayEveReminderSentAt != null) {
+    return { ok: false, error: '이미 전날 안내가 발송된 매칭입니다.' };
+  }
+
+  const yesMembers = group.members.filter((m) => m.attendanceRsvp === RSVP_YES);
+  if (yesMembers.length < FRIEND_GROUP_QUORUM_YES) {
+    return {
+      ok: false,
+      error: `전날 안내 조건이 아닙니다. (참석 가능이 ${FRIEND_GROUP_QUORUM_YES}명 이상인 경우만)`,
+    };
+  }
+
+  const meeting = await resolveFriendGroupMeetingDisplay(friendGroupMatchingId);
+  const text = templates.buildMatchDayEveReminderText({
+    meetingTime: meeting.meetingTime,
+    meetingPlace: meeting.meetingPlace,
+  });
+
+  async function doSend() {
+    try {
+      const kakaoImageId = await getKakaoFriendTalkImageIdFromEnv(FRIEND_TALK_IMG_DAY_EVE);
+      /** @type {unknown[]} */
+      const results = [];
+      let anySent = false;
+      for (const m of yesMembers) {
+        if (m.identity.blockedAt) {
+          continue;
+        }
+        const phone = await decryptPhoneForFriendTalk(m.identityId);
+        if (!phone) {
+          return { ok: false, error: '전날 안내: 참석 확정 멤버 전화번호를 찾을 수 없습니다.' };
+        }
+        const r = await sendFriendTalkCta({
+          to: phone,
+          text,
+          kakaoImageId: kakaoImageId || undefined,
+        });
+        results.push(r);
+        anySent = true;
+      }
+      if (!anySent) {
+        return { ok: false, error: '전날 안내: 발송 가능한 참석 확정 멤버가 없습니다.' };
+      }
+      await prisma.friendGroupMatching.update({
+        where: { id: friendGroupMatchingId },
+        data: { dayEveReminderSentAt: new Date() },
+      });
+      return { ok: true, result: results };
+    } catch (err) {
+      return {
+        ok: false,
+        error:
+          err && err.message ? String(err.message) : 'Solapi 발송 중 오류가 발생했습니다.',
+      };
+    }
+  }
+
+  if (isWithinKakaoFriendTalkSendWindow()) {
+    return await doSend();
+  }
+
+  void doSend().then((r) => {
+    if (!r.ok) {
+      console.error('[sendDayEveReminderForFriendGroup] deferred send failed:', r.error);
+    }
+  });
+  return { ok: true, queued: true };
+}
+
+/**
+ * @param {{ meetingStartsAt: Date | null, dayEveReminderSentAt: Date | null }} group
+ * @param {{ attendanceRsvp: string | null }[]} members
+ */
+function canSendFriendGroupDayEve(group, members) {
+  if (!group.meetingStartsAt) {
+    return false;
+  }
+  if (group.dayEveReminderSentAt != null) {
+    return false;
+  }
+  const yes = members.filter((m) => m.attendanceRsvp === RSVP_YES).length;
+  return yes >= FRIEND_GROUP_QUORUM_YES;
+}
+
 module.exports = {
   RSVP_YES,
   RSVP_NO,
@@ -587,9 +877,15 @@ module.exports = {
   createFriendTalkRsvpLink,
   resolveFriendTalkRsvpLink,
   buildRsvpButtons,
+  buildFriendGroupAttendButtons,
   buildAcquisitionButtons,
   buildFeedbackButtons,
   handleRsvpClick,
+  evaluateRomanceMondayResolution,
+  runRomanceMondayRsvpDeadlineJob,
+  runRomanceMondayOutcomeScheduledSendJob,
   canSendDayEveReminder,
+  canSendFriendGroupDayEve,
   sendDayEveReminderForMatching,
+  sendDayEveReminderForFriendGroup,
 };

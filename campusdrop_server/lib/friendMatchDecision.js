@@ -9,7 +9,7 @@ const FRIEND_MATCH_DECISION_VERSION = /** @type {const} */ (1);
 
 /**
  * 알고리즘 스펙 버전 — 운영 중 규칙이 바뀌면 증가.
- * @see friendGroupPartition.partitionIntoGroupsOf3Or4
+ * @see friendGroupBatchEngine.pickOneGroupSequential (3~5명)
  */
 const ALGO_POLICY_ID = /** @type {const} */ ('min_slot_count_then_earliest__one_group_per_pick__fixed_bucket_order');
 
@@ -25,7 +25,7 @@ const ALGO_POLICY_ID = /** @type {const} */ ('min_slot_count_then_earliest__one_
  *   pick: null | {
  *     minAvailableCount: number,
  *     tiesBrokenByEarliestSlot: boolean,
- *     groupSizeChosen: 3 | 4,
+ *     groupSizeChosen: 3 | 4 | 5,
  *     applicantOrder: 'submitted_at_asc',
  *   },
  *   outcome: 'MATCHED_ONE_GROUP',
@@ -54,7 +54,7 @@ const ALGO_POLICY_ID = /** @type {const} */ ('min_slot_count_then_earliest__one_
  *   favoriteFood?: string,
  *   slot: { date: string, time_slot: string } | null,
  *   minAvailableCount?: number | null,
- *   groupSizeChosen: 3 | 4,
+ *   groupSizeChosen: 3 | 4 | 5,
  *   membersBySubmittedAtAsc: Array<{ identityId: string, submittedAt: string }>,
  * }} p
  */

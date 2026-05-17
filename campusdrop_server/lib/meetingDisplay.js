@@ -59,7 +59,32 @@ async function resolveMatchMeetingDisplay(matchingId) {
   return { meetingTime, meetingPlace, found: true };
 }
 
+/**
+ * 친구 소그룹 매칭 ID로 일시·장소(친구톡 본문용).
+ *
+ * @param {string} friendGroupMatchingId
+ * @returns {Promise<{ meetingTime: string | null, meetingPlace: string | null, found: boolean }>}
+ */
+async function resolveFriendGroupMeetingDisplay(friendGroupMatchingId) {
+  const row = await prisma.friendGroupMatching.findUnique({
+    where: { id: friendGroupMatchingId },
+    select: {
+      id: true,
+      meetingStartsAt: true,
+      meetingVenueName: true,
+      cafe: { select: { name: true } },
+    },
+  });
+  if (!row) {
+    return { meetingTime: null, meetingPlace: null, found: false };
+  }
+  const meetingTime = formatMeetingStartsAtKst(row.meetingStartsAt);
+  const meetingPlace = row.cafe?.name?.trim() || row.meetingVenueName?.trim() || null;
+  return { meetingTime, meetingPlace, found: true };
+}
+
 module.exports = {
   formatMeetingStartsAtKst,
   resolveMatchMeetingDisplay,
+  resolveFriendGroupMeetingDisplay,
 };

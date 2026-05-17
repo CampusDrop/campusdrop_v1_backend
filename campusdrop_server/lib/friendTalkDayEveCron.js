@@ -1,6 +1,11 @@
 const cron = require('node-cron');
 const { prisma } = require('./prisma');
-const { sendDayEveReminderForMatching, canSendDayEveReminder } = require('./friendTalkRsvp');
+const {
+  sendDayEveReminderForMatching,
+  canSendDayEveReminder,
+  sendDayEveReminderForFriendGroup,
+  canSendFriendGroupDayEve,
+} = require('./friendTalkRsvp');
 
 /** matchingStartsAt 의 한국 날짜 YYYY-MM-DD */
 function meetingDateKeyKst(meetingStartsAt) {
@@ -53,6 +58,34 @@ async function runFriendTalkDayEveCronJob() {
       console.warn('[friendTalkDayEveCron] 발송 실패', m.id, sent.error);
     }
   }
+
+  const fgRows = await prisma.friendGroupMatching.findMany({
+    where: { meetingStartsAt: { not: null } },
+    include: { members: { include: { identity: { select: { blockedAt: true } } } } },
+  });
+
+  for (const g of fgRows) {
+    if (!g.meetingStartsAt) continue;
+    if (meetingDateKeyKst(g.meetingStartsAt) !== targetKey) continue;
+    if (!canSendFriendGroupDayEve(g, g.members)) continue;
+
+    const blockedAllYes =
+      g.members.filter((m) => m.attendanceRsvp === 'YES').length > 0 &&
+      g.members
+        .filter((m) => m.attendanceRsvp === 'YES')
+        .every((m) => m.identity.blockedAt);
+    if (blockedAllYes) {
+      console.warn('[friendTalkDayEveCron] 친구 소그룹 YES 전원 차단 건너뜀:', g.id);
+      continue;
+    }
+
+    const sentFg = await sendDayEveReminderForFriendGroup(g.id);
+    if (sentFg.ok) {
+      console.log('[friendTalkDayEveCron] 6번 발송(친구 소그룹):', g.id);
+    } else {
+      console.warn('[friendTalkDayEveCron] 친구 소그룹 발송 실패', g.id, sentFg.error);
+    }
+  }
 }
 
 /** 매일 18:00 KST */
@@ -75,7 +108,7 @@ function scheduleFriendTalkDayEveCron() {
     { timezone: 'Asia/Seoul' },
   );
   console.log(
-    '[friendTalkDayEveCron] 등록됨: 매일 18:00 Asia/Seoul — meetingStartsAt가 내일(KST)인 매칭에 6번',
+    '[friendTalkDayEveCron] 등록됨: 매일 18:00 Asia/Seoul — meetingStartsAt가 내일(KST)인 1:1·친구 소그룹에 6번',
   );
 }
 

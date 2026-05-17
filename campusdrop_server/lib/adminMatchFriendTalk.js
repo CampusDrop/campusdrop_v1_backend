@@ -13,6 +13,7 @@ const {
   getUserIdsMatchedInPeriod,
 } = require('./matchPolicy');
 const { loadEligibleTraits } = require('./weeklyBatchMatch');
+const { attendanceDeadlineUtcForInviteDay } = require('./friendGroupAttendanceSchedule');
 
 /**
  * @param {string} identityId
@@ -121,6 +122,8 @@ async function sendMatchSuccessFriendTalkForMatching(matchingId) {
       phoneUserB,
       mondayRsvpUserA: null,
       mondayRsvpUserB: null,
+      mondayRsvpDueAt: attendanceDeadlineUtcForInviteDay(new Date()),
+      mondayOutcomeScheduledSendAt: null,
       dayEveRsvpUserA: null,
       dayEveRsvpUserB: null,
       skipDayEveReminder: false,
@@ -135,6 +138,8 @@ async function sendMatchSuccessFriendTalkForMatching(matchingId) {
       phoneUserB,
       mondayRsvpUserA: null,
       mondayRsvpUserB: null,
+      mondayRsvpDueAt: attendanceDeadlineUtcForInviteDay(new Date()),
+      mondayOutcomeScheduledSendAt: null,
       dayEveRsvpUserA: null,
       dayEveRsvpUserB: null,
       skipDayEveReminder: false,

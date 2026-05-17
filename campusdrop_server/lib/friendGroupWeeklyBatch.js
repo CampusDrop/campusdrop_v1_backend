@@ -169,7 +169,9 @@ async function runFriendGroupWeeklyBatch(options = {}) {
         };
       });
 
-      const gs = /** @type {3 | 4} */ (g.memberIds.length === 4 ? 4 : 3);
+      const gs = /** @type {3 | 4 | 5} */ (
+        /** @type {number} */ (g.memberIds.length)
+      );
       const matchDecision = buildFriendMatchMatchedDecisionV1({
         lane: g.lane,
         mainHobby: g.mainHobby,

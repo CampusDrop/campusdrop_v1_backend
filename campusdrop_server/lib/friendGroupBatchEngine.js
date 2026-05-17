@@ -115,6 +115,20 @@ function sortParticipantsAsc(a, b) {
 }
 
 /**
+ * @param {number} n eligible count at slot
+ * @returns {number[]} try 5…3
+ */
+function friendGroupSizesToTry(n) {
+  const cap = Math.min(5, n);
+  /** @type {number[]} */
+  const out = [];
+  for (let s = cap; s >= 3; s -= 1) {
+    out.push(s);
+  }
+  return out;
+}
+
+/**
  * @param {FGParticipantEngine[]} eligibleSorted
  * @param {ReadonlySet<string>} forbiddenPairs
  * @returns {string[] | null}
@@ -123,7 +137,7 @@ function pickOneGroupSequential(eligibleSorted, forbiddenPairs) {
   const ids = eligibleSorted.map((p) => p.id);
   const n = ids.length;
   if (n < 3) return null;
-  const sizes = n >= 4 ? [4, 3] : [3];
+  const sizes = friendGroupSizesToTry(n);
   for (const size of sizes) {
     for (let i = 0; i + size <= n; i += 1) {
       const slice = ids.slice(i, i + size);

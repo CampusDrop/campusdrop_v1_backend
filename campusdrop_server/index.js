@@ -14,6 +14,10 @@ const { disconnectRedis } = require('./lib/redis');
 const { scheduleMeetingFeedbackFriendTalkCron } = require('./lib/meetingFeedbackFriendTalkCron');
 const { scheduleFriendTalkDayEveCron } = require('./lib/friendTalkDayEveCron');
 const { scheduleMatchSuccessFriendTalkCron } = require('./lib/matchSuccessFriendTalkCron');
+const {
+  scheduleFriendGroupAttendanceDeadlineCron,
+  scheduleFriendGroupMatchSuccessScheduledSendCron,
+} = require('./lib/friendGroupAttendanceJobsCron');
 const { schedulePurgeIdentitiesWithoutPhoneCron } = require('./lib/purgeIdentitiesWithoutPhoneCron');
 const swaggerUi = require('swagger-ui-express');
 const { buildSwaggerSpec } = require('./config/swagger');
@@ -193,6 +197,8 @@ const server = app.listen(PORT, HOST, () => {
     scheduleMeetingFeedbackFriendTalkCron();
     scheduleFriendTalkDayEveCron();
     scheduleMatchSuccessFriendTalkCron();
+    scheduleFriendGroupAttendanceDeadlineCron();
+    scheduleFriendGroupMatchSuccessScheduledSendCron();
     schedulePurgeIdentitiesWithoutPhoneCron();
 });
 

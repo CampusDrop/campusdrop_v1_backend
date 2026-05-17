@@ -9,6 +9,7 @@ const {
 } = require('../lib/friendTalkRsvp');
 const { resolveMatchMeetingDisplay } = require('../lib/meetingDisplay');
 const templates = require('../lib/friendTalkTemplates');
+const { attendanceDeadlineUtcForInviteDay } = require('../lib/friendGroupAttendanceSchedule');
 
 const router = express.Router();
 
@@ -213,6 +214,8 @@ router.post('/match-complete', async (req, res) => {
         phoneUserB,
         mondayRsvpUserA: null,
         mondayRsvpUserB: null,
+        mondayRsvpDueAt: attendanceDeadlineUtcForInviteDay(new Date()),
+        mondayOutcomeScheduledSendAt: null,
         dayEveRsvpUserA: null,
         dayEveRsvpUserB: null,
         skipDayEveReminder: false,
@@ -227,6 +230,8 @@ router.post('/match-complete', async (req, res) => {
         phoneUserB,
         mondayRsvpUserA: null,
         mondayRsvpUserB: null,
+        mondayRsvpDueAt: attendanceDeadlineUtcForInviteDay(new Date()),
+        mondayOutcomeScheduledSendAt: null,
         dayEveRsvpUserA: null,
         dayEveRsvpUserB: null,
         skipDayEveReminder: false,

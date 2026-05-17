@@ -3,9 +3,12 @@ const { assertSolapiFriendTalkEnv } = require('./solapiFriendTalkSend');
 const { publicApiBase } = require('./friendTalkRsvp');
 const { getMatchingPeriodStart } = require('./matchPolicy');
 const { sendMatchSuccessFriendTalkForAllInPeriod } = require('./adminMatchFriendTalk');
+const {
+  sendFriendGroupAttendanceInviteForAllInPeriod,
+} = require('./friendGroupMatchSuccessFriendTalk');
 
 /**
- * 이번 매칭 주기의 성사 쌍에 7번(참석 확인) 친구톡 일괄 발송 — 관리자 API와 동일 로직.
+ * 이번 매칭 주기: 1:1 로맨스 성사 쌍(7번·RSVP) + 친구 소그룹 참석 확인 초대(월요일).
  */
 async function runMatchSuccessFriendTalkCronJob() {
   const missingEnv = assertSolapiFriendTalkEnv();
@@ -13,23 +16,46 @@ async function runMatchSuccessFriendTalkCronJob() {
     console.warn('[matchSuccessFriendTalkCron] Solapi 미설정:', missingEnv);
     return;
   }
-  if (!publicApiBase()) {
-    console.warn('[matchSuccessFriendTalkCron] PUBLIC_API_URL 미설정 — 건너뜀');
-    return;
-  }
 
   const periodStart = getMatchingPeriodStart();
   try {
-    const result = await sendMatchSuccessFriendTalkForAllInPeriod({ periodStart });
-    console.log('[matchSuccessFriendTalkCron] 발송 요약:', {
-      sent: result.sent,
-      matchingCount: result.matchingCount,
-      skipped: result.skipped.length,
-      failed: result.failed.length,
-      periodStart: result.periodStart,
+    if (publicApiBase()) {
+      const result = await sendMatchSuccessFriendTalkForAllInPeriod({ periodStart });
+      console.log('[matchSuccessFriendTalkCron] 발송 요약(1:1):', {
+        sent: result.sent,
+        matchingCount: result.matchingCount,
+        skipped: result.skipped.length,
+        failed: result.failed.length,
+        periodStart: result.periodStart,
+      });
+      if (result.failed.length) {
+        console.warn('[matchSuccessFriendTalkCron] 일부 실패(1:1):', result.failed.slice(0, 5));
+      }
+    } else {
+      console.warn(
+        '[matchSuccessFriendTalkCron] PUBLIC_API_URL 미설정 — 1:1 매칭 성공(RSVP 버튼) 친구톡 생략',
+      );
+    }
+
+    const fg = await sendFriendGroupAttendanceInviteForAllInPeriod({ periodStart });
+    console.log('[matchSuccessFriendTalkCron] 친구 소그룹 참석 초대:', {
+      groupCount: fg.groupCount,
+      sentMembers: fg.sentMembers,
+      skippedMembers: fg.skippedMembers,
+      groupFailed: fg.groupFailed.length,
+      memberFailed: fg.memberFailed.length,
     });
-    if (result.failed.length) {
-      console.warn('[matchSuccessFriendTalkCron] 일부 실패:', result.failed.slice(0, 5));
+    if (fg.groupFailed.length) {
+      console.warn(
+        '[matchSuccessFriendTalkCron] 친구 소그룹 초대 건 실패:',
+        fg.groupFailed.slice(0, 5),
+      );
+    }
+    if (fg.memberFailed.length) {
+      console.warn(
+        '[matchSuccessFriendTalkCron] 친구 소그룹 멤버 발송 실패:',
+        fg.memberFailed.slice(0, 5),
+      );
     }
   } catch (err) {
     console.error('[matchSuccessFriendTalkCron] job error', err);
@@ -58,7 +84,7 @@ function scheduleMatchSuccessFriendTalkCron() {
     { timezone: 'Asia/Seoul' },
   );
   console.log(
-    '[matchSuccessFriendTalkCron] 등록됨: 매주 월요일 09:00 Asia/Seoul — 매칭 성공(7번) 친구톡',
+    '[matchSuccessFriendTalkCron] 등록됨: 매주 월요일 09:00 Asia/Seoul — 1:1 매칭 성공(7번) + 친구 소그룹 참석 확인',
   );
 }
 

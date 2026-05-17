@@ -231,7 +231,7 @@ model Matching {
   @@map("matchings")
 }
 
-/// 주간 친구 소그룹 매칭. 한 행 = 3~4명이 한 번에 만남(약속 시간·근거 스냅샷 포함).
+/// 주간 친구 소그룹 매칭. 한 행 = 3~5명이 한 번에 만남(약속 시간·근거 스냅샷 포함).
 model FriendGroupMatching {
   id        String   @id @default(uuid()) @db.Uuid
   matchedAt DateTime @default(now()) @map("matched_at")
@@ -243,6 +243,14 @@ model FriendGroupMatching {
   cafeId           String?  @map("cafe_id") @db.Uuid
   /// `buildFriendMatchMatchedDecisionV1` 직렬화(JSON).
   matchDecision Json @map("match_decision")
+  /// 6번(전날) 친구톡 크론·수동 발송 시각 — 중복 방지
+  dayEveReminderSentAt DateTime? @map("day_eve_reminder_sent_at")
+  /// 참석 RSVP 마감(초대 당일 KST 23:00) — UTC
+  attendanceDueAt DateTime? @map("attendance_due_at")
+  /// 전원 응답·마감 처리 완료(확정 안내 즉시 발송 또는 익일 08:01 예약)
+  attendanceResolvedAt DateTime? @map("attendance_resolved_at")
+  /// 확정 안내를 KST 20:30 이후 확정된 경우 익일 08:01 발송용
+  matchSuccessScheduledSendAt DateTime? @map("match_success_scheduled_send_at")
 
   cafe    Cafe?                 @relation(fields: [cafeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   members FriendGroupMember[]
@@ -251,6 +259,7 @@ model FriendGroupMatching {
   @@index([matchedAt])
   @@index([meetingStartsAt])
   @@index([cafeId])
+  @@index([matchSuccessScheduledSendAt])
   @@map("friend_group_matchings")
 }
 
@@ -259,6 +268,12 @@ model FriendGroupMember {
   friendGroupMatchingId String @map("friend_group_matching_id") @db.Uuid
   identityId            String @map("identity_id") @db.Uuid
   sortOrder             Int    @default(0) @map("sort_order")
+  /// 친구톡 참석 확인(YES|NO). 전원 응답 또는 당일 KST 23:00 마감 시 미응답은 NO. 그 후 YES≥3이면 확정 안내(즉시 또는 익일 08:01).
+  attendanceRsvp String? @map("attendance_rsvp")
+  /// 참석 확인 요청 친구톡(월요일 크론) 멤버별 발송 시각
+  attendanceInviteSentAt DateTime? @map("attendance_invite_sent_at")
+  /// 매칭 성공(확정) 친구톡 발송 시각 — 멤버 단위 중복 방지
+  matchSuccessFriendTalkSentAt DateTime? @map("match_success_friend_talk_sent_at")
 
   matching FriendGroupMatching @relation(fields: [friendGroupMatchingId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   identity Identity            @relation(fields: [identityId], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -303,6 +318,8 @@ model MatchingFriendTalkRsvp {
   /// 7번(일정 안내) 버튼 응답: YES | NO
   mondayRsvpUserA String? @map("monday_rsvp_user_a")
   mondayRsvpUserB String? @map("monday_rsvp_user_b")
+  /// 7번 발송 당일 KST 23:00 마감(UTC) — 미응답은 NO 처리
+  mondayRsvpDueAt DateTime? @map("monday_rsvp_due_at")
   /// 6번(전날) 버튼 응답
   dayEveRsvpUserA String? @map("day_eve_rsvp_user_a")
   dayEveRsvpUserB String? @map("day_eve_rsvp_user_b")
@@ -316,6 +333,8 @@ model MatchingFriendTalkRsvp {
   mondayOutcome String? @map("monday_outcome")
   /// 7번 후속 확정/취소 친구톡 발송 완료 시각
   mondayOutcomeSentAt DateTime? @map("monday_outcome_sent_at")
+  /// KST 20:30 이후 확정분은 익일 08:01 발송
+  mondayOutcomeScheduledSendAt DateTime? @map("monday_outcome_scheduled_send_at")
   /// (레거시) 전날 RSVP 후속 발송 여부 — 전날 버튼 제거 후 미사용
   dayEveOutcomeSent Boolean @default(false) @map("day_eve_outcome_sent")
   /// 6번(전날) 친구톡을 수동·크론으로 보낸 시각 — 중복 발송 방지
@@ -323,6 +342,7 @@ model MatchingFriendTalkRsvp {
 
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  @@index([mondayOutcomeScheduledSendAt])
   @@map("matching_friend_talk_rsvps")
 }
 

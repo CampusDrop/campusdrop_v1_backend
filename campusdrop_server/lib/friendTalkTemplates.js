@@ -33,6 +33,48 @@ exports.buildMatchCompleteText = function buildMatchCompleteText(meetingTime, me
   ).replace('#{미팅장소}', meetingPlace);
 };
 
+/** 친구 소그룹 매칭 — 참석 RSVP 버튼 없음(정보 안내) */
+exports.FRIEND_GROUP_MATCH_COMPLETE_TEXT = `[Campus Drop] 친구 매칭 완료 🎉
+
+이번 주 소그룹 친구 매칭이 성사되었습니다!
+같은 일정에 함께 만날 새로운 친구들과 즐거운 시간 되세요.
+
+📍 일시: #{미팅일시}
+📍 장소: #{미팅장소}
+
+약속 시간에 늦지 않게 도착해 주세요. 노쇼는 다른 분들께 큰 피해가 될 수 있으니 일정을 꼭 확인해 주세요! 😊`;
+
+exports.buildFriendGroupMatchCompleteText = function buildFriendGroupMatchCompleteText(
+  meetingTime,
+  meetingPlace,
+) {
+  return exports.FRIEND_GROUP_MATCH_COMPLETE_TEXT.replace(
+    '#{미팅일시}',
+    meetingTimeWithoutYear(meetingTime),
+  ).replace('#{미팅장소}', meetingPlace);
+};
+
+/** 친구 소그룹 — 월요일 참석 가능 여부 확인(3명+ YES 시 아래 매칭 성공 안내 발송) */
+exports.FRIEND_GROUP_ATTENDANCE_INVITE_TEXT = `[Campus Drop] 친구 매칭 일정 안내 · 참석 확인 📅
+
+이번 주 소그룹 매칭 후보 일정이 정해졌습니다!
+아래 일시·장소 기준으로 진행 예정이에요. **참석 가능 인원이 3명 이상** 모이면 매칭이 확정되며, 확정 후 안내를 다시 보내드립니다.
+
+📍 일시: #{미팅일시}
+📍 장소: #{미팅장소}
+
+아래 버튼으로 참석 가능 여부를 알려 주세요.`;
+
+exports.buildFriendGroupAttendanceInviteText = function buildFriendGroupAttendanceInviteText(
+  meetingTime,
+  meetingPlace,
+) {
+  return exports.FRIEND_GROUP_ATTENDANCE_INVITE_TEXT.replace(
+    '#{미팅일시}',
+    meetingTimeWithoutYear(meetingTime),
+  ).replace('#{미팅장소}', meetingPlace);
+};
+
 /** 7번 RSVP — 양쪽 수락 후속 (1-1) */
 exports.MATCH_MONDAY_BOTH_CONFIRMED_TEXT = `🎉 최종 매칭이 확정되었습니다 🎉
 

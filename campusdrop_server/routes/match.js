@@ -11,6 +11,7 @@ const {
   getMatchingPeriodEnd,
   deleteMatchingsForUsersInPeriod,
   findUserMatchingInPeriod,
+  findUserFriendGroupMembershipInPeriod,
 } = require('../lib/matchPolicy');
 const {
   buildSurveySubmissionWindowForApplicationPeriod,
@@ -104,16 +105,50 @@ async function handleWeekStatus(req, res, matchType) {
     return res.status(500).json({ error: '주차별 설문 제출 여부를 확인하지 못했습니다.' });
   }
 
-  let row;
+  let fgMembership = null;
   try {
-    row = await findUserMatchingInPeriod(prisma, self.id, periodStart, matchType);
+    if (matchType === MATCH_TYPE_FRIEND) {
+      fgMembership = await findUserFriendGroupMembershipInPeriod(prisma, self.id, periodStart);
+    }
+  } catch (err) {
+    console.error('match week-status friend group load error:', err);
+    return res.status(500).json({ error: '매칭 이력을 불러오지 못했습니다.' });
+  }
+
+  let row = null;
+  try {
+    if (!fgMembership) {
+      row = await findUserMatchingInPeriod(prisma, self.id, periodStart, matchType);
+    }
   } catch (err) {
     console.error('match week-status matching load error:', err);
     return res.status(500).json({ error: '매칭 이력을 불러오지 못했습니다.' });
   }
 
+    matchType === MATCH_TYPE_FRIEND &&
+    fgMembership &&
+    fgMembership.matching !== null &&
+    fgMembership.matching !== undefined
+  ) {
+    const grp = fgMembership.matching;
+    activeFriendGroupThisPeriod = {
+      friendGroupMatchingId: grp.id,
+      members: grp.members.map((m) => ({
+        identityId: m.identity.id,
+        nickname: m.identity.nickname,
+      })),
+      matchedAt: grp.matchedAt.toISOString(),
+      meetingStartsAt: grp.meetingStartsAt ? grp.meetingStartsAt.toISOString() : null,
+      meetingVenueName: grp.meetingVenueName ?? null,
+      cafeId: grp.cafeId ?? null,
+      cafe: grp.cafe ?? null,
+      matchDecision: grp.matchDecision ?? null,
+      periodStartStored: grp.periodStart ? grp.periodStart.toISOString() : null,
+    };
+  }
+
   let activeMatchingThisPeriod = null;
-  if (row) {
+  if (!activeFriendGroupThisPeriod && row) {
     const isUserA = row.userAId === self.id;
     const partnerId = isUserA ? row.userBId : row.userAId;
     const partner = isUserA ? row.userB : row.userA;
@@ -165,6 +200,7 @@ async function handleWeekStatus(req, res, matchType) {
     activeMatchingThisPeriod,
     readyToCallMatchRequest: matchRequestPrecheckMessages.length === 0,
     matchRequestPrecheckMessages,
+    activeFriendGroupThisPeriod,
   });
 }
 
@@ -175,6 +211,12 @@ async function handleWeekStatus(req, res, matchType) {
  */
 async function handleMatchRequest(req, res, matchType) {
   const self = req.user;
+
+  if (matchType === MATCH_TYPE_FRIEND) {
+    return res.status(400).json({
+      error: '친구 매칭은 주간 배치로만 진행됩니다. 실시간 매칭 요청은 지원하지 않습니다.',
+    });
+  }
 
   if (matchType === MATCH_TYPE_ROMANCE) {
     if (req.body?.matchType != null || req.body?.match_type != null) {

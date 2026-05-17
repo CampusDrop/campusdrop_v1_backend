@@ -56,6 +56,9 @@ model Identity {
   meetingChatMessages MeetingChatMessage[] @relation("MeetingChatSender")
   meetingFeedbacks    MatchingMeetingFeedback[]
 
+  /// 주간 친구 소그룹(3~4명) 매칭 참가 이력
+  friendGroupMembers FriendGroupMember[]
+
   @@map("identities")
 }
 
@@ -228,6 +231,43 @@ model Matching {
   @@map("matchings")
 }
 
+/// 주간 친구 소그룹 매칭. 한 행 = 3~4명이 한 번에 만남(약속 시간·근거 스냅샷 포함).
+model FriendGroupMatching {
+  id        String   @id @default(uuid()) @db.Uuid
+  matchedAt DateTime @default(now()) @map("matched_at")
+  /// `getMatchingPeriodStart` 등과 동일한 주 시작
+  periodStart DateTime @map("period_start")
+  /// 선택된 만남 슬롯의 시작 시각(KST 벽시계 → UTC)
+  meetingStartsAt DateTime? @map("meeting_starts_at")
+  meetingVenueName String? @map("meeting_venue_name")
+  cafeId           String?  @map("cafe_id") @db.Uuid
+  /// `buildFriendMatchMatchedDecisionV1` 직렬화(JSON).
+  matchDecision Json @map("match_decision")
+
+  cafe    Cafe?                 @relation(fields: [cafeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  members FriendGroupMember[]
+
+  @@index([periodStart])
+  @@index([matchedAt])
+  @@index([meetingStartsAt])
+  @@index([cafeId])
+  @@map("friend_group_matchings")
+}
+
+/// 소그룹 매칭의 참가자(정렬 순은 신청 순).
+model FriendGroupMember {
+  friendGroupMatchingId String @map("friend_group_matching_id") @db.Uuid
+  identityId            String @map("identity_id") @db.Uuid
+  sortOrder             Int    @default(0) @map("sort_order")
+
+  matching FriendGroupMatching @relation(fields: [friendGroupMatchingId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  identity Identity            @relation(fields: [identityId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@id([friendGroupMatchingId, identityId])
+  @@index([identityId])
+  @@map("friend_group_members")
+}
+
 /// 매칭 카페 마스터. 관리자 콘솔에서 등록/수정/비활성화. 배치 매칭은 `isActive=true`만 `displayOrder` 순으로 라운드로빈 배정합니다.
 model Cafe {
   id             String   @id @default(uuid()) @db.Uuid
@@ -245,6 +285,7 @@ model Cafe {
   updatedAt      DateTime @updatedAt @map("updated_at")
 
   matchings Matching[]
+  friendGroupMatchings FriendGroupMatching[]
 
   @@index([isActive, displayOrder])
   @@map("cafes")

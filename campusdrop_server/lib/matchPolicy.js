@@ -2,7 +2,7 @@
  * Python `final_score` 기준. 미만이면 실시간 매칭 응답·배치 DB 저장 모두 제외.
  */
 const MIN_MATCH_SCORE = 50;
-const { MATCH_TYPE_ROMANCE } = require('./matchType');
+const { MATCH_TYPE_ROMANCE, MATCH_TYPE_FRIEND } = require('./matchType');
 const { resolveMeetingStartsAt } = require('./meetingStartsAtDerive');
 const { CHAT_OPEN_AFTER_MS, isWithinUserChatWindow } = require('./meetChatRoom');
 
@@ -156,6 +156,21 @@ async function getUserIdsMatchedInPeriod(prisma, periodStart, matchType = MATCH_
     set.add(r.userAId);
     set.add(r.userBId);
   }
+
+  if (matchType === MATCH_TYPE_FRIEND) {
+    const gRows = await prisma.friendGroupMember.findMany({
+      where: {
+        matching: {
+          periodStart,
+        },
+      },
+      select: { identityId: true },
+    });
+    for (const rr of gRows) {
+      set.add(rr.identityId);
+    }
+  }
+
   return set;
 }
 
@@ -191,6 +206,68 @@ async function deleteMatchingsForUsersInPeriod(
           OR: [{ userAId: { in: userIds } }, { userBId: { in: userIds } }],
         },
       ],
+    },
+  });
+}
+
+/** 이번 `period_start` 해당 주 친구 소그룹 행 삭제 후 재배치할 때 사용. */
+async function deleteFriendGroupMatchingsForPeriod(prisma, periodStart) {
+  await prisma.friendGroupMatching.deleteMany({ where: { periodStart } });
+}
+
+/**
+ * FRIEND 레거시 1:1 `matchings` + 과거 모든 `friend_group_matchings`(이번 주 제외) 속 쌍.
+ * @param {import('@prisma/client').PrismaClient} prisma
+ * @param {Date} periodStart
+ * @returns {Promise<string[][]>}
+ */
+async function getForbiddenPairTuplesForFriendGroupBatch(prisma, periodStart) {
+  const base = await getForbiddenPairTuplesForBatch(prisma, periodStart, MATCH_TYPE_FRIEND);
+  const seen = new Set(base.map(([a, b]) => `${a}|${b}`));
+  /** @type {string[][]} */
+  const out = [...base];
+  const groups = await prisma.friendGroupMatching.findMany({
+    where: { NOT: { periodStart } },
+    select: { members: { select: { identityId: true } } },
+  });
+  for (const g of groups) {
+    const ids = g.members.map((m) => m.identityId);
+    for (let i = 0; i < ids.length; i += 1) {
+      for (let j = i + 1; j < ids.length; j += 1) {
+        const [lo, hi] = [ids[i], ids[j]].sort();
+        const key = `${lo}|${hi}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push([lo, hi]);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * 주간 소그룹 매칭: 본인이 속한 행 멤버십(+그룹·동료 회원 포함).
+ *
+ * @param {import('@prisma/client').PrismaClient} prisma
+ * @param {string} userId
+ * @param {Date} periodStart
+ */
+async function findUserFriendGroupMembershipInPeriod(prisma, userId, periodStart) {
+  return prisma.friendGroupMember.findFirst({
+    where: {
+      identityId: userId,
+      matching: { periodStart },
+    },
+    include: {
+      matching: {
+        include: {
+          cafe: { select: { id: true, name: true, naverPlaceUrl: true, isActive: true } },
+          members: {
+            orderBy: { sortOrder: 'asc' },
+            include: { identity: { select: { id: true, nickname: true } } },
+          },
+        },
+      },
     },
   });
 }
@@ -293,9 +370,12 @@ module.exports = {
   getMatchingPeriodEnd,
   getHistoricalPartnerIds,
   getForbiddenPairTuplesForBatch,
+  getForbiddenPairTuplesForFriendGroupBatch,
   getSamePeriodLockedPairTuplesExceptUser,
   getUserIdsMatchedInPeriod,
   deleteMatchingsForUsersInPeriod,
+  findUserFriendGroupMembershipInPeriod,
+  deleteFriendGroupMatchingsForPeriod,
   findUserMatchingInPeriod,
   findUserMatchingForMeetChat,
 };

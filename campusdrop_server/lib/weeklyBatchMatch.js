@@ -17,6 +17,7 @@ const {
   buildSurveySubmissionWindowForApplicationPeriod,
   getSurveyTargetPeriodStartForApplicationPeriod,
 } = require('./surveyAvailabilityWindow');
+const { loadEligibleWeeklyTraits: loadEligibleTraits } = require('./eligibleWeeklyTraits');
 const { slimMatchReportForDb } = require('./slimMatchReport');
 const { meetingStartsAtFromMatchReport } = require('./meetingStartsAtDerive');
 const { isBinaryTraitGender, normalizeTraitGender } = require('./genderPolicy');
@@ -28,67 +29,6 @@ const DEFAULT_BATCH_TIMEOUT_MS = 300_000;
 function batchTimeoutMs() {
   const n = Number(process.env.MATCHING_BATCH_TIMEOUT_MS);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_BATCH_TIMEOUT_MS;
-}
-
-/**
- * 목표 매칭 주 직전 신청 기간에 설문을 제출한 유저만 배치 대상.
- * @param {{
- *   prismaClient?: import('@prisma/client').PrismaClient,
- *   periodStart?: Date,
- *   matchType?: 'ROMANCE' | 'FRIEND',
- * }} [options]
- */
-async function loadEligibleTraits(options = {}) {
-  const prismaClient = options.prismaClient || prisma;
-  const periodStart = options.periodStart || getMatchingPeriodStart();
-  const matchType = options.matchType || MATCH_TYPE_ROMANCE;
-  const targetPeriodStart = getSurveyTargetPeriodStartForApplicationPeriod(periodStart);
-
-  const submissionInclude = {
-    identity: {
-      select: {
-        id: true,
-        nickname: true,
-        email: true,
-        kakaoId: true,
-        kakaoLinkPin: true,
-        birthYear: true,
-        department: true,
-        blockedAt: true,
-        createdAt: true,
-      },
-    },
-  };
-
-  const submissions =
-    matchType === MATCH_TYPE_ROMANCE
-      ? await prismaClient.weeklySurveySubmission.findMany({
-          where: { targetPeriodStart },
-          include: submissionInclude,
-        })
-      : await prismaClient.friendWeeklySurveySubmission.findMany({
-          where: { targetPeriodStart },
-          include: submissionInclude,
-        });
-  return submissions
-    .map((s) => ({
-      id: s.identityId,
-      gender: s.gender,
-      surveyData: s.surveyData,
-      surveySubmittedAt: s.submittedAt,
-      updatedAt: s.updatedAt,
-      targetPeriodStart: s.targetPeriodStart,
-      targetPeriodEnd: s.targetPeriodEnd,
-      identity: s.identity,
-    }))
-    .filter(
-      (t) =>
-        t.surveyData !== null &&
-        t.surveyData !== undefined &&
-        typeof t.surveyData === 'object' &&
-        t.identity &&
-        !t.identity.blockedAt,
-    );
 }
 
 /**
@@ -272,6 +212,11 @@ async function runWeeklyBatchMatch(options = {}) {
   };
 
   try {
+    if (matchType === MATCH_TYPE_FRIEND) {
+      const { runFriendGroupWeeklyBatch } = require('./friendGroupWeeklyBatch');
+      return runFriendGroupWeeklyBatch(options);
+    }
+
     const activeCafes = await prisma.cafe.findMany({
       where: { isActive: true },
       orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],

@@ -3,6 +3,7 @@ const {
   getMatchingPeriodStart,
   getMatchingPeriodEnd,
   getUserIdsMatchedInPeriod,
+  findUserFriendGroupMembershipInPeriod,
 } = require('./matchPolicy');
 const {
   buildSurveySubmissionWindowForApplicationPeriod,
@@ -43,7 +44,8 @@ async function computeFriendPeriodKpis(applicationPeriodStart) {
   const { targetPeriodStart, identityIds } = await friendWeeklyDistinctSubmitters(applicationPeriodStart);
   const submissionWindow = buildSurveySubmissionWindowForApplicationPeriod(applicationPeriodStart);
 
-  const [eligible, matchedIds, matchedPairsCount, verifiedAmong, traitFriendCount] = await Promise.all([
+  const [eligible, matchedIds, matchedPairsCount, friendGroupCountThisPeriod, verifiedAmong, traitFriendCount] =
+    await Promise.all([
     loadEligibleTraits({ periodStart: applicationPeriodStart, matchType: MATCH_TYPE_FRIEND }),
     getUserIdsMatchedInPeriod(prisma, applicationPeriodStart, MATCH_TYPE_FRIEND),
     prisma.matching.count({
@@ -56,6 +58,9 @@ async function computeFriendPeriodKpis(applicationPeriodStart) {
           },
         ],
       },
+    }),
+    prisma.friendGroupMatching.count({
+      where: { periodStart: applicationPeriodStart },
     }),
     identityIds.length === 0
       ? 0
@@ -83,6 +88,7 @@ async function computeFriendPeriodKpis(applicationPeriodStart) {
       eligibleForBatch: eligible.length,
       matchedUsersInPeriod: matchedIds.size,
       matchedPairs: matchedPairsCount,
+      matchedFriendGroups: friendGroupCountThisPeriod,
       waitingUnmatched,
       traitWithFriendSurveyTotal: traitFriendCount,
     },
@@ -103,7 +109,7 @@ async function friendMatchTrends(days = 14) {
   const d = Math.min(Math.max(Number(days) || 14, 1), 90);
   const since = new Date(Date.now() - d * 86400000);
 
-  const [submissions, pairings, batchRuns] = await Promise.all([
+  const [submissions, pairings, groupings, batchRuns] = await Promise.all([
     prisma.$queryRaw`
       SELECT (DATE(s.submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Seoul')) AS day, COUNT(*)::int AS count
       FROM friend_weekly_survey_submissions s
@@ -118,6 +124,13 @@ async function friendMatchTrends(days = 14) {
       GROUP BY 1
       ORDER BY 1 ASC
     `,
+    prisma.$queryRaw`
+      SELECT (DATE(g.matched_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Seoul')) AS day, COUNT(*)::int AS count
+      FROM friend_group_matchings g
+      WHERE g.matched_at >= ${since}
+      GROUP BY 1
+      ORDER BY 1 ASC
+    `,
     prisma.adminBatchMatchRun.groupBy({
       by: ['status'],
       where: { matchType: MATCH_TYPE_FRIEND, startedAt: { gte: since } },
@@ -125,11 +138,41 @@ async function friendMatchTrends(days = 14) {
     }),
   ]);
 
+  const byDay = /** @type {Record<string, { pair: number, group: number }>} */ ({});
+  const rowKey = (/** @type {{ day: unknown, count: unknown } | null} */ row) => {
+    if (!row || row.day == null) return null;
+    let s;
+    const d = /** @type {{ toISOString?: () => string }} | string} */ (row.day);
+    if (d && typeof d.toISOString === 'function') s = d.toISOString().slice(0, 10);
+    else s = String(row.day).slice(0, 10);
+    return s.length >= 10 ? s : null;
+  };
+  for (const r of pairings) {
+    const k = rowKey(/** @type {any} */ (r));
+    if (!k) continue;
+    byDay[k] = byDay[k] || { pair: 0, group: 0 };
+    byDay[k].pair += Number(/** @type {any} */ (r).count) || 0;
+  }
+  for (const r of groupings) {
+    const k = rowKey(/** @type {any} */ (r));
+    if (!k) continue;
+    byDay[k] = byDay[k] || { pair: 0, group: 0 };
+    byDay[k].group += Number(/** @type {any} */ (r).count) || 0;
+  }
+  const mergedDays = Object.entries(byDay).map(([day, v]) => ({
+    day,
+    count: v.pair + v.group,
+    pairCount: v.pair,
+    groupCount: v.group,
+  }));
+
   return {
     days: d,
     since: since.toISOString(),
     friendWeeklySubmissionsByDay: submissions,
-    friendMatchingsByDay: pairings,
+    friendMatchingsByDay: mergedDays,
+    friendMatchingsLegacyPairsByDay: pairings,
+    friendGroupMatchingsByDay: groupings,
     batchRunsByStatus: batchRuns.map((r) => ({ status: r.status, count: r._count._all })),
   };
 }
@@ -235,7 +278,7 @@ async function friendUserOverview(identityId) {
   const submissionWindow = buildSurveySubmissionWindowForApplicationPeriod(applicationPeriodStart);
   const availabilityWindow = buildSurveyAvailabilityWindow();
 
-  const [identity, trait, weeklyRow, activeMatch, matchedIds, safety] = await Promise.all([
+  const [identity, trait, weeklyRow, activeMatch, matchedIds, safety, fgMem] = await Promise.all([
     prisma.identity.findUnique({
       where: { id: identityId },
       select: {
@@ -292,6 +335,7 @@ async function friendUserOverview(identityId) {
     }),
     getUserIdsMatchedInPeriod(prisma, applicationPeriodStart, MATCH_TYPE_FRIEND),
     friendUserSafetyFlags(identityId),
+    findUserFriendGroupMembershipInPeriod(prisma, identityId, applicationPeriodStart),
   ]);
 
   if (!identity) {
@@ -316,9 +360,11 @@ async function friendUserOverview(identityId) {
 
   const canSubmitDuringWindow = availabilityWindow.isOpen && !identity.blockedAt;
 
+  const fgMatching = fgMem?.matching ?? null;
+
   let matchedPartnerId = null;
   let matchingId = null;
-  if (activeMatch) {
+  if (activeMatch && !fgMatching) {
     matchingId = activeMatch.id;
     matchedPartnerId = activeMatch.userAId === identityId ? activeMatch.userBId : activeMatch.userAId;
   }
@@ -355,16 +401,26 @@ async function friendUserOverview(identityId) {
       hasFriendWeeklySnapshot: Boolean(weeklyRow),
       weeklySubmittedAt: weeklyRow?.submittedAt?.toISOString() ?? null,
       inMatchedSetThisPeriod: matchedIds.has(identityId),
-      activeMatching: activeMatch
+      activeFriendGroup: fgMatching
         ? {
+            friendGroupMatchingId: fgMatching.id,
+            matchedAt: fgMatching.matchedAt.toISOString(),
+            memberCount: fgMatching.members.length,
+            meetingStartsAt: fgMatching.meetingStartsAt ? fgMatching.meetingStartsAt.toISOString() : null,
+            meetingVenueName: fgMatching.meetingVenueName,
+          }
+        : null,
+      activeMatching:
+        fgMatching || !activeMatch
+          ? null
+          : {
             matchingId,
             partnerId: matchedPartnerId,
             score: activeMatch.score,
             matchedAt: activeMatch.matchedAt.toISOString(),
             meetingStartsAt: activeMatch.meetingStartsAt ? activeMatch.meetingStartsAt.toISOString() : null,
             meetingVenueName: activeMatch.meetingVenueName,
-          }
-        : null,
+          },
     },
     participation: {
       canOpenSurveyDuringApplyWindow: canSubmitDuringWindow && Boolean(identity.schoolProofVerifiedAt),
@@ -396,7 +452,7 @@ async function friendUserTimeline(identityId) {
     return null;
   }
 
-  const [proofs, friendWeeklies, romanceWeeklies, matchings, adminLogs] = await Promise.all([
+  const [proofs, friendWeeklies, romanceWeeklies, matchings, friendGroupMatchings, adminLogs] = await Promise.all([
     prisma.schoolProofSubmission.findMany({
       where: { identityId },
       orderBy: { createdAt: 'asc' },
@@ -431,6 +487,19 @@ async function friendUserTimeline(identityId) {
         matchedAt: true,
         periodStart: true,
         meetingStartsAt: true,
+      },
+    }),
+    prisma.friendGroupMatching.findMany({
+      where: { members: { some: { identityId } } },
+      orderBy: { matchedAt: 'desc' },
+      take: 40,
+      select: {
+        id: true,
+        matchedAt: true,
+        periodStart: true,
+        meetingStartsAt: true,
+        matchDecision: true,
+        members: { select: { identityId: true } },
       },
     }),
     prisma.accessLog.findMany({
@@ -510,6 +579,20 @@ async function friendUserTimeline(identityId) {
       detail: {
         targetPeriodStart: fw.targetPeriodStart.toISOString(),
         targetPeriodEnd: fw.targetPeriodEnd.toISOString(),
+      },
+    });
+  }
+
+  for (const gm of friendGroupMatchings) {
+    events.push({
+      at: gm.matchedAt.toISOString(),
+      type: 'friend_group_matched',
+      title: '친구 소그룹 매칭(배치)',
+      detail: {
+        friendGroupMatchingId: gm.id,
+        memberCount: gm.members.length,
+        periodStart: gm.periodStart ? gm.periodStart.toISOString() : null,
+        meetingStartsAt: gm.meetingStartsAt ? gm.meetingStartsAt.toISOString() : null,
       },
     });
   }

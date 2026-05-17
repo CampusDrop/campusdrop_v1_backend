@@ -72,7 +72,52 @@ function assignCafesToPairs(rows, cafes) {
   return rows;
 }
 
+/**
+ * `friend_group` 배치 결과용. 각 row에 미리 채워 둔 `slotKey`(예 `2026-06-09|14`) 기준 라운드로빈.
+ *
+ * @template {{ slotKey?: string | null, score?: number }}
+ * @param {unknown[]} rows
+ * @param {Array<{ id: string, name: string }>} cafes
+ */
+function assignCafesToFriendGroupRows(rows, cafes) {
+  if (!Array.isArray(rows) || rows.length === 0 || !Array.isArray(cafes) || cafes.length === 0) return rows;
+
+  /** @type {Map<string, any[]>} */
+  const groups = new Map();
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const key = typeof /** @type {Record<string, unknown>} */ (row).slotKey === 'string'
+      ? String(/** @type {Record<string, unknown>} */ (row).slotKey || '').trim()
+      : '';
+    if (!key) continue;
+    const arr = groups.get(key);
+    if (arr) {
+      arr.push(row);
+    } else {
+      groups.set(key, [row]);
+    }
+  }
+
+  for (const arr of groups.values()) {
+    arr.sort((a, b) => {
+      const sa = typeof /** @type {Record<string, unknown>} */ (a).score === 'number' ? /** @type {Record<string, unknown>} */ (a).score : 0;
+      const sb = typeof /** @type {Record<string, unknown>} */ (b).score === 'number' ? /** @type {Record<string, unknown>} */ (b).score : 0;
+      return sb - sa;
+    });
+    for (let i = 0; i < arr.length; i += 1) {
+      const cafe = cafes[i % cafes.length];
+      /** @type {Record<string, unknown>} */
+      const r = arr[i];
+      r.cafeId = cafe.id;
+      r.meetingVenueName = cafe.name;
+    }
+  }
+
+  return rows;
+}
+
 module.exports = {
   assignCafesToPairs,
+  assignCafesToFriendGroupRows,
   slotKeyFromInsertRow,
 };

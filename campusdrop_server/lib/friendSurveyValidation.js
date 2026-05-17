@@ -14,21 +14,34 @@ const {
 /** @type {readonly FriendMainHobby[]} */
 const FRIEND_MAIN_HOBBIES = Object.freeze(['GAME_PC', 'EXERCISE', 'CAFE', 'CULTURE']);
 
+/** 배치 버킷 순서(친구 소그룹 매칭). `FRIEND_DETAIL_BY_MAIN` 과 동일한 값이어야 함. */
+const FRIEND_DETAIL_ORDER_BY_MAIN = Object.freeze({
+  GAME_PC: Object.freeze(['LOL_DUO', 'STEAM_COOP', 'PUBG', 'OVERWATCH2']),
+  EXERCISE: Object.freeze(['GYM', 'RUN_WALK', 'BALL_SPORTS', 'ACTIVE_FUN']),
+  CAFE: Object.freeze(['AESTHETIC_CAFE', 'DESSERT_TOUR', 'LOCAL_EATS', 'CAFE_STUDY']),
+  CULTURE: Object.freeze(['MOVIE_OTT', 'EXHIBITION_POPUP', 'LIVE_SHOW', 'ESCAPE_WORKSHOP']),
+});
+
 /** @type {Record<FriendMainHobby, ReadonlySet<string>>} */
 const FRIEND_DETAIL_BY_MAIN = Object.freeze({
-  GAME_PC: new Set(['LOL_DUO', 'STEAM_COOP', 'PUBG', 'OVERWATCH2']),
-  EXERCISE: new Set(['GYM', 'RUN_WALK', 'BALL_SPORTS', 'ACTIVE_FUN']),
-  CAFE: new Set(['AESTHETIC_CAFE', 'DESSERT_TOUR', 'LOCAL_EATS', 'CAFE_STUDY']),
-  CULTURE: new Set(['MOVIE_OTT', 'EXHIBITION_POPUP', 'LIVE_SHOW', 'ESCAPE_WORKSHOP']),
+  GAME_PC: new Set(FRIEND_DETAIL_ORDER_BY_MAIN.GAME_PC),
+  EXERCISE: new Set(FRIEND_DETAIL_ORDER_BY_MAIN.EXERCISE),
+  CAFE: new Set(FRIEND_DETAIL_ORDER_BY_MAIN.CAFE),
+  CULTURE: new Set(FRIEND_DETAIL_ORDER_BY_MAIN.CULTURE),
 });
 
 const FRIEND_DRINKING = Object.freeze(
   new Set(['ALCOHOL_MAX', 'LIGHT_DRINK', 'PARTY_VIBE', 'NON_ALCOHOL']),
 );
 const FRIEND_SMOKING = Object.freeze(new Set(['SMOKER', 'NON_SMOKER']));
-const FRIEND_FAVORITE_FOOD = Object.freeze(
-  new Set(['SPICY_BOLD', 'RICE_HEARTY', 'MEAT_GREASY', 'CLEAN_MEAL']),
-);
+const FRIEND_FAVORITE_FOOD_ORDER = Object.freeze([
+  'SPICY_BOLD',
+  'RICE_HEARTY',
+  'MEAT_GREASY',
+  'CLEAN_MEAL',
+]);
+
+const FRIEND_FAVORITE_FOOD = Object.freeze(new Set(FRIEND_FAVORITE_FOOD_ORDER));
 
 const MAIN_HOBBY_SET = new Set(FRIEND_MAIN_HOBBIES);
 
@@ -147,6 +160,8 @@ module.exports = {
   validateFriendSurveyCoreFields,
   FRIEND_MAIN_HOBBIES,
   FRIEND_DETAIL_BY_MAIN,
+  FRIEND_DETAIL_ORDER_BY_MAIN,
+  FRIEND_FAVORITE_FOOD_ORDER,
   FRIEND_DRINKING,
   FRIEND_SMOKING,
   FRIEND_FAVORITE_FOOD,

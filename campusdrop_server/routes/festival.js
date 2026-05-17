@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const express = require('express');
 const { Prisma } = require('@prisma/client');
 const { prisma } = require('../lib/prisma');
-const { requireFestivalUserUuid } = require('../lib/requireFestivalUser');
+const { requireFestivalPhone } = require('../lib/requireFestivalPhone');
 const { normalizeKoMobile } = require('../lib/festivalPhone');
 const {
   resolveSlotHoursFromConfig,
@@ -130,11 +130,13 @@ function applicationJson(row, hours) {
 /**
  * GET /api/festival/me
  * — 오늘·회차 기준으로 “화면에 보일 신청”만 내려줍니다(14시 지난 1회차 APPLIED 는 NONE).
+ * — `?phone=` 또는 `x-festival-phone` (010… 11자리, 본인인증 없음).
  */
-router.get('/me', requireFestivalUserUuid, async (req, res) => {
+router.get('/me', requireFestivalPhone, async (req, res) => {
   try {
     const now = new Date();
-    const fu = req.festivalUser;
+    /** @type {string} */
+    const phone = /** @type {{ festivalPhoneNormalized: string }} */ (req).festivalPhoneNormalized;
 
     const cfg = await prisma.festivalConfig.findFirst({
       where: { isActive: true },
@@ -153,9 +155,18 @@ router.get('/me', requireFestivalUserUuid, async (req, res) => {
       ? slotUtcStarts(kstToday, hours)
       : { slot1Utc: null, slot2Utc: null };
 
-    const app = await prisma.festivalApplication.findUnique({
-      where: { userId: fu.id },
-    });
+    const appliedLocalDay = kstToday ? dateOnlyFromYmd(kstToday) : null;
+    const app =
+      appliedLocalDay == null
+        ? null
+        : await prisma.festivalApplication.findUnique({
+            where: {
+              phone_appliedLocalDate: {
+                phone,
+                appliedLocalDate: appliedLocalDay,
+              },
+            },
+          });
 
     const base = {
       nowUtc: now.toISOString(),
@@ -229,14 +240,11 @@ router.get('/me', requireFestivalUserUuid, async (req, res) => {
 /**
  * POST /api/festival/mood-apply
  */
-router.post('/mood-apply', requireFestivalUserUuid, async (req, res) => {
+router.post('/mood-apply', async (req, res) => {
   const parsed = parseMoodApplyBody(req.body);
   if (!parsed.ok) {
     return res.status(400).json({ error: parsed.error });
   }
-
-  /** @type {import('@prisma/client').FestivalUser} */
-  const fu = req.festivalUser;
 
   try {
     const outcome = await prisma.$transaction(
@@ -277,8 +285,10 @@ router.post('/mood-apply', requireFestivalUserUuid, async (req, res) => {
           appliedLocalDate,
         });
 
+        const phoneDateKey = { phone: form.phone, appliedLocalDate };
+
         const existing = await tx.festivalApplication.findUnique({
-          where: { userId: fu.id },
+          where: { phone_appliedLocalDate: phoneDateKey },
         });
 
         async function countCap() {
@@ -291,7 +301,7 @@ router.post('/mood-apply', requireFestivalUserUuid, async (req, res) => {
         async function upsertApplied({ receptionId }) {
           if (existing && existing.status === 'DROPPED') {
             const updated = await tx.festivalApplication.update({
-              where: { userId: fu.id },
+              where: { phone_appliedLocalDate: phoneDateKey },
               data: {
                 receptionId,
                 matchingSlot: targetSlot,
@@ -317,7 +327,6 @@ router.post('/mood-apply', requireFestivalUserUuid, async (req, res) => {
 
           const created = await tx.festivalApplication.create({
             data: {
-              userId: fu.id,
               receptionId,
               matchingSlot: targetSlot,
               appliedLocalDate,
@@ -377,7 +386,7 @@ router.post('/mood-apply', requireFestivalUserUuid, async (req, res) => {
             }
             const receptionId = await allocateReceptionIdInsideTx(tx);
             const updated = await tx.festivalApplication.update({
-              where: { userId: fu.id },
+              where: { phone_appliedLocalDate: phoneDateKey },
               data: {
                 receptionId,
                 matchingSlot: 2,
@@ -401,7 +410,31 @@ router.post('/mood-apply', requireFestivalUserUuid, async (req, res) => {
           }
 
           if (existing.matchingSlot === targetSlot && sameDay) {
-            return { tag: 'conflict_applied', receptionId: existing.receptionId };
+            if (existing.gender !== form.gender) {
+              const appliedCnt = await countCap();
+              if (appliedCnt >= cfg.maxCapacityPerGender) {
+                return { tag: 'full' };
+              }
+            }
+            const updated = await tx.festivalApplication.update({
+              where: { phone_appliedLocalDate: phoneDateKey },
+              data: {
+                peopleCount: form.peopleCount,
+                vibe: form.vibe,
+                gender: form.gender,
+                phone: form.phone,
+                instagram: form.instagram,
+                contactPreference: form.contactPreference,
+                status: 'APPLIED',
+                deletedAt: null,
+              },
+            });
+            return {
+              tag: 'ok',
+              receptionId: updated.receptionId,
+              status: updated.status,
+              matchingSlot: updated.matchingSlot,
+            };
           }
 
           return { tag: 'conflict_applied', receptionId: existing.receptionId };

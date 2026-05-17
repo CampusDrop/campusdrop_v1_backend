@@ -388,23 +388,9 @@ model LandingLikeCounter {
   @@map("landing_like_counters")
 }
 
-/// 축제 매칭 이벤트 전용 유저(`Identity`와 별도). OAuth 후 쿠키·`x-user-uuid`에는 `uuid`(공개 식별자)를 넣습니다.
-model FestivalUser {
-  id        BigInt   @id @default(autoincrement())
-  uuid      String   @unique @default(uuid()) @db.Uuid
-  kakaoId   String   @unique @map("kakao_id")
-  createdAt DateTime @default(now()) @map("created_at")
-
-  applications FestivalApplication[]
-
-  @@map("festival_users")
-}
-
-/// 축제 매칭 신청 1건(유저당 최대 1행; Drop 시 소프트 삭제 후 동일 행 상태만 갱신).
+/// 축제 매칭 신청 1건(KST `appliedLocalDate`·`normalizeKoMobile` 기준 전화번호당 1행; 본인확인 없음·번호 오기재는 이용자 책임).
 model FestivalApplication {
   id                BigInt        @id @default(autoincrement())
-  userId            BigInt        @unique @map("user_id")
-  user              FestivalUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
   receptionId       String        @unique @map("reception_id")
   /// 1 = 첫 매칭(예: 14시), 2 = 두 번째(예: 17시) — 제출 시각·설정 시간으로 결정
   matchingSlot      Int           @default(1) @map("matching_slot")
@@ -420,6 +406,7 @@ model FestivalApplication {
   createdAt         DateTime      @default(now()) @map("created_at")
   deletedAt         DateTime?     @map("deleted_at")
 
+  @@unique([phone, appliedLocalDate], map: "festival_applications_phone_applied_local_date_key")
   @@index([gender, status], map: "festival_applications_gender_status_idx")
   @@index([gender, status, matchingSlot, appliedLocalDate], map: "festival_applications_slot_day_idx")
   @@map("festival_applications")

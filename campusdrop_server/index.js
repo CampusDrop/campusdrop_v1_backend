@@ -93,8 +93,6 @@ app.get('/openapi.json', (req, res) => {
 
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/admin', require('./routes/festivalAdmin'));
-app.use('/api/auth', require('./routes/festivalAuthCallback'));
-app.use('/api/users', require('./routes/festivalUsers'));
 app.use('/api/festival', require('./routes/festival'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/auth', require('./routes/schoolProof'));

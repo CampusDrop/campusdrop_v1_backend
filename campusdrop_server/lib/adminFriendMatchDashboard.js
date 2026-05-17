@@ -816,6 +816,7 @@ module.exports = {
   applyFriendRuntimeSettingsPatch,
   RUNTIME_SETTING_SCHEMA,
   listAdminAccessLogs,
+  getMatchingPeriodStart,
   getMatchingPeriodEnd,
   getSurveyTargetPeriodStartForApplicationPeriod,
   getUserIdsMatchedInPeriod,

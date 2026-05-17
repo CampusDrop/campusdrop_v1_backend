@@ -41,6 +41,7 @@ const { signMeetChatQrToken, meetChatQrSecret } = require('../lib/meetChatQr');
 const { decryptPhoneFromStorage } = require('../lib/phoneCrypto');
 const { runPurgeIdentitiesWithoutPhoneJob } = require('../lib/purgeIdentitiesWithoutPhoneCron');
 const { normalizeMatchType, MATCH_TYPE_ROMANCE } = require('../lib/matchType');
+const { effectiveLanesByIdentityIds } = require('../lib/surveyEffectiveLanes');
 
 const CAFE_NAME_MAX_LEN = 200;
 const CAFE_URL_MAX_LEN = 1000;
@@ -740,7 +741,9 @@ router.get('/users', async (req, res) => {
           trait: {
             select: {
               surveyData: true,
+              friendSurveyData: true,
               surveySubmittedAt: true,
+              friendSurveySubmittedAt: true,
               updatedAt: true,
               gender: true,
             },
@@ -749,10 +752,28 @@ router.get('/users', async (req, res) => {
       }),
     ]);
 
+    const traitRowsForLanes = rows
+      .filter((r) => r.trait)
+      .map((r) => ({
+        id: r.id,
+        surveyData: r.trait.surveyData,
+        friendSurveyData: r.trait.friendSurveyData,
+        gender: r.trait.gender,
+        surveySubmittedAt: r.trait.surveySubmittedAt,
+        friendSurveySubmittedAt: r.trait.friendSurveySubmittedAt,
+        updatedAt: r.trait.updatedAt,
+      }));
+    const lanesById = await effectiveLanesByIdentityIds(
+      rows.map((r) => r.id),
+      { traitRows: traitRowsForLanes },
+    );
+
     const users = rows.map((row) => {
-      const { availability, matchAvailability } = meetingAvailabilityFromSurveyData(
-        row.trait?.surveyData,
-      );
+      const lanes = lanesById.get(row.id);
+      const romance = lanes?.romance;
+      const effectiveRomanceSurvey = romance?.surveyData ?? null;
+      const { availability, matchAvailability } =
+        meetingAvailabilityFromSurveyData(effectiveRomanceSurvey);
       return {
         id: row.id,
         nickname: row.nickname ?? null,
@@ -768,13 +789,9 @@ router.get('/users', async (req, res) => {
         kakaoLinked: Boolean(row.kakaoId && String(row.kakaoId).trim()),
         blockedAt: row.blockedAt,
         createdAt: row.createdAt,
-        hasSurvey:
-          row.trait &&
-          row.trait.surveyData !== null &&
-          row.trait.surveyData !== undefined &&
-          typeof row.trait.surveyData === 'object',
+        hasSurvey: Boolean(romance?.hasSurvey),
         surveyUpdatedAt: row.trait?.updatedAt ?? null,
-        surveySubmittedAt: row.trait?.surveySubmittedAt ?? null,
+        surveySubmittedAt: romance?.surveySubmittedAt ?? null,
         gender: row.trait?.gender ?? null,
         availability,
         matchAvailability,
@@ -834,7 +851,7 @@ router.post('/users/purge-without-phone', async (req, res) => {
  * /api/admin/surveys:
  *   get:
  *     tags: [Admin]
- *     summary: 모든 설문(Trait) 응답
+ *     summary: 모든 설문(Trait) — 유저가 보는 것과 동일하게 Trait 우선·없으면 최신 주간 스냅샷 병합
  *     security:
  *       - AdminBearerAuth: []
  */
@@ -855,7 +872,9 @@ router.get('/surveys', async (req, res) => {
           id: true,
           gender: true,
           surveyData: true,
+          friendSurveyData: true,
           surveySubmittedAt: true,
+          friendSurveySubmittedAt: true,
           updatedAt: true,
           identity: {
             select: { blockedAt: true, createdAt: true, kakaoId: true },
@@ -863,6 +882,20 @@ router.get('/surveys', async (req, res) => {
         },
       }),
     ]);
+
+    const traitRowsForLanes = traits.map((t) => ({
+      id: t.id,
+      surveyData: t.surveyData,
+      friendSurveyData: t.friendSurveyData,
+      gender: t.gender,
+      surveySubmittedAt: t.surveySubmittedAt,
+      friendSurveySubmittedAt: t.friendSurveySubmittedAt,
+      updatedAt: t.updatedAt,
+    }));
+    const lanesById = await effectiveLanesByIdentityIds(
+      traits.map((t) => t.id),
+      { traitRows: traitRowsForLanes },
+    );
 
     await writeAccessLog({
       actorType: 'admin',
@@ -878,14 +911,27 @@ router.get('/surveys', async (req, res) => {
       total,
       limit,
       offset,
-      surveys: traits.map((t) => ({
-        userId: t.id,
-        gender: t.gender,
-        surveyData: t.surveyData,
-        surveySubmittedAt: t.surveySubmittedAt,
-        updatedAt: t.updatedAt,
-        identity: t.identity,
-      })),
+      surveys: traits.map((t) => {
+        const lanes = lanesById.get(t.id);
+        const romance = lanes?.romance;
+        const friend = lanes?.friend;
+        return {
+          userId: t.id,
+          gender: t.gender,
+          surveyData: romance?.surveyData ?? null,
+          friendSurveyData: friend?.surveyData ?? null,
+          surveySubmittedAt: romance?.surveySubmittedAt ?? null,
+          friendSurveySubmittedAt: friend?.surveySubmittedAt ?? null,
+          hasRomanceSurvey: Boolean(romance?.hasSurvey),
+          hasFriendSurvey: Boolean(friend?.hasSurvey),
+          romanceWeeklySubmittedForTargetWeek: romance?.weeklySubmittedForTargetWeek ?? false,
+          friendWeeklySubmittedForTargetWeek: friend?.weeklySubmittedForTargetWeek ?? false,
+          romanceLatestWeeklySubmission: romance?.latestWeeklySubmission ?? null,
+          friendLatestWeeklySubmission: friend?.latestWeeklySubmission ?? null,
+          updatedAt: t.updatedAt,
+          identity: t.identity,
+        };
+      }),
     });
   } catch (err) {
     console.error('admin GET /surveys error:', err);
@@ -2179,6 +2225,25 @@ router.get('/users/:id', async (req, res) => {
       return res.status(404).json({ error: '사용자를 찾을 수 없습니다.' });
     }
 
+    const lanesMap = await effectiveLanesByIdentityIds([id], {
+      traitRows: row.trait
+        ? [
+            {
+              id: row.trait.id,
+              surveyData: row.trait.surveyData,
+              friendSurveyData: row.trait.friendSurveyData,
+              gender: row.trait.gender,
+              surveySubmittedAt: row.trait.surveySubmittedAt,
+              friendSurveySubmittedAt: row.trait.friendSurveySubmittedAt,
+              updatedAt: row.trait.updatedAt,
+            },
+          ]
+        : [],
+    });
+    const lanes = lanesMap.get(id);
+    const romance = lanes?.romance;
+    const friend = lanes?.friend;
+
     await writeAccessLog({
       actorType: 'admin',
       actorId: null,
@@ -2211,7 +2276,16 @@ router.get('/users/:id', async (req, res) => {
         ? {
             id: row.trait.id,
             gender: row.trait.gender,
-            surveyData: row.trait.surveyData,
+            surveyData: romance?.surveyData ?? null,
+            friendSurveyData: friend?.surveyData ?? null,
+            surveySubmittedAt: romance?.surveySubmittedAt ?? null,
+            friendSurveySubmittedAt: friend?.surveySubmittedAt ?? null,
+            hasRomanceSurvey: Boolean(romance?.hasSurvey),
+            hasFriendSurvey: Boolean(friend?.hasSurvey),
+            romanceWeeklySubmittedForTargetWeek: romance?.weeklySubmittedForTargetWeek ?? false,
+            friendWeeklySubmittedForTargetWeek: friend?.weeklySubmittedForTargetWeek ?? false,
+            romanceLatestWeeklySubmission: romance?.latestWeeklySubmission ?? null,
+            friendLatestWeeklySubmission: friend?.latestWeeklySubmission ?? null,
             updatedAt: row.trait.updatedAt,
           }
         : null,

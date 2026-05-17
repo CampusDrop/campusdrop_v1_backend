@@ -19,6 +19,12 @@ const { assertSolapiFriendTalkEnv, sendFriendTalkCta } = require('../lib/solapiF
 const templates = require('../lib/friendTalkTemplates');
 const { publicApiBase, buildAcquisitionButtons } = require('../lib/friendTalkRsvp');
 const { MATCH_TYPE_FRIEND, MATCH_TYPE_ROMANCE } = require('../lib/matchType');
+const {
+  buildRomanceLane,
+  buildFriendLane,
+  loadLatestRomanceWeekly,
+  loadLatestFriendWeekly,
+} = require('../lib/surveyEffectiveLanes');
 
 const router = express.Router();
 
@@ -31,100 +37,6 @@ function phoneFromExistingIdentity(user) {
   } catch (_) {
     return null;
   }
-}
-
-function hasJsonSurvey(value) {
-  return Boolean(
-    value !== null && value !== undefined && typeof value === 'object' && !Array.isArray(value),
-  );
-}
-
-function isoOrNull(d) {
-  return d ? new Date(d).toISOString() : null;
-}
-
-/** @param {{ id: string; targetPeriodStart: Date; targetPeriodEnd: Date; submittedAt: Date } | null} row */
-function weeklySummaryFromRow(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    targetPeriodStart: new Date(row.targetPeriodStart).toISOString(),
-    targetPeriodEnd: new Date(row.targetPeriodEnd).toISOString(),
-    submittedAt: new Date(row.submittedAt).toISOString(),
-  };
-}
-
-function loadLatestRomanceWeekly(identityId) {
-  return prisma.weeklySurveySubmission.findFirst({
-    where: { identityId },
-    orderBy: { submittedAt: 'desc' },
-    select: {
-      id: true,
-      targetPeriodStart: true,
-      targetPeriodEnd: true,
-      submittedAt: true,
-      surveyData: true,
-    },
-  });
-}
-
-function loadLatestFriendWeekly(identityId) {
-  return prisma.friendWeeklySurveySubmission.findFirst({
-    where: { identityId },
-    orderBy: { submittedAt: 'desc' },
-    select: {
-      id: true,
-      targetPeriodStart: true,
-      targetPeriodEnd: true,
-      submittedAt: true,
-      surveyData: true,
-    },
-  });
-}
-
-/**
- * Trait JSON이 비어 있을 때 같은 레인의 가장 최근 주간 스냅샷으로 설문 본문을 보강합니다.
- */
-function buildRomanceLane(traitRow, weeklyForTargetWeek, latestWeekly) {
-  const fromTrait = hasJsonSurvey(traitRow?.surveyData);
-  const data = fromTrait
-    ? traitRow.surveyData
-    : latestWeekly && hasJsonSurvey(latestWeekly.surveyData)
-      ? latestWeekly.surveyData
-      : null;
-  const hasSurvey = hasJsonSurvey(data);
-  const submittedAt = fromTrait ? traitRow?.surveySubmittedAt : latestWeekly?.submittedAt ?? null;
-  return {
-    hasSurvey,
-    surveyData: hasSurvey ? data : null,
-    gender: traitRow?.gender ?? null,
-    surveySubmittedAt: isoOrNull(submittedAt),
-    updatedAt: isoOrNull(submittedAt),
-    weeklySubmittedForTargetWeek: Boolean(weeklyForTargetWeek),
-    latestWeeklySubmission: weeklySummaryFromRow(latestWeekly),
-  };
-}
-
-function buildFriendLane(traitRow, weeklyForTargetWeek, latestWeekly) {
-  const fromTrait = hasJsonSurvey(traitRow?.friendSurveyData);
-  const data = fromTrait
-    ? traitRow.friendSurveyData
-    : latestWeekly && hasJsonSurvey(latestWeekly.surveyData)
-      ? latestWeekly.surveyData
-      : null;
-  const hasSurvey = hasJsonSurvey(data);
-  const submittedAt = fromTrait
-    ? traitRow?.friendSurveySubmittedAt
-    : latestWeekly?.submittedAt ?? null;
-  return {
-    hasSurvey,
-    surveyData: hasSurvey ? data : null,
-    gender: traitRow?.gender ?? null,
-    surveySubmittedAt: isoOrNull(submittedAt),
-    updatedAt: isoOrNull(submittedAt),
-    weeklySubmittedForTargetWeek: Boolean(weeklyForTargetWeek),
-    latestWeeklySubmission: weeklySummaryFromRow(latestWeekly),
-  };
 }
 
 /**

@@ -23,6 +23,7 @@ const { exchangeKakaoCode, fetchKakaoUserId } = require('../lib/kakaoOAuth');
 const { userHasSchoolVerification } = require('../lib/surveyAccess');
 const { decryptPhoneFromStorage, encryptPhoneForStorage } = require('../lib/phoneCrypto');
 const { registerNewUser } = require('../lib/nickname');
+const { clearFestivalSessionCookie } = require('../lib/festivalCookie');
 
 const router = express.Router();
 
@@ -781,10 +782,11 @@ router.get('/me', requireUserUuid, async (req, res) => {
  *               $ref: '#/components/schemas/LogoutResponse'
  */
 router.post('/logout', (req, res) => {
+  clearFestivalSessionCookie(res);
   return res.status(200).json({
     ok: true,
     message:
-      '서버에 저장된 로그인 토큰은 없습니다. 클라이언트에서 x-user-uuid(또는 이를 둔 쿠키)를 삭제하면 로그아웃됩니다.',
+      '서버에 저장된 로그인 토큰은 없습니다. 클라이언트에서 x-user-uuid(또는 이를 둔 쿠키)를 삭제하면 로그아웃됩니다. 축제 전용 세션 쿠키는 서버에서 만료 헤더로 정리했습니다.',
   });
 });
 

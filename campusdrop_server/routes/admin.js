@@ -40,7 +40,7 @@ const { kstWallClockToUtc, utcToKstSlot } = require('../lib/kstMeetingInstant');
 const { signMeetChatQrToken, meetChatQrSecret } = require('../lib/meetChatQr');
 const { decryptPhoneFromStorage } = require('../lib/phoneCrypto');
 const { runPurgeIdentitiesWithoutPhoneJob } = require('../lib/purgeIdentitiesWithoutPhoneCron');
-const { normalizeMatchType, MATCH_TYPE_ROMANCE } = require('../lib/matchType');
+const { normalizeMatchType, MATCH_TYPE_ROMANCE, MATCH_TYPE_FRIEND } = require('../lib/matchType');
 const { effectiveLanesByIdentityIds } = require('../lib/surveyEffectiveLanes');
 
 const CAFE_NAME_MAX_LEN = 200;
@@ -948,6 +948,8 @@ router.get('/surveys', async (req, res) => {
  *     description: |
  *       각 행에 `userAEmail`·`userBEmail`(`Identity.email`, 없으면 null), 성별, 카카오 연동 식별자,
  *       배치 시 저장된 `matchReport`(Python `match_report` JSON, 없으면 null) 포함.
+ *       친구 소그룹 배치는 `friend_group_matchings`에 저장되며, `matchType=FRIEND` 이거나 필터 없을 때
+ *       `friendGroupMatchings`로 같은 `weeks`·`periodStart~periodEnd` 창을 조회합니다.
  *       기본은 최근 5개 매칭 주(현재 주 포함, `periodStart` 또는 레거시 `matchedAt` 구간).
  *       `weeks`로 최근 N주(1~52)를 지정할 수 있고, `includeAll=1`이면 전체 이력.
  *     security:
@@ -981,6 +983,11 @@ router.get('/matches', async (req, res) => {
         : includeAll
           ? {}
           : periodWindow;
+
+  const loadFriendGroups =
+    matchTypeFilter !== MATCH_TYPE_ROMANCE &&
+    (matchTypeFilter === MATCH_TYPE_FRIEND || matchTypeFilter === null);
+  const friendGroupWhere = includeAll ? {} : { periodStart: { gte: ps, lt: pe } };
 
   try {
     const [total, matchings] = await prisma.$transaction([
@@ -1028,6 +1035,40 @@ router.get('/matches', async (req, res) => {
       }),
     ]);
 
+    let friendGroupTotal = 0;
+    /** @type {Awaited<ReturnType<typeof prisma.friendGroupMatching.findMany>>} */
+    let friendGroupRows = [];
+    if (loadFriendGroups) {
+      [friendGroupTotal, friendGroupRows] = await prisma.$transaction([
+        prisma.friendGroupMatching.count({ where: friendGroupWhere }),
+        prisma.friendGroupMatching.findMany({
+          where: friendGroupWhere,
+          orderBy: { matchedAt: 'desc' },
+          skip: offset,
+          take: limit,
+          include: {
+            members: {
+              orderBy: { sortOrder: 'asc' },
+              select: {
+                identityId: true,
+                sortOrder: true,
+                identity: {
+                  select: {
+                    id: true,
+                    nickname: true,
+                    email: true,
+                    kakaoId: true,
+                    trait: { select: { gender: true } },
+                  },
+                },
+              },
+            },
+            cafe: { select: { id: true, name: true, isActive: true, naverPlaceUrl: true } },
+          },
+        }),
+      ]);
+    }
+
     await writeAccessLog({
       actorType: 'admin',
       actorId: null,
@@ -1035,7 +1076,13 @@ router.get('/matches', async (req, res) => {
       resource: `GET /api/admin/matches?limit=${limit}&offset=${offset}&includeAll=${includeAll ? 1 : 0}&weeks=${weeks}`,
       ip: req.ip || null,
       userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
-      metadata: { total, returned: matchings.length, weeks: includeAll ? null : weeks },
+      metadata: {
+        total,
+        returned: matchings.length,
+        friendGroupTotal,
+        friendGroupReturned: friendGroupRows.length,
+        weeks: includeAll ? null : weeks,
+      },
     });
 
     return res.status(200).json({
@@ -1046,6 +1093,7 @@ router.get('/matches', async (req, res) => {
       weeks: includeAll ? null : weeks,
       periodStart: includeAll ? null : ps.toISOString(),
       periodEnd: includeAll ? null : pe.toISOString(),
+      friendGroupTotal: loadFriendGroups ? friendGroupTotal : 0,
       matches: matchings.map((m) => ({
         id: m.id,
         matchType: m.matchType,
@@ -1075,6 +1123,27 @@ router.get('/matches', async (req, res) => {
         friendTalkRsvp: slimFriendTalkRsvp(m.friendTalkRsvp),
         matchReport: m.matchReport ?? null,
       })),
+      friendGroupMatchings: loadFriendGroups
+        ? friendGroupRows.map((g) => ({
+            id: g.id,
+            periodStart: g.periodStart,
+            matchedAt: g.matchedAt,
+            meetingStartsAt: g.meetingStartsAt ?? null,
+            meetingVenueName: g.meetingVenueName ?? null,
+            cafeId: g.cafeId ?? null,
+            cafe: g.cafe ?? null,
+            matchDecision: g.matchDecision ?? null,
+            members: g.members.map((mem) => ({
+              identityId: mem.identityId,
+              sortOrder: mem.sortOrder,
+              nickname: mem.identity?.nickname ?? null,
+              email: mem.identity?.email ?? null,
+              kakaoId: mem.identity?.kakaoId ?? null,
+              gender: normalizeTraitGender(mem.identity?.trait?.gender) ?? null,
+              genderLabel: traitGenderLabelKo(mem.identity?.trait?.gender) || null,
+            })),
+          }))
+        : [],
     });
   } catch (err) {
     console.error('admin GET /matches error:', err);

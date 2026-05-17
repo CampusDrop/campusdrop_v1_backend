@@ -34,10 +34,20 @@ if (prismaArgs.length === 0) {
   process.exit(1);
 }
 
-const result = spawnSync('npx', ['prisma', ...prismaArgs], {
+// `prisma validate`는 datasource URL 해석 시 env가 필요하지만, 스키마 문법만 보려면 실제 DB가 없어도 됩니다.
+if (prismaArgs[0] === 'validate' && !process.env.DATABASE_URL) {
+  process.env.DATABASE_URL = 'postgresql://127.0.0.1:5432/prisma_schema_validate_dummy';
+}
+
+const prismaBin =
+  process.platform === 'win32'
+    ? path.join(serverRoot, 'node_modules', '.bin', 'prisma.cmd')
+    : path.join(serverRoot, 'node_modules', '.bin', 'prisma');
+
+const result = spawnSync(prismaBin, prismaArgs, {
   cwd: serverRoot,
   stdio: 'inherit',
-  shell: true,
+  shell: process.platform === 'win32',
   env: process.env,
 });
 

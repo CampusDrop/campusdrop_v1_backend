@@ -17,6 +17,7 @@
     "db:generate": "prisma generate",
     "db:push": "node scripts/prisma-with-repo-root-env.cjs db push",
     "db:migrate": "node scripts/prisma-with-repo-root-env.cjs migrate dev",
+    "db:validate": "node scripts/prisma-with-repo-root-env.cjs validate",
     "db:studio": "node scripts/prisma-with-repo-root-env.cjs studio",
     "db:seed": "prisma db seed",
     "nickname:migrate": "node scripts/migrate-existing-users-nicknames.js",
@@ -24,7 +25,8 @@
     "admin:upsert": "node scripts/upsert-admin-from-env.js",
     "postinstall": "prisma generate",
     "smoke": "node scripts/smoke-api.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test \"./test/**/*.test.js\"",
+    "lint": "eslint ."
   },
   "prisma": {
     "seed": "node prisma/seed.js"
@@ -48,6 +50,9 @@
     "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "eslint": "^9.39.2",
+    "globals": "^17.0.0",
     "nodemon": "^3.1.14",
     "prisma": "^6.19.0"
   }

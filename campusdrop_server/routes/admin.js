@@ -877,7 +877,8 @@ router.get('/surveys', async (req, res) => {
  *       각 행에 `userAEmail`·`userBEmail`(`Identity.email`, 없으면 null), 성별, 카카오 연동 식별자,
  *       배치 시 저장된 `matchReport`(Python `match_report` JSON, 없으면 null) 포함.
  *       친구 소그룹 배치는 `friend_group_matchings`에 저장되며, `matchType=FRIEND` 이거나 필터 없을 때
- *       `friendGroupMatchings`로 같은 `weeks`·`periodStart~periodEnd` 창을 조회합니다.
+ *       `friendGroupMatchings`로 비슷한 주간 창을 조회합니다. 소그룹만 신청 주 대신 만남 대상 주 시작일이
+ *       저장된 경우 기본 목록에서 빠지지 않도록 상한을 1주 더 넓힙니다.
  *       기본은 최근 5개 매칭 주(현재 주 포함, `periodStart` 또는 레거시 `matchedAt` 구간).
  *       `weeks`로 최근 N주(1~52)를 지정할 수 있고, `includeAll=1`이면 전체 이력.
  *     security:
@@ -915,7 +916,10 @@ router.get('/matches', async (req, res) => {
   const loadFriendGroups =
     matchTypeFilter !== MATCH_TYPE_ROMANCE &&
     (matchTypeFilter === MATCH_TYPE_FRIEND || matchTypeFilter === null);
-  const friendGroupWhere = includeAll ? {} : { periodStart: { gte: ps, lt: pe } };
+  /** @see prisma/schema.prisma FriendGroupMatching.periodStart — 신청 주 앵커 권장. 만남 대상 주 시작일이 들어가면 값이 `pe` 경계와 같아져 `lt: pe`만으로는 행이 빠짐 → 상한만 +1주. */
+  const friendGroupWhere = includeAll
+    ? {}
+    : { periodStart: { gte: ps, lt: new Date(pe.getTime() + MS_PER_WEEK) } };
 
   try {
     const [total, matchings] = await prisma.$transaction([

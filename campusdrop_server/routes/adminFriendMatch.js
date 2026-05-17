@@ -67,7 +67,10 @@ function periodStartFromFriendAdminBody(body) {
   const b = body && typeof body === 'object' ? body : {};
   const parsed = parsePeriodStartQuery(b.periodStart ?? b.period_start ?? null);
   if (!parsed.ok) return parsed;
-  return { ok: true, value: parsed.value ?? getMatchingPeriodStart() };
+  /** 배치·GET /matches·미매칭 목록과 동일한 신청 주 앵커로 맞춤(임의 시각 그대로 저장하면 조회에서 빠짐). */
+  const value =
+    parsed.value != null ? resolveApplicationPeriodStart(parsed.value) : getMatchingPeriodStart();
+  return { ok: true, value };
 }
 
 /** @param {unknown} rawIds */

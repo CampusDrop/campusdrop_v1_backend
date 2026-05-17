@@ -125,6 +125,8 @@ async function handleWeekStatus(req, res, matchType) {
     return res.status(500).json({ error: '매칭 이력을 불러오지 못했습니다.' });
   }
 
+  let activeFriendGroupThisPeriod = null;
+  if (
     matchType === MATCH_TYPE_FRIEND &&
     fgMembership &&
     fgMembership.matching !== null &&

@@ -7,6 +7,10 @@ const templates = require('./friendTalkTemplates');
 const { resolveFriendGroupMeetingDisplay } = require('./meetingDisplay');
 const { getMatchingPeriodStart } = require('./matchPolicy');
 const {
+  meetingDateKeyKst,
+  utcBoundsForKstDateKeys,
+} = require('./kstMeetingDateKeys');
+const {
   attendanceDeadlineUtcForInviteDay,
   matchSuccessSendPlanFromResolvedAt,
 } = require('./friendGroupAttendanceSchedule');
@@ -364,6 +368,87 @@ async function sendFriendGroupAttendanceInviteForGroup(friendGroupMatchingId) {
 }
 
 /**
+ * `meetingStartsAt`의 KST 날짜가 `dateKeys`(화~일 6일 등)인 소그룹만 참석 초대.
+ *
+ * @param {{ dateKeys: Set<string> | string[] }} opts
+ */
+async function sendFriendGroupAttendanceInviteForMeetingsOnKstDateKeys(opts) {
+  const rawKeys = opts && opts.dateKeys;
+  const dateKeys =
+    rawKeys instanceof Set ? rawKeys : new Set(Array.isArray(rawKeys) ? rawKeys : []);
+  const meetingDateKeysSorted = [...dateKeys].sort();
+  if (dateKeys.size === 0) {
+    return {
+      groupCount: 0,
+      sentMembers: 0,
+      skippedMembers: 0,
+      groupFailed: [],
+      memberFailed: [],
+      meetingDateKeys: meetingDateKeysSorted,
+    };
+  }
+
+  const { rangeStart, rangeEnd } = utcBoundsForKstDateKeys(dateKeys);
+  if (!rangeStart || !rangeEnd) {
+    return {
+      groupCount: 0,
+      sentMembers: 0,
+      skippedMembers: 0,
+      groupFailed: [],
+      memberFailed: [],
+      meetingDateKeys: meetingDateKeysSorted,
+    };
+  }
+
+  const fgRows = await prisma.friendGroupMatching.findMany({
+    where: {
+      meetingStartsAt: {
+        not: null,
+        gte: rangeStart,
+        lte: rangeEnd,
+      },
+    },
+    select: { id: true, meetingStartsAt: true },
+  });
+
+  const filtered = fgRows.filter(
+    (r) => r.meetingStartsAt && dateKeys.has(meetingDateKeyKst(r.meetingStartsAt)),
+  );
+
+  /** @type {{ friendGroupMatchingId: string, reason: string }[]} */
+  const groupFailed = [];
+  let sentMembers = 0;
+  let skippedMembers = 0;
+  /** @type {{ friendGroupMatchingId: string, identityId: string, error: string }[]} */
+  const memberFailed = [];
+
+  for (const row of filtered) {
+    const r = await sendFriendGroupAttendanceInviteForGroup(row.id);
+    if (!r.ok) {
+      groupFailed.push({ friendGroupMatchingId: row.id, reason: r.error || 'unknown' });
+    }
+    sentMembers += r.sent;
+    skippedMembers += r.skipped;
+    for (const f of r.failed) {
+      memberFailed.push({
+        friendGroupMatchingId: row.id,
+        identityId: f.identityId,
+        error: f.error,
+      });
+    }
+  }
+
+  return {
+    groupCount: filtered.length,
+    sentMembers,
+    skippedMembers,
+    groupFailed,
+    memberFailed,
+    meetingDateKeys: meetingDateKeysSorted,
+  };
+}
+
+/**
  * @param {{ periodStart?: Date }} [opts]
  */
 async function sendFriendGroupAttendanceInviteForAllInPeriod(opts = {}) {
@@ -410,4 +495,5 @@ module.exports = {
   runFriendGroupMatchSuccessScheduledSendJob,
   sendFriendGroupAttendanceInviteForGroup,
   sendFriendGroupAttendanceInviteForAllInPeriod,
+  sendFriendGroupAttendanceInviteForMeetingsOnKstDateKeys,
 };

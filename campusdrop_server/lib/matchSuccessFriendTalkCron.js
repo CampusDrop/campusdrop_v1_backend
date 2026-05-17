@@ -1,14 +1,15 @@
 const cron = require('node-cron');
 const { assertSolapiFriendTalkEnv } = require('./solapiFriendTalkSend');
 const { publicApiBase } = require('./friendTalkRsvp');
-const { getMatchingPeriodStart } = require('./matchPolicy');
-const { sendMatchSuccessFriendTalkForAllInPeriod } = require('./adminMatchFriendTalk');
+const { kstSixMeetingOfferDaysAfterToday } = require('./kstMeetingDateKeys');
+const { sendMatchSuccessFriendTalkForMeetingsOnKstDateKeys } = require('./adminMatchFriendTalk');
 const {
-  sendFriendGroupAttendanceInviteForAllInPeriod,
+  sendFriendGroupAttendanceInviteForMeetingsOnKstDateKeys,
 } = require('./friendGroupMatchSuccessFriendTalk');
 
 /**
- * 이번 매칭 주기: 1:1 로맨스 성사 쌍(7번·RSVP) + 친구 소그룹 참석 확인 초대(월요일).
+ * 매주 월요일 09:00(KST): 만남 가능 일정 화~일 6일(`meetingStartsAt`의 KST 날짜)에 해당하는 매칭만 대상.
+ * `period_start`와 무관하게 일정 기준으로 선별한다.
  */
 async function runMatchSuccessFriendTalkCronJob() {
   const missingEnv = assertSolapiFriendTalkEnv();
@@ -17,16 +18,17 @@ async function runMatchSuccessFriendTalkCronJob() {
     return;
   }
 
-  const periodStart = getMatchingPeriodStart();
+  const dateKeys = new Set(kstSixMeetingOfferDaysAfterToday(new Date()));
+
   try {
     if (publicApiBase()) {
-      const result = await sendMatchSuccessFriendTalkForAllInPeriod({ periodStart });
+      const result = await sendMatchSuccessFriendTalkForMeetingsOnKstDateKeys({ dateKeys });
       console.log('[matchSuccessFriendTalkCron] 발송 요약(1:1):', {
         sent: result.sent,
         matchingCount: result.matchingCount,
         skipped: result.skipped.length,
         failed: result.failed.length,
-        periodStart: result.periodStart,
+        meetingDateKeys: result.meetingDateKeys,
       });
       if (result.failed.length) {
         console.warn('[matchSuccessFriendTalkCron] 일부 실패(1:1):', result.failed.slice(0, 5));
@@ -37,13 +39,14 @@ async function runMatchSuccessFriendTalkCronJob() {
       );
     }
 
-    const fg = await sendFriendGroupAttendanceInviteForAllInPeriod({ periodStart });
+    const fg = await sendFriendGroupAttendanceInviteForMeetingsOnKstDateKeys({ dateKeys });
     console.log('[matchSuccessFriendTalkCron] 친구 소그룹 참석 초대:', {
       groupCount: fg.groupCount,
       sentMembers: fg.sentMembers,
       skippedMembers: fg.skippedMembers,
       groupFailed: fg.groupFailed.length,
       memberFailed: fg.memberFailed.length,
+      meetingDateKeys: fg.meetingDateKeys,
     });
     if (fg.groupFailed.length) {
       console.warn(
@@ -84,7 +87,7 @@ function scheduleMatchSuccessFriendTalkCron() {
     { timezone: 'Asia/Seoul' },
   );
   console.log(
-    '[matchSuccessFriendTalkCron] 등록됨: 매주 월요일 09:00 Asia/Seoul — 1:1 매칭 성공(7번) + 친구 소그룹 참석 확인',
+    '[matchSuccessFriendTalkCron] 등록됨: 매주 월요일 09:00 Asia/Seoul — 만남일(KST 화~일 6일) 기준 1:1 성공 + 소그룹 참석 초대',
   );
 }
 

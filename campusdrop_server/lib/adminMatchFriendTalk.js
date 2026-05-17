@@ -8,6 +8,11 @@ const {
 } = require('./friendTalkRsvp');
 const { resolveMatchMeetingDisplay } = require('./meetingDisplay');
 const {
+  meetingDateKeyKst,
+  utcBoundsForKstDateKeys,
+} = require('./kstMeetingDateKeys');
+const { MATCH_TYPE_ROMANCE } = require('./matchType');
+const {
   getMatchingPeriodStart,
   getMatchingPeriodEnd,
   getUserIdsMatchedInPeriod,
@@ -193,6 +198,79 @@ async function sendMatchSuccessFriendTalkForAllInPeriod(opts = {}) {
 }
 
 /**
+ * `meetingStartsAt`의 KST 날짜가 `dateKeys`(화~일 6일 등) 안에 들어가는 로맨스 1:1 매칭만 대상.
+ * 월요 크론은 `period_start` 대신 만남 일정 기준으로 발송한다.
+ *
+ * @param {{ dateKeys: Set<string> | string[] }} opts
+ */
+async function sendMatchSuccessFriendTalkForMeetingsOnKstDateKeys(opts) {
+  const rawKeys = opts && opts.dateKeys;
+  const dateKeys =
+    rawKeys instanceof Set ? rawKeys : new Set(Array.isArray(rawKeys) ? rawKeys : []);
+  /** @type {string[]} */
+  const meetingDateKeysSorted = [...dateKeys].sort();
+  if (dateKeys.size === 0) {
+    return {
+      sent: 0,
+      skipped: [],
+      failed: [],
+      matchingCount: 0,
+      meetingDateKeys: meetingDateKeysSorted,
+    };
+  }
+
+  const { rangeStart, rangeEnd } = utcBoundsForKstDateKeys(dateKeys);
+  if (!rangeStart || !rangeEnd) {
+    return {
+      sent: 0,
+      skipped: [],
+      failed: [],
+      matchingCount: 0,
+      meetingDateKeys: meetingDateKeysSorted,
+    };
+  }
+
+  const rows = await prisma.matching.findMany({
+    where: {
+      matchType: MATCH_TYPE_ROMANCE,
+      meetingStartsAt: {
+        not: null,
+        gte: rangeStart,
+        lte: rangeEnd,
+      },
+    },
+    select: { id: true, meetingStartsAt: true },
+  });
+
+  const filtered = rows.filter(
+    (r) => r.meetingStartsAt && dateKeys.has(meetingDateKeyKst(r.meetingStartsAt)),
+  );
+
+  /** @type {{ matchingId: string, reason: string }[]} */
+  const skipped = [];
+  /** @type {{ matchingId: string, error: string }[]} */
+  const failed = [];
+  let sent = 0;
+  for (const row of filtered) {
+    const r = await sendMatchSuccessFriendTalkForMatching(row.id);
+    if (r.ok) {
+      sent += 1;
+    } else if (r.skipped) {
+      skipped.push({ matchingId: row.id, reason: r.error });
+    } else {
+      failed.push({ matchingId: row.id, error: r.error });
+    }
+  }
+  return {
+    sent,
+    skipped,
+    failed,
+    matchingCount: filtered.length,
+    meetingDateKeys: meetingDateKeysSorted,
+  };
+}
+
+/**
  * 이번 주 설문 제출자 중 매칭에 안 올라간 사람에게 미매칭 안내.
  * @param {{ periodStart?: Date }} [opts]
  */
@@ -253,6 +331,7 @@ async function sendMatchFailureFriendTalkForUnmatchedInPeriod(opts = {}) {
 module.exports = {
   sendMatchSuccessFriendTalkForMatching,
   sendMatchSuccessFriendTalkForAllInPeriod,
+  sendMatchSuccessFriendTalkForMeetingsOnKstDateKeys,
   sendMatchFailureFriendTalkForUnmatchedInPeriod,
   decryptPhoneForIdentity,
 };

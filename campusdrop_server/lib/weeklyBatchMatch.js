@@ -162,7 +162,7 @@ async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
 }
 
 /**
- * Python `/batch-match` 호출 → DB `matchings` 저장 → kakaoId 있는 유저에 알림톡(Mock).
+ * Python `/batch-match` 호출 → DB `matchings` 저장. 성공 친구톡은 월요일 09:00 KST 크론 또는 관리자 API.
  * @param {{ actorType?: string, actorId?: string | null, requestIp?: string | null, requestUserAgent?: string | null, matchType?: 'ROMANCE' | 'FRIEND' }} [options] 관리자 실행 시 `actorType: 'admin'`, `actorId`: Admin.id
  */
 async function runWeeklyBatchMatch(options = {}) {
@@ -404,7 +404,7 @@ async function runWeeklyBatchMatch(options = {}) {
     });
 
     console.log(
-      `[weeklyBatchMatch] 완료(${matchType}): 배치대상 ${batchTraitsCount}명(설문보유 ${traitsCount}명), 쌍 ${insertRows.length}건, 카페 ${activeCafes.length}개 (친구톡은 관리자 성공 전송 API로 발송)`,
+      `[weeklyBatchMatch] 완료(${matchType}): 배치대상 ${batchTraitsCount}명(설문보유 ${traitsCount}명), 쌍 ${insertRows.length}건, 카페 ${activeCafes.length}개 (성공 친구톡: 월 09:00 KST 크론·또는 관리자 API)`,
     );
     return {
       skipped: false,

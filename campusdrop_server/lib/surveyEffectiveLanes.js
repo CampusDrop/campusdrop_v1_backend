@@ -185,7 +185,7 @@ async function effectiveLanesByIdentityIds(identityIds, options = {}) {
     });
   }
 
-  const [romanceTargetRows, friendTargetRows, latestRomanceRows, latestFriendRows] = await Promise.all([
+  const loadRomanceTargetRows = () =>
     prismaClient.weeklySurveySubmission.findMany({
       where: { identityId: { in: uniq }, targetPeriodStart },
       select: {
@@ -196,7 +196,8 @@ async function effectiveLanesByIdentityIds(identityIds, options = {}) {
         submittedAt: true,
         surveyData: true,
       },
-    }),
+    });
+  const loadFriendTargetRows = () =>
     prismaClient.friendWeeklySurveySubmission.findMany({
       where: { identityId: { in: uniq }, targetPeriodStart },
       select: {
@@ -207,10 +208,43 @@ async function effectiveLanesByIdentityIds(identityIds, options = {}) {
         submittedAt: true,
         surveyData: true,
       },
-    }),
-    fetchLatestRomanceWeeklyRowsForIdentities(uniq, prismaClient),
-    fetchLatestFriendWeeklyRowsForIdentities(uniq, prismaClient),
-  ]);
+    });
+  const loadLatestRomanceRows = () => fetchLatestRomanceWeeklyRowsForIdentities(uniq, prismaClient);
+  const loadLatestFriendRows = () => fetchLatestFriendWeeklyRowsForIdentities(uniq, prismaClient);
+
+  let romanceTargetRows;
+  let friendTargetRows;
+  let latestRomanceRows;
+  let latestFriendRows;
+  try {
+    [romanceTargetRows, friendTargetRows, latestRomanceRows, latestFriendRows] = await Promise.all([
+      loadRomanceTargetRows(),
+      loadFriendTargetRows(),
+      loadLatestRomanceRows(),
+      loadLatestFriendRows(),
+    ]);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const code = err instanceof Prisma.PrismaClientKnownRequestError ? err.code : null;
+    const friendWeeklyUnavailable =
+      code === 'P2021' ||
+      (code === 'P2010' && /friend_weekly_survey_submissions/i.test(msg)) ||
+      /friend_weekly_survey_submissions/i.test(msg) ||
+      (/does not exist/i.test(msg) && /friend/i.test(msg));
+    if (!friendWeeklyUnavailable) {
+      throw err;
+    }
+    console.error(
+      'effectiveLanesByIdentityIds: friend weekly submissions unavailable (migrate DB?); friend lane falls back to trait-only',
+      err,
+    );
+    [romanceTargetRows, friendTargetRows, latestRomanceRows, latestFriendRows] = await Promise.all([
+      loadRomanceTargetRows(),
+      Promise.resolve([]),
+      loadLatestRomanceRows(),
+      Promise.resolve([]),
+    ]);
+  }
 
   const traitById = new Map(traitRows.map((t) => [t.id, t]));
   const romanceTargetById = new Map(romanceTargetRows.map((r) => [r.identityId, r]));

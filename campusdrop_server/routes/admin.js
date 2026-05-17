@@ -2265,7 +2265,7 @@ router.post('/matches/force', async (req, res) => {
  *       - AdminBearerAuth: []
  */
 router.get('/users/:id', async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params.id || '').toLowerCase();
   if (!isUuid(id)) {
     return res.status(400).json({ error: '유효한 UUID가 아닙니다.' });
   }
@@ -2298,7 +2298,7 @@ router.get('/users/:id', async (req, res) => {
       traitRows: row.trait
         ? [
             {
-              id: row.trait.id,
+              id,
               surveyData: row.trait.surveyData,
               friendSurveyData: row.trait.friendSurveyData,
               gender: row.trait.gender,

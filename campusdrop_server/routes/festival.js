@@ -122,6 +122,9 @@ function applicationJson(row, hours) {
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     deletedAt: row.deletedAt ? row.deletedAt.toISOString() : null,
+    partnerPhone: row.partnerPhone ?? null,
+    partnerReceptionId: row.partnerReceptionId ?? null,
+    matchedAt: row.matchedAt ? row.matchedAt.toISOString() : null,
     slot1MatchAtUtc: slot1Utc ? slot1Utc.toISOString() : null,
     slot2MatchAtUtc: slot2Utc ? slot2Utc.toISOString() : null,
   };

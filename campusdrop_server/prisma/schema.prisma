@@ -405,6 +405,11 @@ model FestivalApplication {
   status            String        @default("APPLIED")
   createdAt         DateTime      @default(now()) @map("created_at")
   deletedAt         DateTime?     @map("deleted_at")
+  /// `POST /api/admin/festival/match-run` 이성 1:1 매칭 시 상대 전화번호(010…).
+  partnerPhone      String?       @map("partner_phone")
+  /// 상대 접수번호 `reception_id`.
+  partnerReceptionId String?      @map("partner_reception_id")
+  matchedAt         DateTime?     @map("matched_at")
 
   @@unique([phone, appliedLocalDate], map: "festival_applications_phone_applied_local_date_key")
   @@index([gender, status], map: "festival_applications_gender_status_idx")

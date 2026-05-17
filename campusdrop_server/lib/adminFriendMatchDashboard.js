@@ -4,6 +4,7 @@ const {
   getMatchingPeriodEnd,
   getUserIdsMatchedInPeriod,
   findUserFriendGroupMembershipInPeriod,
+  resolveApplicationPeriodStart,
 } = require('./matchPolicy');
 const {
   buildSurveySubmissionWindowForApplicationPeriod,
@@ -16,11 +17,6 @@ const { surveyDataToAvailabilitySlots } = require('./surveyAvailabilitySlots');
 const { traitGenderLabelKo, normalizeTraitGender } = require('./genderPolicy');
 
 const MS_PER_WEEK = 7 * 86400000;
-
-/** @param {Date} [d] */
-function resolveApplicationPeriodStart(d) {
-  return d && !Number.isNaN(d.getTime()) ? d : getMatchingPeriodStart();
-}
 
 /**
  * @param {Date} applicationPeriodStart

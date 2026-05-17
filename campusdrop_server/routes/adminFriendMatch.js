@@ -5,7 +5,6 @@ const { Prisma } = require('@prisma/client');
 const { prisma } = require('../lib/prisma');
 const { writeAccessLog } = require('../lib/accessLog');
 const {
-  resolveApplicationPeriodStart,
   computeFriendPeriodKpis,
   friendMatchTrends,
   friendApplicantDistribution,
@@ -32,6 +31,7 @@ const { buildSurveySubmissionWindowForApplicationPeriod } = require('../lib/surv
 const {
   deleteMatchingsForUsersInPeriod,
   deleteFriendGroupMatchingsTouchingUsers,
+  resolveApplicationPeriodStart,
 } = require('../lib/matchPolicy');
 const { parseMatchedSlotInput } = require('../lib/parseMatchedSlotInput');
 const { kstWallClockToUtc, utcToKstSlot } = require('../lib/kstMeetingInstant');
@@ -249,7 +249,7 @@ router.get('/friend-match/unmatched', async (req, res) => {
   if (!parsed.ok) {
     return res.status(400).json({ error: parsed.error });
   }
-  const ps = parsed.value || getMatchingPeriodStart();
+  const ps = resolveApplicationPeriodStart(parsed.value || undefined);
   const pe = getMatchingPeriodEnd(ps);
   const submissionWindow = buildSurveySubmissionWindowForApplicationPeriod(ps);
 

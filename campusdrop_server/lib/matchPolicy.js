@@ -35,6 +35,18 @@ function getMatchingPeriodEnd(periodStart) {
 }
 
 /**
+ * 관리자·쿼리에서 임의 시각이 들어와도 매칭 주 앵커(화 00:00 KST)에 맞춘 신청 주 시작으로 정규화한다.
+ * 그렇지 않으면 `getSurveyTargetPeriodStartForApplicationPeriod`가 DB에 저장된 `target_period_start`와 어긋날 수 있다.
+ * @param {Date} [d]
+ */
+function resolveApplicationPeriodStart(d) {
+  if (d != null && !Number.isNaN(d.getTime())) {
+    return getMatchingPeriodStart(d);
+  }
+  return getMatchingPeriodStart();
+}
+
+/**
  * 과거 `matchings`에 한 번이라도 함께 올라간 적 있는 상대 `Identity.id`(전 기간).
  * @param {import('@prisma/client').PrismaClient} prisma
  * @param {string} selfId
@@ -394,6 +406,7 @@ module.exports = {
   getMatchingPeriodAnchor,
   getMatchingPeriodStart,
   getMatchingPeriodEnd,
+  resolveApplicationPeriodStart,
   getHistoricalPartnerIds,
   getForbiddenPairTuplesForBatch,
   getForbiddenPairTuplesForFriendGroupBatch,

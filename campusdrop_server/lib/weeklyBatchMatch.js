@@ -5,6 +5,7 @@ const { surveyDataToLifestyleUser } = require('./surveyToLifestyleUser');
 const { surveyDataToAvailabilitySlots } = require('./surveyAvailabilitySlots');
 const { getMatchingBatchMatchUrl } = require('./resolveMatchingServiceUrl');
 const { writeAccessLog } = require('./accessLog');
+const { recordAdminBatchMatchRun } = require('./recordAdminBatchMatchRun');
 const {
   MIN_MATCH_SCORE,
   getMatchingPeriodStart,
@@ -222,169 +223,268 @@ async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
 
 /**
  * Python `/batch-match` 호출 → DB `matchings` 저장 → kakaoId 있는 유저에 알림톡(Mock).
- * @param {{ actorType?: string, actorId?: string | null, requestIp?: string | null, requestUserAgent?: string | null }} [options] 관리자 실행 시 `actorType: 'admin'`, `actorId`: Admin.id
+ * @param {{ actorType?: string, actorId?: string | null, requestIp?: string | null, requestUserAgent?: string | null, matchType?: 'ROMANCE' | 'FRIEND' }} [options] 관리자 실행 시 `actorType: 'admin'`, `actorId`: Admin.id
  */
 async function runWeeklyBatchMatch(options = {}) {
+  const startedAt = new Date();
   const actorType = options.actorType || 'job';
   const actorId = options.actorId !== undefined ? options.actorId : null;
   const matchType = options.matchType || MATCH_TYPE_ROMANCE;
   const logAction = actorType === 'admin' ? 'ADMIN_BATCH_MATCH' : 'WEEKLY_BATCH_MATCH';
   const periodStartForBatch = getMatchingPeriodStart();
-  const activeCafes = await prisma.cafe.findMany({
-    where: { isActive: true },
-    orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
-    select: { id: true, name: true },
-  });
-  if (activeCafes.length === 0) {
-    console.warn(
-      '[weeklyBatchMatch] 활성 카페가 없습니다. matchings에 cafe_id/meeting_venue_name이 비어 저장됩니다. 관리자 콘솔에서 카페를 등록해 주세요.',
-    );
-  }
-  const maxMatchesPerSlot = activeCafes.length > 0 ? activeCafes.length : null;
-  const fetched = await fetchPythonBatchPairs(prisma, periodStartForBatch, {
-    maxMatchesPerSlot,
-    matchType,
-  });
 
-  if (fetched.skipped) {
-    if (fetched.skipReason === 'not_enough_users') {
-      console.warn('[weeklyBatchMatch] 설문이 있는 유저가 2명 미만이라 스킵합니다.', fetched.eligibleSurveyCount);
-      return {
+  /**
+   * @param {{ reason: string, batchTraitsCount?: number, eligibleSurveyCount?: number, submissionWindow: unknown }} sk
+   */
+  const finishSkipped = async (sk) => {
+    const finishedAt = new Date();
+    await recordAdminBatchMatchRun({
+      matchType,
+      periodStart: periodStartForBatch,
+      startedAt,
+      finishedAt,
+      status: 'skipped',
+      pairCount: 0,
+      eligibleCount: sk.eligibleSurveyCount ?? 0,
+      batchTraitsCount: sk.batchTraitsCount ?? 0,
+      skipReason: sk.reason,
+      actorType,
+      actorId,
+      metadata: { submissionWindow: sk.submissionWindow },
+    });
+    await writeAccessLog({
+      actorType,
+      actorId,
+      action: logAction,
+      resource: 'batch-match',
+      ip: options.requestIp || null,
+      userAgent: options.requestUserAgent || null,
+      metadata: {
         skipped: true,
-        reason: 'not_enough_users',
-        count: fetched.eligibleSurveyCount,
-        submissionWindow: fetched.submissionWindow,
-      };
-    }
-    if (fetched.skipReason === 'not_enough_binary_gender_users') {
+        skipReason: sk.reason,
+        matchType,
+        periodStart: periodStartForBatch.toISOString(),
+        batchTraitsCount: sk.batchTraitsCount,
+        eligibleSurveyCount: sk.eligibleSurveyCount,
+        submissionWindow: sk.submissionWindow,
+      },
+    });
+  };
+
+  try {
+    const activeCafes = await prisma.cafe.findMany({
+      where: { isActive: true },
+      orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+      select: { id: true, name: true },
+    });
+    if (activeCafes.length === 0) {
       console.warn(
-        '[weeklyBatchMatch] 남/여 성별이 모두 있는 유저가 2명 미만이라 스킵합니다.',
-        fetched.batchTraitsCount,
-        '/',
-        fetched.eligibleSurveyCount,
+        '[weeklyBatchMatch] 활성 카페가 없습니다. matchings에 cafe_id/meeting_venue_name이 비어 저장됩니다. 관리자 콘솔에서 카페를 등록해 주세요.',
       );
+    }
+    const maxMatchesPerSlot = activeCafes.length > 0 ? activeCafes.length : null;
+    const fetched = await fetchPythonBatchPairs(prisma, periodStartForBatch, {
+      maxMatchesPerSlot,
+      matchType,
+    });
+
+    if (fetched.skipped) {
+      if (fetched.skipReason === 'not_enough_users') {
+        console.warn(
+          '[weeklyBatchMatch] 설문이 있는 유저가 2명 미만이라 스킵합니다.',
+          fetched.eligibleSurveyCount,
+        );
+        await finishSkipped({
+          reason: 'not_enough_users',
+          eligibleSurveyCount: fetched.eligibleSurveyCount,
+          batchTraitsCount: fetched.batchTraitsCount,
+          submissionWindow: fetched.submissionWindow,
+        });
+        return {
+          skipped: true,
+          matchType,
+          reason: 'not_enough_users',
+          count: fetched.eligibleSurveyCount,
+          submissionWindow: fetched.submissionWindow,
+        };
+      }
+      if (fetched.skipReason === 'not_enough_binary_gender_users') {
+        console.warn(
+          '[weeklyBatchMatch] 남/여 성별이 모두 있는 유저가 2명 미만이라 스킵합니다.',
+          fetched.batchTraitsCount,
+          '/',
+          fetched.eligibleSurveyCount,
+        );
+        await finishSkipped({
+          reason: 'not_enough_binary_gender_users',
+          batchTraitsCount: fetched.batchTraitsCount,
+          eligibleSurveyCount: fetched.eligibleSurveyCount,
+          submissionWindow: fetched.submissionWindow,
+        });
+        return {
+          skipped: true,
+          matchType,
+          reason: 'not_enough_binary_gender_users',
+          count: fetched.batchTraitsCount,
+          eligibleSurveyCount: fetched.eligibleSurveyCount,
+          submissionWindow: fetched.submissionWindow,
+        };
+      }
+      const r = fetched.skipReason || 'unknown';
+      await finishSkipped({
+        reason: r,
+        batchTraitsCount: fetched.batchTraitsCount,
+        eligibleSurveyCount: fetched.eligibleSurveyCount,
+        submissionWindow: fetched.submissionWindow,
+      });
       return {
         skipped: true,
-        reason: 'not_enough_binary_gender_users',
+        matchType,
+        reason: r,
         count: fetched.batchTraitsCount,
         eligibleSurveyCount: fetched.eligibleSurveyCount,
         submissionWindow: fetched.submissionWindow,
       };
     }
-    return {
-      skipped: true,
-      reason: fetched.skipReason || 'unknown',
-      count: fetched.batchTraitsCount,
-      eligibleSurveyCount: fetched.eligibleSurveyCount,
-      submissionWindow: fetched.submissionWindow,
-    };
-  }
 
-  const pairs = fetched.pairs;
-  const url = fetched.url;
-  const submissionWindow = fetched.submissionWindow;
-  const batchTraitsCount = fetched.batchTraitsCount;
-  const traitsCount = fetched.eligibleSurveyCount;
+    const pairs = fetched.pairs;
+    const url = fetched.url;
+    const submissionWindow = fetched.submissionWindow;
+    const batchTraitsCount = fetched.batchTraitsCount;
+    const traitsCount = fetched.eligibleSurveyCount;
 
-  const matchedAt = new Date();
-  const periodStart = periodStartForBatch;
-  const insertRows = pairs
-    .map((p) => {
-      const score = typeof p.score === 'number' ? p.score : Number(p.score);
-      if (!Number.isFinite(score) || !p.user_a_id || !p.user_b_id) return null;
-      if (score < MIN_MATCH_SCORE) return null;
-      const matchReport = slimMatchReportForDb(score, p.match_report);
-      const meetingStartsAt = meetingStartsAtFromMatchReport(matchReport);
-      const row = {
-        userAId: p.user_a_id,
-        userBId: p.user_b_id,
-        matchType,
-        score,
-        matchedAt,
-        periodStart,
-        matchReport,
+    const matchedAt = new Date();
+    const periodStart = periodStartForBatch;
+    const insertRows = pairs
+      .map((p) => {
+        const score = typeof p.score === 'number' ? p.score : Number(p.score);
+        if (!Number.isFinite(score) || !p.user_a_id || !p.user_b_id) return null;
+        if (score < MIN_MATCH_SCORE) return null;
+        const matchReport = slimMatchReportForDb(score, p.match_report);
+        const meetingStartsAt = meetingStartsAtFromMatchReport(matchReport);
+        const row = {
+          userAId: p.user_a_id,
+          userBId: p.user_b_id,
+          matchType,
+          score,
+          matchedAt,
+          periodStart,
+          matchReport,
+        };
+        if (meetingStartsAt) {
+          row.meetingStartsAt = meetingStartsAt;
+        }
+        return row;
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score);
+
+    assignCafesToPairs(insertRows, activeCafes);
+
+    if (insertRows.length > 0) {
+      const userIds = [...new Set(insertRows.flatMap((r) => [r.userAId, r.userBId]))];
+      await prisma.$transaction(async (tx) => {
+        await deleteMatchingsForUsersInPeriod(tx, periodStart, userIds, matchType);
+        await tx.matching.createMany({ data: insertRows });
+      });
+    }
+
+    const notifyIds = new Set();
+    for (const row of insertRows) {
+      notifyIds.add(row.userAId);
+      notifyIds.add(row.userBId);
+    }
+
+    const matchedIdentityRows =
+      notifyIds.size > 0
+        ? await prisma.identity.findMany({
+            where: { id: { in: [...notifyIds] } },
+            select: { id: true, kakaoId: true, kakaoLinkPin: true },
+          })
+        : [];
+    const identityById = new Map(matchedIdentityRows.map((row) => [row.id, row]));
+    const matches = insertRows.map((row) => {
+      const userA = identityById.get(row.userAId);
+      const userB = identityById.get(row.userBId);
+      return {
+        userAId: row.userAId,
+        userBId: row.userBId,
+        userAKakaoId: userA?.kakaoId ?? null,
+        userBKakaoId: userB?.kakaoId ?? null,
+        userAKakaoLinkPin: userA?.kakaoLinkPin ?? null,
+        userBKakaoLinkPin: userB?.kakaoLinkPin ?? null,
+        score: row.score,
+        matchReport: row.matchReport ?? null,
       };
-      if (meetingStartsAt) {
-        row.meetingStartsAt = meetingStartsAt;
-      }
-      return row;
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.score - a.score);
-
-  // 슬롯별 라운드로빈으로 카페 배정. matchedSlot이 없는 행은 카페·이름 미설정.
-  assignCafesToPairs(insertRows, activeCafes);
-
-  if (insertRows.length > 0) {
-    const userIds = [...new Set(insertRows.flatMap((r) => [r.userAId, r.userBId]))];
-    await prisma.$transaction(async (tx) => {
-      await deleteMatchingsForUsersInPeriod(tx, periodStart, userIds, matchType);
-      await tx.matching.createMany({ data: insertRows });
     });
-  }
 
-  const notifyIds = new Set();
-  for (const row of insertRows) {
-    notifyIds.add(row.userAId);
-    notifyIds.add(row.userBId);
-  }
-
-  const matchedIdentityRows =
-    notifyIds.size > 0
-      ? await prisma.identity.findMany({
-          where: { id: { in: [...notifyIds] } },
-          select: { id: true, kakaoId: true, kakaoLinkPin: true },
-        })
-      : [];
-  const identityById = new Map(matchedIdentityRows.map((row) => [row.id, row]));
-  const matches = insertRows.map((row) => {
-    const userA = identityById.get(row.userAId);
-    const userB = identityById.get(row.userBId);
-    return {
-      userAId: row.userAId,
-      userBId: row.userBId,
-      userAKakaoId: userA?.kakaoId ?? null,
-      userBKakaoId: userB?.kakaoId ?? null,
-      userAKakaoLinkPin: userA?.kakaoLinkPin ?? null,
-      userBKakaoLinkPin: userB?.kakaoLinkPin ?? null,
-      score: row.score,
-      matchReport: row.matchReport ?? null,
-    };
-  });
-
-  await writeAccessLog({
-    actorType,
-    actorId,
-    action: logAction,
-    resource: 'batch-match',
-    ip: options.requestIp || null,
-    userAgent: options.requestUserAgent || null,
-    metadata: {
+    const finishedAt = new Date();
+    await recordAdminBatchMatchRun({
+      matchType,
+      periodStart: periodStartForBatch,
+      startedAt,
+      finishedAt,
+      status: 'success',
       pairCount: insertRows.length,
+      eligibleCount: traitsCount,
+      batchTraitsCount,
+      actorType,
+      actorId,
+      metadata: {
+        pythonUrl: url,
+        submissionWindow,
+        activeCafeCount: activeCafes.length,
+        cafesAssignedCount: insertRows.filter((r) => r.cafeId).length,
+      },
+    });
+
+    await writeAccessLog({
+      actorType,
+      actorId,
+      action: logAction,
+      resource: 'batch-match',
+      ip: options.requestIp || null,
+      userAgent: options.requestUserAgent || null,
+      metadata: {
+        pairCount: insertRows.length,
+        userCount: batchTraitsCount,
+        eligibleSurveyCount: traitsCount,
+        pythonUrl: url,
+        matchType,
+        periodStart: periodStartForBatch.toISOString(),
+        submissionWindow,
+        activeCafeCount: activeCafes.length,
+        cafesAssignedCount: insertRows.filter((r) => r.cafeId).length,
+      },
+    });
+
+    console.log(
+      `[weeklyBatchMatch] 완료(${matchType}): 배치대상 ${batchTraitsCount}명(설문보유 ${traitsCount}명), 쌍 ${insertRows.length}건, 카페 ${activeCafes.length}개 (친구톡은 관리자 성공 전송 API로 발송)`,
+    );
+    return {
+      skipped: false,
+      matchType,
       userCount: batchTraitsCount,
       eligibleSurveyCount: traitsCount,
-      pythonUrl: url,
-      matchType,
-      periodStart: insertRows.length > 0 ? insertRows[0].periodStart?.toISOString?.() ?? null : null,
       submissionWindow,
+      pairCount: insertRows.length,
       activeCafeCount: activeCafes.length,
-      cafesAssignedCount: insertRows.filter((r) => r.cafeId).length,
-    },
-  });
-
-  console.log(
-    `[weeklyBatchMatch] 완료(${matchType}): 배치대상 ${batchTraitsCount}명(설문보유 ${traitsCount}명), 쌍 ${insertRows.length}건, 카페 ${activeCafes.length}개 (친구톡은 관리자 성공 전송 API로 발송)`,
-  );
-  return {
-    skipped: false,
-    matchType,
-    userCount: batchTraitsCount,
-    eligibleSurveyCount: traitsCount,
-    submissionWindow,
-    pairCount: insertRows.length,
-    activeCafeCount: activeCafes.length,
-    matches,
-  };
+      matches,
+    };
+  } catch (err) {
+    const finishedAt = new Date();
+    await recordAdminBatchMatchRun({
+      matchType,
+      periodStart: periodStartForBatch,
+      startedAt,
+      finishedAt,
+      status: 'error',
+      actorType,
+      actorId,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 }
 
 const PARTNER_AGE_PREF_ALLOWED = new Set(['OLDER', 'YOUNGER', 'SAME_AGE']);

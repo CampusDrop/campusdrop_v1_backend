@@ -40,6 +40,7 @@ const { kstWallClockToUtc, utcToKstSlot } = require('../lib/kstMeetingInstant');
 const { signMeetChatQrToken, meetChatQrSecret } = require('../lib/meetChatQr');
 const { decryptPhoneFromStorage } = require('../lib/phoneCrypto');
 const { runPurgeIdentitiesWithoutPhoneJob } = require('../lib/purgeIdentitiesWithoutPhoneCron');
+const { normalizeMatchType, MATCH_TYPE_ROMANCE } = require('../lib/matchType');
 
 const CAFE_NAME_MAX_LEN = 200;
 const CAFE_URL_MAX_LEN = 1000;
@@ -917,16 +918,23 @@ router.get('/matches', async (req, res) => {
   const currentPeriodStart = getMatchingPeriodStart();
   const ps = new Date(currentPeriodStart.getTime() - (weeks - 1) * MS_PER_WEEK);
   const pe = getMatchingPeriodEnd(currentPeriodStart);
-  const where = includeAll
-    ? {}
-    : {
-        OR: [
-          { periodStart: { gte: ps, lt: pe } },
-          {
-            AND: [{ periodStart: null }, { matchedAt: { gte: ps, lt: pe } }],
-          },
-        ],
-      };
+  const matchTypeFilter = normalizeMatchType(req.query.matchType ?? req.query.match_type);
+  const periodWindow = {
+    OR: [
+      { periodStart: { gte: ps, lt: pe } },
+      {
+        AND: [{ periodStart: null }, { matchedAt: { gte: ps, lt: pe } }],
+      },
+    ],
+  };
+  const where =
+    matchTypeFilter && includeAll
+      ? { matchType: matchTypeFilter }
+      : matchTypeFilter && !includeAll
+        ? { AND: [{ matchType: matchTypeFilter }, periodWindow] }
+        : includeAll
+          ? {}
+          : periodWindow;
 
   try {
     const [total, matchings] = await prisma.$transaction([
@@ -994,6 +1002,7 @@ router.get('/matches', async (req, res) => {
       periodEnd: includeAll ? null : pe.toISOString(),
       matches: matchings.map((m) => ({
         id: m.id,
+        matchType: m.matchType,
         userAId: m.userAId,
         userBId: m.userBId,
         userANickname: m.userA?.nickname ?? null,
@@ -1748,11 +1757,13 @@ router.delete('/matches/:id', async (req, res) => {
  */
 router.post('/matches/batch-run', async (req, res) => {
   try {
+    const mt = normalizeMatchType(req.body?.matchType ?? req.body?.match_type) || MATCH_TYPE_ROMANCE;
     const result = await runWeeklyBatchMatch({
       actorType: 'admin',
       actorId: req.admin.adminId,
       requestIp: req.ip || null,
       requestUserAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      matchType: mt,
     });
     return res.status(200).json(result);
   } catch (err) {

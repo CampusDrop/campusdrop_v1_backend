@@ -13,6 +13,65 @@ function isoOrNull(d) {
   return d ? new Date(d).toISOString() : null;
 }
 
+/** RDS 등에서 `$queryRaw` IN 바인딩이 `text`로 들어가 `uuid = text`(42883)가 나지 않도록 캐스팅한다. */
+function uuidListForRawIn(identityIds) {
+  return Prisma.join(identityIds.map((id) => Prisma.sql`CAST(${id} AS uuid)`));
+}
+
+/** 주간 설문 테이블이 아직 마이그레이션되지 않은 등으로 조회 불가할 때만 true (그 외는 상위로 전파). */
+function isWeeklySnapshotLayerUnavailable(err) {
+  const msg = err instanceof Error ? err.message : String(err);
+  const code = err instanceof Prisma.PrismaClientKnownRequestError ? err.code : null;
+
+  const mentionsWeeklyTable =
+    /weekly_survey_submissions/i.test(msg) || /friend_weekly_survey_submissions/i.test(msg);
+
+  /* 테이블 자체 없음(P2021) — 다른 모델의 P2021을 삼키지 않도록 이름을 확인합니다. */
+  if (code === 'P2021') {
+    return (
+      mentionsWeeklyTable ||
+      (/does not exist/i.test(msg) && /survey_submission/i.test(msg) && /weekly/i.test(msg))
+    );
+  }
+  if (code === 'P2010' && mentionsWeeklyTable) {
+    return true;
+  }
+  if (mentionsWeeklyTable && /does not exist/i.test(msg)) {
+    return true;
+  }
+
+  /* 기존 friend 전용 폴백과 동일한 휴리스틱(메시지에 테이블명이 안 잡히는 클라이언트 대비). */
+  if (/friend_weekly_survey_submissions/i.test(msg)) {
+    return true;
+  }
+  if (/does not exist/i.test(msg) && /friend/i.test(msg)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * @template T
+ * @param {string} label
+ * @param {() => Promise<T>} loadFn
+ * @returns {Promise<T>}
+ */
+async function weeklyRowsOrEmpty(label, loadFn) {
+  try {
+    return await loadFn();
+  } catch (err) {
+    if (!isWeeklySnapshotLayerUnavailable(err)) {
+      throw err;
+    }
+    console.error(
+      `effectiveLanesByIdentityIds: ${label} unavailable (migrate DB?); lane falls back to trait-only`,
+      err,
+    );
+    return /** @type {T} */ ([]);
+  }
+}
+
 /** @param {{ id: string; targetPeriodStart: Date; targetPeriodEnd: Date; submittedAt: Date } | null} row */
 function weeklySummaryFromRow(row) {
   if (!row) return null;
@@ -115,7 +174,7 @@ async function fetchLatestRomanceWeeklyRowsForIdentities(identityIds, prismaClie
       submitted_at AS "submittedAt",
       survey_data AS "surveyData"
     FROM weekly_survey_submissions
-    WHERE identity_id IN (${Prisma.join(identityIds)})
+    WHERE identity_id IN (${uuidListForRawIn(identityIds)})
     ORDER BY identity_id, submitted_at DESC
   `;
 }
@@ -135,7 +194,7 @@ async function fetchLatestFriendWeeklyRowsForIdentities(identityIds, prismaClien
       submitted_at AS "submittedAt",
       survey_data AS "surveyData"
     FROM friend_weekly_survey_submissions
-    WHERE identity_id IN (${Prisma.join(identityIds)})
+    WHERE identity_id IN (${uuidListForRawIn(identityIds)})
     ORDER BY identity_id, submitted_at DESC
   `;
 }
@@ -212,39 +271,13 @@ async function effectiveLanesByIdentityIds(identityIds, options = {}) {
   const loadLatestRomanceRows = () => fetchLatestRomanceWeeklyRowsForIdentities(uniq, prismaClient);
   const loadLatestFriendRows = () => fetchLatestFriendWeeklyRowsForIdentities(uniq, prismaClient);
 
-  let romanceTargetRows;
-  let friendTargetRows;
-  let latestRomanceRows;
-  let latestFriendRows;
-  try {
-    [romanceTargetRows, friendTargetRows, latestRomanceRows, latestFriendRows] = await Promise.all([
-      loadRomanceTargetRows(),
-      loadFriendTargetRows(),
-      loadLatestRomanceRows(),
-      loadLatestFriendRows(),
+  const [romanceTargetRows, friendTargetRows, latestRomanceRows, latestFriendRows] =
+    await Promise.all([
+      weeklyRowsOrEmpty('romance target submissions', loadRomanceTargetRows),
+      weeklyRowsOrEmpty('friend target submissions', loadFriendTargetRows),
+      weeklyRowsOrEmpty('latest romance weekly', loadLatestRomanceRows),
+      weeklyRowsOrEmpty('latest friend weekly', loadLatestFriendRows),
     ]);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    const code = err instanceof Prisma.PrismaClientKnownRequestError ? err.code : null;
-    const friendWeeklyUnavailable =
-      code === 'P2021' ||
-      (code === 'P2010' && /friend_weekly_survey_submissions/i.test(msg)) ||
-      /friend_weekly_survey_submissions/i.test(msg) ||
-      (/does not exist/i.test(msg) && /friend/i.test(msg));
-    if (!friendWeeklyUnavailable) {
-      throw err;
-    }
-    console.error(
-      'effectiveLanesByIdentityIds: friend weekly submissions unavailable (migrate DB?); friend lane falls back to trait-only',
-      err,
-    );
-    [romanceTargetRows, friendTargetRows, latestRomanceRows, latestFriendRows] = await Promise.all([
-      loadRomanceTargetRows(),
-      Promise.resolve([]),
-      loadLatestRomanceRows(),
-      Promise.resolve([]),
-    ]);
-  }
 
   const traitById = new Map(traitRows.map((t) => [t.id, t]));
   const romanceTargetById = new Map(romanceTargetRows.map((r) => [r.identityId, r]));

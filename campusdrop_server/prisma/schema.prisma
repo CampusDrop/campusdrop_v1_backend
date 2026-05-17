@@ -406,6 +406,10 @@ model FestivalApplication {
   userId            BigInt        @unique @map("user_id")
   user              FestivalUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
   receptionId       String        @unique @map("reception_id")
+  /// 1 = 첫 매칭(예: 14시), 2 = 두 번째(예: 17시) — 제출 시각·설정 시간으로 결정
+  matchingSlot      Int           @default(1) @map("matching_slot")
+  /// 신청이 속한 축제 "날짜"(KST 달력) — 회차별 정원 카운트에 사용
+  appliedLocalDate  DateTime      @db.Date @map("applied_local_date")
   peopleCount       Int           @map("people_count")
   vibe              String
   gender            String        @db.Char(1)
@@ -417,6 +421,7 @@ model FestivalApplication {
   deletedAt         DateTime?     @map("deleted_at")
 
   @@index([gender, status], map: "festival_applications_gender_status_idx")
+  @@index([gender, status, matchingSlot, appliedLocalDate], map: "festival_applications_slot_day_idx")
   @@map("festival_applications")
 }
 
@@ -425,6 +430,9 @@ model FestivalConfig {
   id                   Int      @id @default(autoincrement())
   matchTargetTime      DateTime @map("match_target_time")
   maxCapacityPerGender Int      @default(50) @map("max_capacity_per_gender")
+  /// 첫 회차 카카오/운영 매칭 기준 시각(KST 벽시계 시·0~23)
+  slot1MatchHour       Int      @default(14) @map("slot1_match_hour")
+  slot2MatchHour       Int      @default(17) @map("slot2_match_hour")
   isActive             Boolean  @default(true) @map("is_active")
   updatedAt            DateTime @updatedAt @map("updated_at")
 

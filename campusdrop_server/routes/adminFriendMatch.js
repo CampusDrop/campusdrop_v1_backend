@@ -32,6 +32,7 @@ const {
   deleteMatchingsForUsersInPeriod,
   deleteFriendGroupMatchingsTouchingUsers,
   resolveApplicationPeriodStart,
+  applicationPeriodStartFromMeetingTargetWeekStart,
 } = require('../lib/matchPolicy');
 const { parseMatchedSlotInput } = require('../lib/parseMatchedSlotInput');
 const { kstWallClockToUtc, utcToKstSlot } = require('../lib/kstMeetingInstant');
@@ -60,17 +61,55 @@ function parsePeriodStartQuery(raw) {
 }
 
 /**
- * 관리자 본문 `periodStart` / 기본 현재 매칭 주.
+ * 관리자 본문: 신청 주 `periodStart`, 또는 만남 대상 주 `meetingTargetPeriodStart`, 또는 생략 시 현재 신청 주.
  * @param {unknown} body
+ * @returns {{ ok: true, value: Date, periodStartResolution: string } | { ok: false, error: string }}
  */
 function periodStartFromFriendAdminBody(body) {
   const b = body && typeof body === 'object' ? body : {};
-  const parsed = parsePeriodStartQuery(b.periodStart ?? b.period_start ?? null);
+  const appIn = b.periodStart ?? b.period_start ?? null;
+  const targetIn =
+    b.meetingTargetPeriodStart ??
+    b.meeting_target_period_start ??
+    b.targetPeriodStart ??
+    b.target_period_start ??
+    null;
+
+  const appExplicit = !(appIn == null || appIn === '');
+  const targetExplicit = !(targetIn == null || targetIn === '');
+
+  if (appExplicit && targetExplicit) {
+    return {
+      ok: false,
+      error:
+        'periodStart와 meetingTargetPeriodStart(targetPeriodStart)는 함께 보낼 수 없습니다. 하나만 지정하세요.',
+    };
+  }
+
+  if (targetExplicit) {
+    const td = new Date(String(targetIn));
+    if (Number.isNaN(td.getTime())) {
+      return { ok: false, error: 'meetingTargetPeriodStart는 유효한 ISO 날짜여야 합니다.' };
+    }
+    const value = applicationPeriodStartFromMeetingTargetWeekStart(td);
+    return {
+      ok: true,
+      value,
+      periodStartResolution: 'derived_from_meeting_target_week',
+    };
+  }
+
+  const parsed = parsePeriodStartQuery(appExplicit ? appIn : null);
   if (!parsed.ok) return parsed;
-  /** 배치·GET /matches·미매칭 목록과 동일한 신청 주 앵커로 맞춤(임의 시각 그대로 저장하면 조회에서 빠짐). */
+  /** 배치·GET /matches·미매칭 목록과 동일한 신청 주 앵커로 맞춤. */
   const value =
     parsed.value != null ? resolveApplicationPeriodStart(parsed.value) : getMatchingPeriodStart();
-  return { ok: true, value };
+  return {
+    ok: true,
+    value,
+    periodStartResolution:
+      parsed.value != null ? 'explicit_application_week' : 'current_week_default',
+  };
 }
 
 /** @param {unknown} rawIds */
@@ -443,6 +482,10 @@ router.delete('/friend-match/groups/:id', async (req, res) => {
 
 /**
  * 친구 소그룹 강제 매칭 — 3~5명 한 그룹. 해당 주기에 포함된 사용자의 기존 친구 그룹·FRIEND 1:1 매칭을 제거 후 생성.
+ *
+ * `periodStart`: 신청·운영 주(배치와 동일). 생략 시 현재 신청 주.
+ * 만남 대상 주 시작만 알 때는 `meetingTargetPeriodStart`(또는 `targetPeriodStart`)만 보내면 신청 주로 환산해 저장한다.
+ * `periodStart`와 만남 대상 주 필드는 동시에 보낼 수 없다.
  */
 router.post('/friend-match/groups/force', async (req, res) => {
   const body = req.body && typeof req.body === 'object' ? req.body : {};
@@ -459,6 +502,7 @@ router.post('/friend-match/groups/force', async (req, res) => {
   }
   /** @type {Date} */
   const periodStart = psParsed.value;
+  const periodStartResolution = psParsed.periodStartResolution;
 
   const matchedSlotParsed = parseMatchedSlotInput(body.matchedSlot ?? body.matched_slot);
   if (!matchedSlotParsed.ok) {
@@ -600,6 +644,7 @@ router.post('/friend-match/groups/force', async (req, res) => {
       userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
       metadata: {
         periodStart: periodStart.toISOString(),
+        periodStartResolution,
         identityIds,
         clearedPriorFriendGroupIds: created.clearedGroupIds,
         meetingStartsAt: meetingStartsAt ? meetingStartsAt.toISOString() : null,
@@ -613,6 +658,7 @@ router.post('/friend-match/groups/force', async (req, res) => {
     return res.status(201).json({
       matchType: MATCH_TYPE_FRIEND,
       message: '친구 소그룹 강제 매칭이 등록되었습니다.',
+      periodStartResolution,
       replacedPriorFriendGroupIds: created.clearedGroupIds,
       friendGroupMatching: {
         id: row.id,

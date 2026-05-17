@@ -47,6 +47,19 @@ function resolveApplicationPeriodStart(d) {
 }
 
 /**
+ * 만남 대상 주 시작(`getSurveyTargetPeriodStartForApplicationPeriod(A)`와 같은 축, 즉 `getMatchingPeriodEnd(A)`).
+ * 관리자가 이 날짜를 신청 주로 착각해 넣을 때 `FriendGroupMatching.periodStart`에 넣을 신청 주 `A`로 역산한다.
+ *
+ * @param {Date | string | number} meetingTargetWeekStart
+ */
+function applicationPeriodStartFromMeetingTargetWeekStart(meetingTargetWeekStart) {
+  const targetSnap = resolveApplicationPeriodStart(
+    meetingTargetWeekStart instanceof Date ? meetingTargetWeekStart : new Date(meetingTargetWeekStart),
+  );
+  return resolveApplicationPeriodStart(new Date(targetSnap.getTime() - 1));
+}
+
+/**
  * 과거 `matchings`에 한 번이라도 함께 올라간 적 있는 상대 `Identity.id`(전 기간).
  * @param {import('@prisma/client').PrismaClient} prisma
  * @param {string} selfId
@@ -407,6 +420,7 @@ module.exports = {
   getMatchingPeriodStart,
   getMatchingPeriodEnd,
   resolveApplicationPeriodStart,
+  applicationPeriodStartFromMeetingTargetWeekStart,
   getHistoricalPartnerIds,
   getForbiddenPairTuplesForBatch,
   getForbiddenPairTuplesForFriendGroupBatch,

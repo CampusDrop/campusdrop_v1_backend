@@ -134,6 +134,49 @@ app.get('/', (req, res) => {
     });
 });
 
+/**
+ * 처리되지 않은 오류는 Express 기본 핸들러로 가면 `<pre>Internal Server Error</pre>` HTML만 내려갑니다.
+ * JSON 본문 파싱 실패(SyntaxError)·기타 next(err)도 여기서 통일합니다.
+ */
+app.use((err, req, res, _next) => {
+    if (res.headersSent) {
+        _next(err);
+        return;
+    }
+
+    const rawStatus = err.statusCode ?? err.status;
+    const status =
+        typeof rawStatus === 'number' && rawStatus >= 400 && rawStatus < 600 ? rawStatus : 500;
+
+    /** express.json / body-parser 가 넘기는 잘못된 JSON (보통 `body` 속성 있음) */
+    const isBadJsonBody =
+        err instanceof SyntaxError && Object.prototype.hasOwnProperty.call(err, 'body');
+
+    const resolvedStatus = isBadJsonBody ? 400 : status;
+
+    console.error('[express]', req.method, req.originalUrl || req.url, err);
+
+    const dev = process.env.NODE_ENV !== 'production';
+    let message;
+    if (isBadJsonBody) {
+        message = '요청 본문이 올바른 JSON이 아닙니다.';
+    } else if (dev) {
+        message = err.message || String(err);
+    } else if (resolvedStatus >= 500) {
+        message = '서버 오류가 발생했습니다.';
+    } else {
+        message =
+            typeof err.message === 'string' && err.message.trim()
+                ? err.message
+                : '요청을 처리할 수 없습니다.';
+    }
+
+    res.status(resolvedStatus).json({
+        error: message,
+        ...(dev && err.stack ? { stack: String(err.stack) } : {}),
+    });
+});
+
 // 4. 서버 시작
 const server = app.listen(PORT, HOST, () => {
     const advertise =

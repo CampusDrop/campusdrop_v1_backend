@@ -3,37 +3,33 @@
 const crypto = require('crypto');
 const { utcToKstSlot, kstWallClockToUtc } = require('./kstMeetingInstant');
 
-/** I, O, 0, 1 제외 — 현장 안내·입력 혼동 완화 */
-const BOOTH_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+/** 생성되는 현장 부스 코드 길이 (숫자만). */
+const BOOTH_CODE_LENGTH = 4;
 
 function isFestivalBoothCodeEnabled() {
   return Boolean(String(process.env.FESTIVAL_BOOTH_CODE_SECRET || '').trim());
 }
 
-/** @param {unknown} raw */
+/** 숫자만 추출 후 4자리로 맞춤(입력 `42` → `0042`). 4자 초과 시 끝 4자 사용. */
 function normalizeBoothCodeInput(raw) {
-  return String(raw ?? '')
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, '');
+  const digits = String(raw ?? '').replace(/\D/g, '');
+  if (!digits) return '';
+  const tail = digits.length <= BOOTH_CODE_LENGTH ? digits : digits.slice(-BOOTH_CODE_LENGTH);
+  return tail.padStart(BOOTH_CODE_LENGTH, '0').slice(-BOOTH_CODE_LENGTH);
 }
 
 /**
- * @param {Buffer} digest min 8 bytes
+ * @param {Buffer} digest SHA-256 HMAC 등 충분한 길이의 다이제스트
  */
-function hmacDigestToCode6(digest) {
-  let n = 0n;
-  const use = Math.min(8, digest.length);
+function hmacDigestToNumericCode(digest) {
+  const use = Math.min(4, digest.length);
+  let n = 0;
   for (let i = 0; i < use; i += 1) {
-    n = (n << 8n) | BigInt(digest[i]);
+    n = (n << 8) | digest[i];
   }
-  let out = '';
-  const base = BigInt(BOOTH_CODE_ALPHABET.length);
-  for (let i = 0; i < 6; i += 1) {
-    out += BOOTH_CODE_ALPHABET[Number(n % base)];
-    n /= base;
-  }
-  return out;
+  const mod = 10 ** BOOTH_CODE_LENGTH;
+  const codeNum = n % mod;
+  return String(codeNum).padStart(BOOTH_CODE_LENGTH, '0');
 }
 
 /**
@@ -47,7 +43,7 @@ function computeBoothCodeForInstant(secret, now) {
   const hh = String(slot.hourStart).padStart(2, '0');
   const payload = `festival-booth-hour|${slot.date}T${hh}`;
   const digest = crypto.createHmac('sha256', secret).update(payload).digest();
-  const code = hmacDigestToCode6(digest);
+  const code = hmacDigestToNumericCode(digest);
   return {
     code,
     slot,
@@ -65,7 +61,7 @@ function verifyFestivalBoothCodeFromRequestBody(body) {
 
   const raw = body?.boothCode ?? body?.booth_code;
   const norm = normalizeBoothCodeInput(typeof raw === 'string' ? raw : raw == null ? '' : String(raw));
-  if (!norm) {
+  if (!norm || norm.length !== BOOTH_CODE_LENGTH) {
     return {
       error: '부스 인증 코드(boothCode)가 필요합니다. 현장 안내된 코드를 입력해 주세요.',
     };

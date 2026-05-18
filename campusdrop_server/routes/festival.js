@@ -4,7 +4,6 @@ const { Prisma } = require('@prisma/client');
 const { prisma } = require('../lib/prisma');
 const { requireFestivalPhone } = require('../lib/requireFestivalPhone');
 const { normalizeKoMobile } = require('../lib/festivalPhone');
-const { computeOpenSubmissionSlot } = require('../lib/festivalRoundAdmission');
 const {
   resolveSlotHoursFromConfig,
   slotUtcStarts,
@@ -12,6 +11,7 @@ const {
   ymdFromPrismaDateOnly,
   dateOnlyFromYmd,
 } = require('../lib/festivalSlotPolicy');
+const { isFestivalBoothCodeEnabled, verifyFestivalBoothCodeFromRequestBody } = require('../lib/festivalBoothHourCode');
 
 const router = express.Router();
 
@@ -102,26 +102,26 @@ async function allocateReceptionIdInsideTx(tx) {
 }
 
 /**
- * 축제 신청 정원: 여성(`F`)은 상한 없음, 남성만 `maxCapacityPerGender` 적용.
- * @param {number} appliedCnt
- * @param {number} maxPerGender
- * @param {'M'|'F'} gender
+ * 같은 일자 풀에서 남성 APPLIED 수가 여성 APPLIED 수 이상이면 남성 신청 불가.
+ * (여성은 무제한·남성은 여성 인원까지만.)
+ * @param {import('@prisma/client').Prisma.TransactionClient} tx
  */
-function isFestivalApplyAtCapacity(appliedCnt, maxPerGender, gender) {
-  if (gender === 'F') return false;
-  return appliedCnt >= maxPerGender;
+async function countFestivalAppliedGenderForDate(tx, appliedLocalDate, gender) {
+  return tx.festivalApplication.count({
+    where: {
+      gender,
+      status: 'APPLIED',
+      deletedAt: null,
+      appliedLocalDate,
+    },
+  });
 }
 
-/**
- * @param {import('@prisma/client').FestivalApplication} row
- * @param {import('../lib/festivalSlotPolicy').FestivalSlotHours} hours
- */
-function applicationJson(row, hours) {
+/** @param {import('@prisma/client').FestivalApplication} row */
+function applicationJson(row) {
   const ymd = ymdFromPrismaDateOnly(row.appliedLocalDate);
-  const { slot1Utc, slot2Utc } = slotUtcStarts(ymd, hours);
   return {
     receptionId: row.receptionId,
-    matchingSlot: row.matchingSlot,
     appliedLocalDateKst: ymd,
     peopleCount: row.peopleCount,
     vibe: row.vibe,
@@ -135,14 +135,12 @@ function applicationJson(row, hours) {
     partnerPhone: row.partnerPhone ?? null,
     partnerReceptionId: row.partnerReceptionId ?? null,
     matchedAt: row.matchedAt ? row.matchedAt.toISOString() : null,
-    slot1MatchAtUtc: slot1Utc ? slot1Utc.toISOString() : null,
-    slot2MatchAtUtc: slot2Utc ? slot2Utc.toISOString() : null,
   };
 }
 
 /**
  * GET /api/festival/me
- * — KST 같은 날 `phone·appliedLocalDate` 유니크 1건을 내려줍니다(회차는 관리자 매칭 기준으로 열림).
+ * — KST 같은 날 `phone·appliedLocalDate` 유니크 1건을 내려줍니다(당일 단일 대기 풀·매칭은 관리자 `match-run` 시점).
  * — `?phone=` 또는 `x-festival-phone` (010… 11자리, 본인인증 없음).
  */
 router.get('/me', requireFestivalPhone, async (req, res) => {
@@ -194,6 +192,8 @@ router.get('/me', requireFestivalPhone, async (req, res) => {
         matchTargetTime: cfg.matchTargetTime.toISOString(),
         maxCapacityPerGender: cfg.maxCapacityPerGender,
         femaleCapacityUnlimited: true,
+        maleCapacityMatchesFemaleApplicants: true,
+        boothCodeRequired: isFestivalBoothCodeEnabled(),
       },
     };
 
@@ -204,7 +204,7 @@ router.get('/me', requireFestivalPhone, async (req, res) => {
           visibility: 'DROPPED',
           inactiveReason: null,
           closedSlot: null,
-          application: applicationJson(app, hours),
+          application: applicationJson(app),
         });
       }
       return res.status(200).json({
@@ -222,7 +222,7 @@ router.get('/me', requireFestivalPhone, async (req, res) => {
         visibility: 'MATCHED',
         inactiveReason: null,
         closedSlot: null,
-        application: applicationJson(app, hours),
+        application: applicationJson(app),
       });
     }
 
@@ -231,7 +231,7 @@ router.get('/me', requireFestivalPhone, async (req, res) => {
       visibility: 'ACTIVE',
       inactiveReason: null,
       closedSlot: null,
-      application: applicationJson(app, hours),
+      application: applicationJson(app),
     });
   } catch (err) {
     console.error('festival GET /me:', err);
@@ -246,6 +246,18 @@ router.post('/mood-apply', async (req, res) => {
   const parsed = parseMoodApplyBody(req.body);
   if (!parsed.ok) {
     return res.status(400).json({ error: parsed.error });
+  }
+
+  const bodyObj =
+    req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? /** @type {Record<string, unknown>} */ (req.body)
+      : {};
+  const boothFail = verifyFestivalBoothCodeFromRequestBody(bodyObj);
+  if (boothFail) {
+    return res.status(403).json({
+      error: boothFail.error,
+      code: 'FESTIVAL_BOOTH_CODE_INVALID',
+    });
   }
 
   try {
@@ -265,21 +277,8 @@ router.post('/mood-apply', async (req, res) => {
         }
 
         const appliedLocalDate = dateOnlyFromYmd(kstToday);
-        const open = await computeOpenSubmissionSlot(tx, appliedLocalDate);
-        if (!open.slot) {
-          return { tag: 'closed', error: open.errorMessage || '신청 접수가 마감되었습니다.' };
-        }
-
-        const targetSlot = open.slot;
 
         const form = parsed.value;
-        const capWhere = /** @type {const} */ ({
-          gender: form.gender,
-          status: 'APPLIED',
-          deletedAt: null,
-          matchingSlot: targetSlot,
-          appliedLocalDate,
-        });
 
         const phoneDateKey = { phone: form.phone, appliedLocalDate };
 
@@ -287,20 +286,22 @@ router.post('/mood-apply', async (req, res) => {
           where: { phone_appliedLocalDate: phoneDateKey },
         });
 
-        async function countCap() {
-          return tx.festivalApplication.count({
-            where: capWhere,
-          });
+        /** 남성 신청·성별 변경 시: 해당 일자 여성 수 미만이어야 함 */
+        async function isMaleDayFull() {
+          const [mCnt, fCnt] = await Promise.all([
+            countFestivalAppliedGenderForDate(tx, appliedLocalDate, 'M'),
+            countFestivalAppliedGenderForDate(tx, appliedLocalDate, 'F'),
+          ]);
+          return mCnt >= fCnt;
         }
 
-        /** @returns {Promise<{ tag: string, receptionId?: string, status?: string, matchingSlot?: number }>} */
+        /** @returns {Promise<{ tag: string, receptionId?: string, status?: string }>} */
         async function upsertApplied({ receptionId }) {
           if (existing && existing.status === 'DROPPED') {
             const updated = await tx.festivalApplication.update({
               where: { phone_appliedLocalDate: phoneDateKey },
               data: {
                 receptionId,
-                matchingSlot: targetSlot,
                 appliedLocalDate,
                 peopleCount: form.peopleCount,
                 vibe: form.vibe,
@@ -317,14 +318,12 @@ router.post('/mood-apply', async (req, res) => {
               tag: 'ok',
               receptionId: updated.receptionId,
               status: updated.status,
-              matchingSlot: updated.matchingSlot,
             };
           }
 
           const created = await tx.festivalApplication.create({
             data: {
               receptionId,
-              matchingSlot: targetSlot,
               appliedLocalDate,
               peopleCount: form.peopleCount,
               vibe: form.vibe,
@@ -339,13 +338,11 @@ router.post('/mood-apply', async (req, res) => {
             tag: 'ok',
             receptionId: created.receptionId,
             status: created.status,
-            matchingSlot: created.matchingSlot,
           };
         }
 
         if (!existing) {
-          const appliedCnt = await countCap();
-          if (isFestivalApplyAtCapacity(appliedCnt, cfg.maxCapacityPerGender, form.gender)) {
+          if (form.gender === 'M' && (await isMaleDayFull())) {
             return { tag: 'full' };
           }
           const receptionId = await allocateReceptionIdInsideTx(tx);
@@ -357,8 +354,7 @@ router.post('/mood-apply', async (req, res) => {
         }
 
         if (existing.status === 'DROPPED') {
-          const appliedCnt = await countCap();
-          if (isFestivalApplyAtCapacity(appliedCnt, cfg.maxCapacityPerGender, form.gender)) {
+          if (form.gender === 'M' && (await isMaleDayFull())) {
             return { tag: 'full' };
           }
           const receptionId = await allocateReceptionIdInsideTx(tx);
@@ -368,11 +364,14 @@ router.post('/mood-apply', async (req, res) => {
         if (existing.status === 'APPLIED') {
           const sameDay = ymdFromPrismaDateOnly(existing.appliedLocalDate) === kstToday;
 
-          if (existing.matchingSlot === targetSlot && sameDay) {
+          if (sameDay) {
             if (existing.gender !== form.gender) {
-              const appliedCnt = await countCap();
-              if (isFestivalApplyAtCapacity(appliedCnt, cfg.maxCapacityPerGender, form.gender)) {
-                return { tag: 'full' };
+              if (form.gender === 'M' && existing.gender === 'F') {
+                const mCnt = await countFestivalAppliedGenderForDate(tx, appliedLocalDate, 'M');
+                const fCnt = await countFestivalAppliedGenderForDate(tx, appliedLocalDate, 'F');
+                if (mCnt + 2 > fCnt) {
+                  return { tag: 'full' };
+                }
               }
             }
             const updated = await tx.festivalApplication.update({
@@ -392,7 +391,6 @@ router.post('/mood-apply', async (req, res) => {
               tag: 'ok',
               receptionId: updated.receptionId,
               status: updated.status,
-              matchingSlot: updated.matchingSlot,
             };
           }
 
@@ -409,8 +407,11 @@ router.post('/mood-apply', async (req, res) => {
     );
 
     if (outcome.tag === 'full') {
+      const isMaleCase = parsed.value.gender === 'M';
       return res.status(403).json({
-        error: `${parsed.value.gender === 'M' ? '남성' : '여성'} 정원 마감(선착순 종료).`,
+        error: isMaleCase
+          ? '남성 신청 정원은 같은 날짜의 여성 신청 인원과 같거나 적어야 합니다.'
+          : '신청 정원이 마감되었습니다.',
         code: 'FESTIVAL_CAPACITY_FULL',
       });
     }
@@ -428,12 +429,6 @@ router.post('/mood-apply', async (req, res) => {
         receptionId: outcome.receptionId,
       });
     }
-    if (outcome.tag === 'closed') {
-      return res.status(403).json({
-        error: outcome.error ?? '신청 접수가 마감되었습니다.',
-        code: 'FESTIVAL_APPLY_CLOSED',
-      });
-    }
     if (outcome.tag === 'no_config') {
       return res.status(503).json({
         error: outcome.error,
@@ -446,7 +441,6 @@ router.post('/mood-apply', async (req, res) => {
     return res.status(200).json({
       receptionId: outcome.receptionId,
       status: outcome.status,
-      matchingSlot: outcome.matchingSlot,
     });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
@@ -465,12 +459,11 @@ router.post('/mood-apply', async (req, res) => {
   }
 });
 
-async function slotGenderCounts(appliedLocalDate, slotNum) {
+async function dayAppliedGenderCounts(appliedLocalDate) {
   /** @type {const} */
   const common = {
     status: 'APPLIED',
     deletedAt: null,
-    matchingSlot: slotNum,
     appliedLocalDate,
   };
   const [m, f] = await Promise.all([
@@ -499,55 +492,43 @@ router.get('/status', async (req, res) => {
     const kstToday = todayKstYmd(new Date());
     const appliedLocalDay = kstToday ? dateOnlyFromYmd(kstToday) : null;
     const hours = resolveSlotHoursFromConfig(cfg);
-    const max = cfg.maxCapacityPerGender;
 
-    let slot1 = {
-      appliedMale: 0,
-      appliedFemale: 0,
-      remainingMale: max,
-      remainingFemale: null,
-    };
-    let slot2 = {
-      appliedMale: 0,
-      appliedFemale: 0,
-      remainingMale: max,
-      remainingFemale: null,
-    };
+    let appliedMale = 0;
+    let appliedFemale = 0;
+    let remainingMale = 0;
+    let pairablePairs = 0;
 
     if (appliedLocalDay) {
-      const c1 = await slotGenderCounts(appliedLocalDay, 1);
-      const c2 = await slotGenderCounts(appliedLocalDay, 2);
-      slot1 = {
-        appliedMale: c1.male,
-        appliedFemale: c1.female,
-        remainingMale: Math.max(0, max - c1.male),
-        remainingFemale: null,
-      };
-      slot2 = {
-        appliedMale: c2.male,
-        appliedFemale: c2.female,
-        remainingMale: Math.max(0, max - c2.male),
-        remainingFemale: null,
-      };
+      const c = await dayAppliedGenderCounts(appliedLocalDay);
+      appliedMale = c.male;
+      appliedFemale = c.female;
+      remainingMale = Math.max(0, c.female - c.male);
+      pairablePairs = Math.min(c.male, c.female);
     }
-
-    const appliedMaleTotal = slot1.appliedMale + slot2.appliedMale;
-    const appliedFemaleTotal = slot1.appliedFemale + slot2.appliedFemale;
 
     return res.status(200).json({
       appliedLocalDateKst: kstToday,
       matchTargetTime: cfg.matchTargetTime.toISOString(),
-      maxCapacityPerGender: max,
+      maxCapacityPerGender: cfg.maxCapacityPerGender,
       femaleCapacityUnlimited: true,
+      maleCapacityMatchesFemaleApplicants: true,
+      boothCodeRequired: isFestivalBoothCodeEnabled(),
+      scheduleNoteKst:
+        '`slot1_match_hour` 등은 참고용 표시일 뿐이며, 매칭 시점은 관리자가 `match-run`을 실행할 때 결정됩니다.',
       slot1MatchHourKst: hours.slot1MatchHour,
       slot2MatchHourKst: hours.slot2MatchHour,
-      slots: {
-        1: slot1,
-        2: slot2,
-      },
-      appliedMale: appliedMaleTotal,
-      appliedFemale: appliedFemaleTotal,
-      remainingMale: Math.max(0, max - appliedMaleTotal),
+      waitingPoolTodayKst: appliedLocalDay
+        ? {
+            appliedMale,
+            appliedFemale,
+            remainingMaleSlotsVsFemaleApplicants: remainingMale,
+            remainingFemale: null,
+            pairablePairsThisRun: pairablePairs,
+          }
+        : null,
+      appliedMale,
+      appliedFemale,
+      remainingMale,
       remainingFemale: null,
       isActive: cfg.isActive,
     });

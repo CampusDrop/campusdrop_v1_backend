@@ -15,14 +15,13 @@ function shuffleInPlace(arr) {
 }
 
 /**
- * 이성 1:1 무작위 매칭. `APPLIED`만 아직 짝 없는 후보로 사용합니다.
+ * 이성 1:1 무작위 매칭. 해당 일자 `APPLIED`만 후보로 사용합니다.
  * @param {import('@prisma/client').Prisma.TransactionClient} tx
- * @param {{ appliedLocalDate: Date, matchingSlot: number }} p
+ * @param {{ appliedLocalDate: Date }} p
  */
-async function runFestivalPairing(tx, { appliedLocalDate, matchingSlot }) {
+async function runFestivalPairing(tx, { appliedLocalDate }) {
   const baseWhere = /** @type {const} */ ({
     appliedLocalDate,
-    matchingSlot,
     deletedAt: null,
     status: 'APPLIED',
   });

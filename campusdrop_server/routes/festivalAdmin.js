@@ -13,7 +13,7 @@ const {
 const { writeAccessLog } = require('../lib/accessLog');
 const { runFestivalPairing } = require('../lib/festivalAdminMatch');
 const { buildFestivalMatchFriendTalkText } = require('../lib/festivalMatchNotifyText');
-const { isMatchingRoundComplete } = require('../lib/festivalRoundAdmission');
+const { isFestivalBoothCodeEnabled, getFestivalBoothCodeForAdmin } = require('../lib/festivalBoothHourCode');
 
 const router = express.Router();
 
@@ -62,8 +62,29 @@ function festivalDropFriendTalkText() {
 }
 
 /**
+ * GET /api/admin/festival/booth-code
+ * 현장 부스 LCD·프린트 안내용 코드. KST 기준 매 정시마다 변경. `FESTIVAL_BOOTH_CODE_SECRET` 설정 시에만 의미 있음.
+ */
+router.get('/festival/booth-code', adminAuthMiddleware, async (_req, res) => {
+  try {
+    if (!isFestivalBoothCodeEnabled()) {
+      return res.status(200).json({
+        enabled: false,
+        message:
+          'FESTIVAL_BOOTH_CODE_SECRET 가 비어 있어 부스 코드 검증이 비활성입니다. 신청 API는 코드 없이 접수됩니다.',
+      });
+    }
+    const payload = getFestivalBoothCodeForAdmin();
+    return res.status(200).json({ enabled: true, ...payload });
+  } catch (err) {
+    console.error('admin GET festival/booth-code:', err);
+    return res.status(500).json({ error: '부스 코드를 생성하지 못했습니다.' });
+  }
+});
+
+/**
  * GET /api/admin/festival/applications
- * Query: date=YYYY-MM-DD (필수), slot=1|2 (선택), phone= (선택), status=APPLIED|MATCHED|DROPPED (선택)
+ * Query: date=YYYY-MM-DD (필수), phone= (선택), status=APPLIED|MATCHED|DROPPED|ALL (선택, 기본 APPLIED — 매칭·드랍 전 대기 목록)
  */
 router.get('/festival/applications', adminAuthMiddleware, async (req, res) => {
   try {
@@ -72,81 +93,101 @@ router.get('/festival/applications', adminAuthMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'date 쿼리(YYYY-MM-DD, KST 달력)가 필요합니다.' });
     }
 
-    const slotRaw = req.query?.slot;
-    const s0 = Array.isArray(slotRaw) ? slotRaw[0] : slotRaw;
-    const slot =
-      s0 === '1' || s0 === 1
-        ? 1
-        : s0 === '2' || s0 === 2
-          ? 2
-          : null;
     const statusRaw = typeof req.query?.status === 'string' ? req.query.status.trim().toUpperCase() : '';
-    const status =
-      statusRaw === 'APPLIED' || statusRaw === 'MATCHED' || statusRaw === 'DROPPED' ? statusRaw : null;
+
+    /** @type {Record<string, unknown>} */
+    let statusWhere = { status: 'APPLIED' };
+    /** @type {Record<string, unknown>} */
+    let deletedPart = { deletedAt: null };
+
+    if (statusRaw === 'ALL') {
+      statusWhere = {};
+      deletedPart = {};
+    } else if (statusRaw === 'DROPPED') {
+      statusWhere = { status: 'DROPPED' };
+      deletedPart = {};
+    } else if (statusRaw === 'MATCHED' || statusRaw === 'APPLIED') {
+      statusWhere = { status: statusRaw };
+    }
 
     const phonePart = phoneFilterWhere(req.query?.phone);
-
-    const slotsToQuery = slot != null ? [slot] : /** @type {const} */ ([1, 2]);
     const week = kstWeekMeta(parsed.ymd);
 
     /** @type {Record<string, unknown>} */
     const baseWhere = {
       appliedLocalDate: parsed.date,
+      ...deletedPart,
       ...phonePart,
+      ...statusWhere,
     };
-    if (status) Object.assign(baseWhere, { status });
 
-    /** @type {Record<string, { matchingSlot: number, summary: Record<string, unknown>, applications: unknown[] }>} */
-    const slots = {};
+    const applications = await prisma.festivalApplication.findMany({
+      where: baseWhere,
+      orderBy: [{ status: 'asc' }, { gender: 'asc' }, { id: 'asc' }],
+    });
 
-    for (const sn of slotsToQuery) {
-      const where = { ...baseWhere, matchingSlot: sn };
-      const applications = await prisma.festivalApplication.findMany({
-        where,
-        orderBy: [{ status: 'asc' }, { gender: 'asc' }, { id: 'asc' }],
-      });
+    const [waitingMale, waitingFemale, matchedTotal, droppedTotal] = await Promise.all([
+      prisma.festivalApplication.count({
+        where: { appliedLocalDate: parsed.date, deletedAt: null, status: 'APPLIED', gender: 'M' },
+      }),
+      prisma.festivalApplication.count({
+        where: { appliedLocalDate: parsed.date, deletedAt: null, status: 'APPLIED', gender: 'F' },
+      }),
+      prisma.festivalApplication.count({
+        where: { appliedLocalDate: parsed.date, deletedAt: null, status: 'MATCHED' },
+      }),
+      prisma.festivalApplication.count({
+        where: { appliedLocalDate: parsed.date, status: 'DROPPED' },
+      }),
+    ]);
 
-      /** @type {Record<string, Record<string, number>>} */
-      const summary = { APPLIED: { M: 0, F: 0 }, MATCHED: { M: 0, F: 0 }, DROPPED: { M: 0, F: 0 } };
-      for (const row of applications) {
-        const g = row.gender === 'M' || row.gender === 'F' ? row.gender : null;
-        const st = row.status === 'APPLIED' || row.status === 'MATCHED' || row.status === 'DROPPED' ? row.status : null;
-        if (g && st) summary[st][g] += 1;
-      }
+    const pairablePairsThisRun = Math.min(waitingMale, waitingFemale);
 
-      slots[String(sn)] = {
-        matchingSlot: sn,
-        summary: {
-          APPLIED: { ...summary.APPLIED, total: summary.APPLIED.M + summary.APPLIED.F },
-          MATCHED: { ...summary.MATCHED, total: summary.MATCHED.M + summary.MATCHED.F },
-          DROPPED: { ...summary.DROPPED, total: summary.DROPPED.M + summary.DROPPED.F },
-        },
-        applications: applications.map((a) => ({
-          id: String(a.id),
-          receptionId: a.receptionId,
-          matchingSlot: a.matchingSlot,
-          appliedLocalDateKst: parsed.ymd,
-          peopleCount: a.peopleCount,
-          vibe: a.vibe,
-          gender: a.gender,
-          phone: a.phone,
-          instagram: a.instagram,
-          contactPreference: a.contactPreference,
-          status: a.status,
-          createdAt: a.createdAt.toISOString(),
-          deletedAt: a.deletedAt ? a.deletedAt.toISOString() : null,
-          partnerPhone: a.partnerPhone,
-          partnerReceptionId: a.partnerReceptionId,
-          matchedAt: a.matchedAt ? a.matchedAt.toISOString() : null,
-        })),
-      };
+    /** @type {Record<string, Record<string, number>>} */
+    const summary = { APPLIED: { M: 0, F: 0 }, MATCHED: { M: 0, F: 0 }, DROPPED: { M: 0, F: 0 } };
+    for (const row of applications) {
+      const g = row.gender === 'M' || row.gender === 'F' ? row.gender : null;
+      const st = row.status === 'APPLIED' || row.status === 'MATCHED' || row.status === 'DROPPED' ? row.status : null;
+      if (g && st) summary[st][g] += 1;
     }
 
     return res.status(200).json({
       appliedLocalDateKst: parsed.ymd,
-      scheduleNoteKst: '슬롯 1·2는 순서대로 접수되어, 각 회차는 관리자가 `match-run`으로 매칭을 돌린 뒤에만 다음 슬롯 신청이 열립니다. `slot1_match_hour` 등은 참고 표시용 KST 시간입니다.',
+      noteKst:
+        '한 날짜당 하나의 대기 풀입니다. 관리자가 `match-run`을 실행하면 그 시점의 `APPLIED` 중 이성 쌍을 매칭합니다. `status`를 생략하면 대기 중(`APPLIED`)만 반환합니다.',
       kst: week,
-      slots,
+      defaultStatusFilter: 'APPLIED',
+      dayCounts: {
+        waitingMale,
+        waitingFemale,
+        pairablePairsThisRun,
+        surplusMaleIfPaired: Math.max(0, waitingMale - waitingFemale),
+        surplusFemaleIfPaired: Math.max(0, waitingFemale - waitingMale),
+        matchedTotal,
+        droppedTotal,
+      },
+      summaryForCurrentQuery: {
+        APPLIED: { ...summary.APPLIED, total: summary.APPLIED.M + summary.APPLIED.F },
+        MATCHED: { ...summary.MATCHED, total: summary.MATCHED.M + summary.MATCHED.F },
+        DROPPED: { ...summary.DROPPED, total: summary.DROPPED.M + summary.DROPPED.F },
+      },
+      applications: applications.map((a) => ({
+        id: String(a.id),
+        receptionId: a.receptionId,
+        appliedLocalDateKst: parsed.ymd,
+        peopleCount: a.peopleCount,
+        vibe: a.vibe,
+        gender: a.gender,
+        phone: a.phone,
+        instagram: a.instagram,
+        contactPreference: a.contactPreference,
+        status: a.status,
+        createdAt: a.createdAt.toISOString(),
+        deletedAt: a.deletedAt ? a.deletedAt.toISOString() : null,
+        partnerPhone: a.partnerPhone,
+        partnerReceptionId: a.partnerReceptionId,
+        matchedAt: a.matchedAt ? a.matchedAt.toISOString() : null,
+      })),
     });
   } catch (err) {
     console.error('admin GET festival/applications:', err);
@@ -156,7 +197,7 @@ router.get('/festival/applications', adminAuthMiddleware, async (req, res) => {
 
 /**
  * POST /api/admin/festival/match-run
- * Body: `{ appliedLocalDate: "YYYY-MM-DD", matchingSlot: 1|2 }` — 해당 일자·회차에서 `APPLIED` 무작위 1:1 매칭·알림 후 회차 종료·(1회차면) 다음 회차 접수용으로 미매칭자를 슬롯 2로 이동.
+ * Body: `{ appliedLocalDate: "YYYY-MM-DD" }` 또는 `{ date: "YYYY-MM-DD" }` — 해당 일자 대기 풀에서 `APPLIED` 무작위 이성 1:1 매칭 후 친구톡 발송. 여러 번 실행 가능(남은 APPLIED만 매칭).
  */
 router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
   try {
@@ -172,11 +213,6 @@ router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'appliedLocalDate 또는 date(YYYY-MM-DD)가 필요합니다.' });
     }
 
-    const slotNum = Number(body.matchingSlot ?? body.matching_slot);
-    if (slotNum !== 1 && slotNum !== 2) {
-      return res.status(400).json({ error: 'matchingSlot은 1 또는 2여야 합니다.' });
-    }
-
     const cfgEnv = assertSolapiFriendTalkEnv();
     if (cfgEnv) {
       return res.status(503).json({
@@ -190,29 +226,9 @@ router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
     try {
       txResult = await prisma.$transaction(
         async (tx) => {
-          const dup = await tx.festivalMatchRoundCompletion.findUnique({
-            where: {
-              appliedLocalDate_matchingSlot: {
-                appliedLocalDate: parsed.date,
-                matchingSlot: slotNum,
-              },
-            },
-          });
-          if (dup) {
-            return { tag: /** @type {const} */ ('already_completed') };
-          }
-
-          if (slotNum === 2) {
-            const round1Done = await isMatchingRoundComplete(tx, parsed.date, 1);
-            if (!round1Done) {
-              return { tag: /** @type {const} */ ('round1_incomplete') };
-            }
-          }
-
           const appliedCnt = await tx.festivalApplication.count({
             where: {
               appliedLocalDate: parsed.date,
-              matchingSlot: slotNum,
               deletedAt: null,
               status: 'APPLIED',
             },
@@ -223,26 +239,6 @@ router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
 
           const pairingResult = await runFestivalPairing(tx, {
             appliedLocalDate: parsed.date,
-            matchingSlot: slotNum,
-          });
-
-          if (slotNum === 1) {
-            await tx.festivalApplication.updateMany({
-              where: {
-                appliedLocalDate: parsed.date,
-                matchingSlot: 1,
-                status: 'APPLIED',
-                deletedAt: null,
-              },
-              data: { matchingSlot: 2 },
-            });
-          }
-
-          await tx.festivalMatchRoundCompletion.create({
-            data: {
-              appliedLocalDate: parsed.date,
-              matchingSlot: slotNum,
-            },
           });
 
           return { tag: /** @type {const} */ ('ok'), pairingResult };
@@ -263,27 +259,10 @@ router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
       throw err;
     }
 
-    if (txResult.tag === 'already_completed') {
-      return res.status(409).json({
-        error: '해당 일자·회차 매칭이 이미 완료되어 다시 실행할 수 없습니다.',
-        code: 'FESTIVAL_ROUND_ALREADY_MATCHED',
-        appliedLocalDateKst: parsed.ymd,
-        matchingSlot: slotNum,
-      });
-    }
-
     if (txResult.tag === 'no_apps') {
       return res.status(400).json({
-        error: '해당 일자·슬롯에 매칭할 APPLIED 신청이 없습니다.',
+        error: '해당 일자에 매칭할 APPLIED 신청이 없습니다.',
         code: 'FESTIVAL_NO_APPLICATIONS_TO_MATCH',
-      });
-    }
-
-    if (txResult.tag === 'round1_incomplete') {
-      return res.status(409).json({
-        error: '1회차(슬롯 1) 매칭이 아직 완료되지 않아 2회차를 실행할 수 없습니다.',
-        code: 'FESTIVAL_ROUND1_INCOMPLETE',
-        appliedLocalDateKst: parsed.ymd,
       });
     }
 
@@ -339,7 +318,7 @@ router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
       actorType: 'admin',
       actorId: req.admin?.adminId ?? null,
       action: 'FESTIVAL_ADMIN_MATCH_RUN',
-      resource: `Festival:${parsed.ymd}:slot${slotNum}`,
+      resource: `Festival:${parsed.ymd}`,
       ip: req.ip || null,
       userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
       metadata: {
@@ -353,7 +332,6 @@ router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
     return res.status(200).json({
       ok: true,
       appliedLocalDateKst: parsed.ymd,
-      matchingSlot: slotNum,
       pairedCount: runResult.pairedCount,
       unmatchedMale: runResult.unmatchedMale,
       unmatchedFemale: runResult.unmatchedFemale,

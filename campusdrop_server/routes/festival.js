@@ -246,6 +246,45 @@ router.get('/me', requireFestivalPhone, async (req, res) => {
 });
 
 /**
+ * POST /api/festival/verify-onsite-code
+ * Body: `{ boothCode }` 또는 `{ booth_code }` — 현장 부스 코드만 검증합니다(신청 처리 없음).
+ * `FESTIVAL_BOOTH_CODE_SECRET` 미설정 시 검증 생략으로 성공합니다.
+ */
+router.post('/verify-onsite-code', async (req, res) => {
+  try {
+    const bodyObj =
+      req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+        ? /** @type {Record<string, unknown>} */ (req.body)
+        : {};
+
+    if (!isFestivalBoothCodeEnabled()) {
+      return res.status(200).json({
+        ok: true,
+        boothCodeRequired: false,
+        message: '부스 코드 검증이 비활성입니다.',
+      });
+    }
+
+    const boothFail = verifyFestivalBoothCodeFromRequestBody(bodyObj);
+    if (boothFail) {
+      return res.status(403).json({
+        ok: false,
+        error: boothFail.error,
+        code: 'FESTIVAL_BOOTH_CODE_INVALID',
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      boothCodeRequired: true,
+    });
+  } catch (err) {
+    console.error('festival POST verify-onsite-code:', err);
+    return res.status(500).json({ error: '확인 처리 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
  * POST /api/festival/mood-apply
  */
 router.post('/mood-apply', async (req, res) => {

@@ -15,6 +15,9 @@ const { isFestivalBoothCodeEnabled, verifyFestivalBoothCodeFromRequestBody } = r
 
 const router = express.Router();
 
+/** 같은 KST 일자 `APPLIED` 남성 최대 명수(여성 인원 이하 규칙과 함께 적용). */
+const FESTIVAL_MAX_MALE_APPLIED_PER_DAY = 30;
+
 /** @param {unknown} body */
 function parseMoodApplyBody(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -102,8 +105,10 @@ async function allocateReceptionIdInsideTx(tx) {
 }
 
 /**
- * 같은 일자 풀에서 남성 APPLIED 수가 여성 APPLIED 수 이상이면 남성 신청 불가.
- * (여성은 무제한·남성은 여성 인원까지만.)
+ * 같은 일자 풀에서 남성 신청 불가 조건:
+ * - 남성 APPLIED ≥ 여성 APPLIED 이거나
+ * - 남성 APPLIED ≥ {@link FESTIVAL_MAX_MALE_APPLIED_PER_DAY}.
+ * 여성은 별도 상한 없음.
  * @param {import('@prisma/client').Prisma.TransactionClient} tx
  */
 async function countFestivalAppliedGenderForDate(tx, appliedLocalDate, gender) {
@@ -193,6 +198,7 @@ router.get('/me', requireFestivalPhone, async (req, res) => {
         maxCapacityPerGender: cfg.maxCapacityPerGender,
         femaleCapacityUnlimited: true,
         maleCapacityMatchesFemaleApplicants: true,
+        maleAppliedHardCapPerDay: FESTIVAL_MAX_MALE_APPLIED_PER_DAY,
         boothCodeRequired: isFestivalBoothCodeEnabled(),
       },
     };
@@ -286,13 +292,13 @@ router.post('/mood-apply', async (req, res) => {
           where: { phone_appliedLocalDate: phoneDateKey },
         });
 
-        /** 남성 신청·성별 변경 시: 해당 일자 여성 수 미만이어야 함 */
+        /** 남성 신청·성별 변경 시: 여성 인원 미만이면서 남성 30명 미만이어야 함 */
         async function isMaleDayFull() {
           const [mCnt, fCnt] = await Promise.all([
             countFestivalAppliedGenderForDate(tx, appliedLocalDate, 'M'),
             countFestivalAppliedGenderForDate(tx, appliedLocalDate, 'F'),
           ]);
-          return mCnt >= fCnt;
+          return mCnt >= fCnt || mCnt >= FESTIVAL_MAX_MALE_APPLIED_PER_DAY;
         }
 
         /** @returns {Promise<{ tag: string, receptionId?: string, status?: string }>} */
@@ -369,7 +375,7 @@ router.post('/mood-apply', async (req, res) => {
               if (form.gender === 'M' && existing.gender === 'F') {
                 const mCnt = await countFestivalAppliedGenderForDate(tx, appliedLocalDate, 'M');
                 const fCnt = await countFestivalAppliedGenderForDate(tx, appliedLocalDate, 'F');
-                if (mCnt + 2 > fCnt) {
+                if (mCnt + 2 > fCnt || mCnt + 1 > FESTIVAL_MAX_MALE_APPLIED_PER_DAY) {
                   return { tag: 'full' };
                 }
               }
@@ -410,7 +416,7 @@ router.post('/mood-apply', async (req, res) => {
       const isMaleCase = parsed.value.gender === 'M';
       return res.status(403).json({
         error: isMaleCase
-          ? '남성 신청 정원은 같은 날짜의 여성 신청 인원과 같거나 적어야 합니다.'
+          ? `남성 신청은 같은 날짜의 여성 신청 인원 이하여야 하며, 최대 ${FESTIVAL_MAX_MALE_APPLIED_PER_DAY}명까지 접수됩니다.`
           : '신청 정원이 마감되었습니다.',
         code: 'FESTIVAL_CAPACITY_FULL',
       });
@@ -502,7 +508,10 @@ router.get('/status', async (req, res) => {
       const c = await dayAppliedGenderCounts(appliedLocalDay);
       appliedMale = c.male;
       appliedFemale = c.female;
-      remainingMale = Math.max(0, c.female - c.male);
+      remainingMale = Math.min(
+        Math.max(0, c.female - c.male),
+        Math.max(0, FESTIVAL_MAX_MALE_APPLIED_PER_DAY - c.male),
+      );
       pairablePairs = Math.min(c.male, c.female);
     }
 
@@ -512,6 +521,7 @@ router.get('/status', async (req, res) => {
       maxCapacityPerGender: cfg.maxCapacityPerGender,
       femaleCapacityUnlimited: true,
       maleCapacityMatchesFemaleApplicants: true,
+      maleAppliedHardCapPerDay: FESTIVAL_MAX_MALE_APPLIED_PER_DAY,
       boothCodeRequired: isFestivalBoothCodeEnabled(),
       scheduleNoteKst:
         '`slot1_match_hour` 등은 참고용 표시일 뿐이며, 매칭 시점은 관리자가 `match-run`을 실행할 때 결정됩니다.',

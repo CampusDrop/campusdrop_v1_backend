@@ -15,8 +15,16 @@ const { isFestivalBoothCodeEnabled, verifyFestivalBoothCodeFromRequestBody } = r
 
 const router = express.Router();
 
-/** 같은 KST 일자 `APPLIED` 남성 최대 명수(여성 인원 이하 규칙과 함께 적용). */
-const FESTIVAL_MAX_MALE_APPLIED_PER_DAY = 30;
+/**
+ * 남성 `APPLIED` 일일 상한 하한값. 실제 한도는 같은 날짜 여성 `APPLIED` 인원과의 max다.
+ */
+const FESTIVAL_MIN_MALE_APPLIED_PER_DAY = 30;
+
+/** @param {number} femaleAppliedSameDay APPLIED·삭제안됨 여성 수 */
+function festivalMaleAppliedCapForDay(femaleAppliedSameDay) {
+  const f = Number.isFinite(femaleAppliedSameDay) ? Math.max(0, femaleAppliedSameDay) : 0;
+  return Math.max(FESTIVAL_MIN_MALE_APPLIED_PER_DAY, f);
+}
 
 /** @param {unknown} body */
 function parseMoodApplyBody(body) {
@@ -105,10 +113,7 @@ async function allocateReceptionIdInsideTx(tx) {
 }
 
 /**
- * 같은 일자 풀에서 남성 신청 불가 조건:
- * - 남성 APPLIED ≥ 여성 APPLIED 이거나
- * - 남성 APPLIED ≥ {@link FESTIVAL_MAX_MALE_APPLIED_PER_DAY}.
- * 여성은 별도 상한 없음.
+ * 같은 날(KST)·`APPLIED` 상태의 해당 성별 인원 수(KST 동일 일자 단일 대기 풀).
  * @param {import('@prisma/client').Prisma.TransactionClient} tx
  */
 async function countFestivalAppliedGenderForDate(tx, appliedLocalDate, gender) {
@@ -184,6 +189,13 @@ router.get('/me', requireFestivalPhone, async (req, res) => {
             },
           });
 
+    /** 당일 풀이 있으면 남성 상한(여성 무제한 반영 후 남에게만 적용되는 값) 표시용 */
+    let maleCapToday = null;
+    if (appliedLocalDay) {
+      const fc = await dayAppliedGenderCounts(appliedLocalDay);
+      maleCapToday = festivalMaleAppliedCapForDay(fc.female);
+    }
+
     const base = {
       nowUtc: now.toISOString(),
       nowKstDate: kstToday,
@@ -197,8 +209,9 @@ router.get('/me', requireFestivalPhone, async (req, res) => {
         matchTargetTime: cfg.matchTargetTime.toISOString(),
         maxCapacityPerGender: cfg.maxCapacityPerGender,
         femaleCapacityUnlimited: true,
-        maleCapacityMatchesFemaleApplicants: true,
-        maleAppliedHardCapPerDay: FESTIVAL_MAX_MALE_APPLIED_PER_DAY,
+        maleMinAppliedCapPerDay: FESTIVAL_MIN_MALE_APPLIED_PER_DAY,
+        maleAppliedCapScalesWithFemaleApplicants: true,
+        maleAppliedEffectiveCapTodayKst: maleCapToday,
         boothCodeRequired: isFestivalBoothCodeEnabled(),
       },
     };
@@ -331,13 +344,14 @@ router.post('/mood-apply', async (req, res) => {
           where: { phone_appliedLocalDate: phoneDateKey },
         });
 
-        /** 남성 신청·성별 변경 시: 여성 인원 미만이면서 남성 30명 미만이어야 함 */
+        /** 남성 APPLIED 인원이 `max(30, 당일 여성 APPLIED)` 이상이면 추가 남성 불가 */
         async function isMaleDayFull() {
           const [mCnt, fCnt] = await Promise.all([
             countFestivalAppliedGenderForDate(tx, appliedLocalDate, 'M'),
             countFestivalAppliedGenderForDate(tx, appliedLocalDate, 'F'),
           ]);
-          return mCnt >= fCnt || mCnt >= FESTIVAL_MAX_MALE_APPLIED_PER_DAY;
+          const cap = festivalMaleAppliedCapForDay(fCnt);
+          return mCnt >= cap;
         }
 
         /** @returns {Promise<{ tag: string, receptionId?: string, status?: string }>} */
@@ -388,7 +402,7 @@ router.post('/mood-apply', async (req, res) => {
 
         if (!existing) {
           if (form.gender === 'M' && (await isMaleDayFull())) {
-            return { tag: 'full' };
+            return { tag: 'full_m' };
           }
           const receptionId = await allocateReceptionIdInsideTx(tx);
           return upsertApplied({ receptionId });
@@ -400,7 +414,7 @@ router.post('/mood-apply', async (req, res) => {
 
         if (existing.status === 'DROPPED') {
           if (form.gender === 'M' && (await isMaleDayFull())) {
-            return { tag: 'full' };
+            return { tag: 'full_m' };
           }
           const receptionId = await allocateReceptionIdInsideTx(tx);
           return upsertApplied({ receptionId });
@@ -412,10 +426,13 @@ router.post('/mood-apply', async (req, res) => {
           if (sameDay) {
             if (existing.gender !== form.gender) {
               if (form.gender === 'M' && existing.gender === 'F') {
-                const mCnt = await countFestivalAppliedGenderForDate(tx, appliedLocalDate, 'M');
-                const fCnt = await countFestivalAppliedGenderForDate(tx, appliedLocalDate, 'F');
-                if (mCnt + 2 > fCnt || mCnt + 1 > FESTIVAL_MAX_MALE_APPLIED_PER_DAY) {
-                  return { tag: 'full' };
+                const [mCnt, fCnt] = await Promise.all([
+                  countFestivalAppliedGenderForDate(tx, appliedLocalDate, 'M'),
+                  countFestivalAppliedGenderForDate(tx, appliedLocalDate, 'F'),
+                ]);
+                const cap = festivalMaleAppliedCapForDay(fCnt - 1);
+                if (mCnt + 1 > cap) {
+                  return { tag: 'full_m' };
                 }
               }
             }
@@ -451,12 +468,9 @@ router.post('/mood-apply', async (req, res) => {
       },
     );
 
-    if (outcome.tag === 'full') {
-      const isMaleCase = parsed.value.gender === 'M';
+    if (outcome.tag === 'full_m') {
       return res.status(403).json({
-        error: isMaleCase
-          ? `남성 신청은 같은 날짜의 여성 신청 인원 이하여야 하며, 최대 ${FESTIVAL_MAX_MALE_APPLIED_PER_DAY}명까지 접수됩니다.`
-          : '신청 정원이 마감되었습니다.',
+        error: '남성 신청 일일 정원이 마감되었습니다.',
         code: 'FESTIVAL_CAPACITY_FULL',
       });
     }
@@ -541,16 +555,18 @@ router.get('/status', async (req, res) => {
     let appliedMale = 0;
     let appliedFemale = 0;
     let remainingMale = 0;
+    /** @type {number | null} 여성 신청에는 일일 상한 없음을 나타내기 위해 null */
+    let remainingFemale = null;
     let pairablePairs = 0;
+    /** @type {number | null} */
+    let maleAppliedEffectiveCapTodayKst = null;
 
     if (appliedLocalDay) {
       const c = await dayAppliedGenderCounts(appliedLocalDay);
       appliedMale = c.male;
       appliedFemale = c.female;
-      remainingMale = Math.min(
-        Math.max(0, c.female - c.male),
-        Math.max(0, FESTIVAL_MAX_MALE_APPLIED_PER_DAY - c.male),
-      );
+      maleAppliedEffectiveCapTodayKst = festivalMaleAppliedCapForDay(c.female);
+      remainingMale = Math.max(0, maleAppliedEffectiveCapTodayKst - c.male);
       pairablePairs = Math.min(c.male, c.female);
     }
 
@@ -559,8 +575,9 @@ router.get('/status', async (req, res) => {
       matchTargetTime: cfg.matchTargetTime.toISOString(),
       maxCapacityPerGender: cfg.maxCapacityPerGender,
       femaleCapacityUnlimited: true,
-      maleCapacityMatchesFemaleApplicants: true,
-      maleAppliedHardCapPerDay: FESTIVAL_MAX_MALE_APPLIED_PER_DAY,
+      maleMinAppliedCapPerDay: FESTIVAL_MIN_MALE_APPLIED_PER_DAY,
+      maleAppliedCapScalesWithFemaleApplicants: true,
+      maleAppliedEffectiveCapTodayKst,
       boothCodeRequired: isFestivalBoothCodeEnabled(),
       scheduleNoteKst:
         '`slot1_match_hour` 등은 참고용 표시일 뿐이며, 매칭 시점은 관리자가 `match-run`을 실행할 때 결정됩니다.',
@@ -571,14 +588,14 @@ router.get('/status', async (req, res) => {
             appliedMale,
             appliedFemale,
             remainingMaleSlotsVsFemaleApplicants: remainingMale,
-            remainingFemale: null,
+            remainingFemale,
             pairablePairsThisRun: pairablePairs,
           }
         : null,
       appliedMale,
       appliedFemale,
       remainingMale,
-      remainingFemale: null,
+      remainingFemale,
       isActive: cfg.isActive,
     });
   } catch (err) {

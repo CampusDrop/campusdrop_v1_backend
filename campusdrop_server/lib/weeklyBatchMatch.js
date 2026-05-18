@@ -162,7 +162,7 @@ async function fetchPythonBatchPairs(prismaClient, periodStart, options = {}) {
 }
 
 /**
- * Python `/batch-match` 호출 → DB `matchings` 저장. 성공 친구톡은 월요일 09:00 KST 크론 또는 관리자 API.
+ * Python `/batch-match` 호출 → DB `matchings` 저장. 성공 친구톡은 월요일 16:00 KST 크론 또는 관리자 API.
  * @param {{ actorType?: string, actorId?: string | null, requestIp?: string | null, requestUserAgent?: string | null, matchType?: 'ROMANCE' | 'FRIEND' }} [options] 관리자 실행 시 `actorType: 'admin'`, `actorId`: Admin.id
  */
 async function runWeeklyBatchMatch(options = {}) {

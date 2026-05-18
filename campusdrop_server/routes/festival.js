@@ -4,12 +4,11 @@ const { Prisma } = require('@prisma/client');
 const { prisma } = require('../lib/prisma');
 const { requireFestivalPhone } = require('../lib/requireFestivalPhone');
 const { normalizeKoMobile } = require('../lib/festivalPhone');
+const { computeOpenSubmissionSlot } = require('../lib/festivalRoundAdmission');
 const {
   resolveSlotHoursFromConfig,
   slotUtcStarts,
   todayKstYmd,
-  resolveSlotForSubmission,
-  applicationVisibleAfterSlotPass,
   ymdFromPrismaDateOnly,
   dateOnlyFromYmd,
 } = require('../lib/festivalSlotPolicy');
@@ -132,7 +131,7 @@ function applicationJson(row, hours) {
 
 /**
  * GET /api/festival/me
- * — 오늘·회차 기준으로 “화면에 보일 신청”만 내려줍니다(14시 지난 1회차 APPLIED 는 NONE).
+ * — KST 같은 날 `phone·appliedLocalDate` 유니크 1건을 내려줍니다(회차는 관리자 매칭 기준으로 열림).
  * — `?phone=` 또는 `x-festival-phone` (010… 11자리, 본인인증 없음).
  */
 router.get('/me', requireFestivalPhone, async (req, res) => {
@@ -205,8 +204,6 @@ router.get('/me', requireFestivalPhone, async (req, res) => {
       });
     }
 
-    const visPass = applicationVisibleAfterSlotPass(now, app.appliedLocalDate, app.matchingSlot, app.status, hours);
-
     if (app.status === 'MATCHED') {
       return res.status(200).json({
         ...base,
@@ -214,16 +211,6 @@ router.get('/me', requireFestivalPhone, async (req, res) => {
         inactiveReason: null,
         closedSlot: null,
         application: applicationJson(app, hours),
-      });
-    }
-
-    if (app.status === 'APPLIED' && !visPass.visible) {
-      return res.status(200).json({
-        ...base,
-        visibility: 'NONE',
-        inactiveReason: 'SLOT_MATCH_TIME_PASSED',
-        closedSlot: visPass.closedSlot ?? null,
-        application: null,
       });
     }
 
@@ -265,19 +252,13 @@ router.post('/mood-apply', async (req, res) => {
           return { tag: 'no_config', error: '시간대 정보를 처리할 수 없습니다.' };
         }
 
-        const hours = resolveSlotHoursFromConfig(cfg);
-        const submission = resolveSlotForSubmission(now, kstToday, hours);
-        if (!submission.slot) {
-          return { tag: 'closed', error: submission.errorMessage || '신청 접수가 마감되었습니다.' };
+        const appliedLocalDate = dateOnlyFromYmd(kstToday);
+        const open = await computeOpenSubmissionSlot(tx, appliedLocalDate);
+        if (!open.slot) {
+          return { tag: 'closed', error: open.errorMessage || '신청 접수가 마감되었습니다.' };
         }
 
-        const targetSlot = submission.slot;
-        const appliedLocalDate = submission.appliedLocalDate;
-
-        const { slot1Utc, slot2Utc } = slotUtcStarts(kstToday, hours);
-        if (!slot1Utc || !slot2Utc) {
-          return { tag: 'no_config', error: '매칭 슬롯 시각 설정이 올바르지 않습니다.' };
-        }
+        const targetSlot = open.slot;
 
         const form = parsed.value;
         const capWhere = /** @type {const} */ ({
@@ -374,43 +355,6 @@ router.post('/mood-apply', async (req, res) => {
 
         if (existing.status === 'APPLIED') {
           const sameDay = ymdFromPrismaDateOnly(existing.appliedLocalDate) === kstToday;
-
-          const isAfternoonUpgrade =
-            existing.matchingSlot === 1 &&
-            sameDay &&
-            now.getTime() >= slot1Utc.getTime() &&
-            now.getTime() < slot2Utc.getTime() &&
-            targetSlot === 2;
-
-          if (isAfternoonUpgrade) {
-            const appliedCnt = await countCap();
-            if (appliedCnt >= cfg.maxCapacityPerGender) {
-              return { tag: 'full' };
-            }
-            const receptionId = await allocateReceptionIdInsideTx(tx);
-            const updated = await tx.festivalApplication.update({
-              where: { phone_appliedLocalDate: phoneDateKey },
-              data: {
-                receptionId,
-                matchingSlot: 2,
-                appliedLocalDate,
-                peopleCount: form.peopleCount,
-                vibe: form.vibe,
-                gender: form.gender,
-                phone: form.phone,
-                instagram: form.instagram,
-                contactPreference: form.contactPreference,
-                status: 'APPLIED',
-                deletedAt: null,
-              },
-            });
-            return {
-              tag: 'ok',
-              receptionId: updated.receptionId,
-              status: updated.status,
-              matchingSlot: updated.matchingSlot,
-            };
-          }
 
           if (existing.matchingSlot === targetSlot && sameDay) {
             if (existing.gender !== form.gender) {

@@ -489,7 +489,7 @@ model LandingLikeCounter {
 model FestivalApplication {
   id                BigInt        @id @default(autoincrement())
   receptionId       String        @unique @map("reception_id")
-  /// 1 = 첫 매칭(예: 14시), 2 = 두 번째(예: 17시) — 제출 시각·설정 시간으로 결정
+  /// 1·2 회차별 풀(관리자 `match-run`으로 회차를 마치면 다음 슬롯으로 신청 접수).
   matchingSlot      Int           @default(1) @map("matching_slot")
   /// 신청이 속한 축제 "날짜"(KST 달력) — 회차별 정원 카운트에 사용
   appliedLocalDate  DateTime      @db.Date @map("applied_local_date")
@@ -512,6 +512,18 @@ model FestivalApplication {
   @@index([gender, status], map: "festival_applications_gender_status_idx")
   @@index([gender, status, matchingSlot, appliedLocalDate], map: "festival_applications_slot_day_idx")
   @@map("festival_applications")
+}
+
+/// 축제 일자·회차(슬롯)별 관리자 매칭 실행 완료. 각 회차가 끝난 뒤에만 다음 슬롯 신청이 열립니다.
+model FestivalMatchRoundCompletion {
+  id               BigInt   @id @default(autoincrement())
+  appliedLocalDate DateTime @db.Date @map("applied_local_date")
+  /// 1·2회차(기존 `matching_slot`과 동일).
+  matchingSlot     Int      @map("matching_slot")
+  completedAt      DateTime @default(now()) @map("completed_at")
+
+  @@unique([appliedLocalDate, matchingSlot], map: "festival_match_round_completions_date_slot_key")
+  @@map("festival_match_round_completions")
 }
 
 /// 축제 전역 설정. 활성 행 하나를 기준으로 매칭 시각·정원을 제공합니다.

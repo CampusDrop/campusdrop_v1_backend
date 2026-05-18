@@ -13,6 +13,7 @@ const {
 const { writeAccessLog } = require('../lib/accessLog');
 const { runFestivalPairing } = require('../lib/festivalAdminMatch');
 const { buildFestivalMatchFriendTalkText } = require('../lib/festivalMatchNotifyText');
+const { isMatchingRoundComplete } = require('../lib/festivalRoundAdmission');
 
 const router = express.Router();
 
@@ -136,7 +137,7 @@ router.get('/festival/applications', adminAuthMiddleware, async (req, res) => {
 
     return res.status(200).json({
       appliedLocalDateKst: parsed.ymd,
-      scheduleNoteKst: '월~금 각 일자별 14시·17시 회차(슬롯 1·2) — `FestivalConfig.slot1_match_hour` / `slot2_match_hour`',
+      scheduleNoteKst: '슬롯 1·2는 순서대로 접수되어, 각 회차는 관리자가 `match-run`으로 매칭을 돌린 뒤에만 다음 슬롯 신청이 열립니다. `slot1_match_hour` 등은 참고 표시용 KST 시간입니다.',
       kst: week,
       slots,
     });
@@ -148,7 +149,7 @@ router.get('/festival/applications', adminAuthMiddleware, async (req, res) => {
 
 /**
  * POST /api/admin/festival/match-run
- * Body: { appliedLocalDate: "YYYY-MM-DD", matchingSlot: 1|2 } — 해당 일자·슬롯 `APPLIED` 이성 1:1 매칭 후 친구톡.
+ * Body: `{ appliedLocalDate: "YYYY-MM-DD", matchingSlot: 1|2 }` — 해당 일자·회차에서 `APPLIED` 무작위 1:1 매칭·알림 후 회차 종료·(1회차면) 다음 회차 접수용으로 미매칭자를 슬롯 2로 이동.
  */
 router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
   try {
@@ -177,12 +178,30 @@ router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
       });
     }
 
-    /** @type {{ pairedCount: number, unmatchedMale: number, unmatchedFemale: number, pairs: { male: import('@prisma/client').FestivalApplication, female: import('@prisma/client').FestivalApplication }[] } | null} */
-    let runResult = null;
+    let txResult;
 
     try {
-      runResult = await prisma.$transaction(
+      txResult = await prisma.$transaction(
         async (tx) => {
+          const dup = await tx.festivalMatchRoundCompletion.findUnique({
+            where: {
+              appliedLocalDate_matchingSlot: {
+                appliedLocalDate: parsed.date,
+                matchingSlot: slotNum,
+              },
+            },
+          });
+          if (dup) {
+            return { tag: /** @type {const} */ ('already_completed') };
+          }
+
+          if (slotNum === 2) {
+            const round1Done = await isMatchingRoundComplete(tx, parsed.date, 1);
+            if (!round1Done) {
+              return { tag: /** @type {const} */ ('round1_incomplete') };
+            }
+          }
+
           const appliedCnt = await tx.festivalApplication.count({
             where: {
               appliedLocalDate: parsed.date,
@@ -192,9 +211,34 @@ router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
             },
           });
           if (appliedCnt === 0) {
-            return null;
+            return { tag: /** @type {const} */ ('no_apps') };
           }
-          return runFestivalPairing(tx, { appliedLocalDate: parsed.date, matchingSlot: slotNum });
+
+          const pairingResult = await runFestivalPairing(tx, {
+            appliedLocalDate: parsed.date,
+            matchingSlot: slotNum,
+          });
+
+          if (slotNum === 1) {
+            await tx.festivalApplication.updateMany({
+              where: {
+                appliedLocalDate: parsed.date,
+                matchingSlot: 1,
+                status: 'APPLIED',
+                deletedAt: null,
+              },
+              data: { matchingSlot: 2 },
+            });
+          }
+
+          await tx.festivalMatchRoundCompletion.create({
+            data: {
+              appliedLocalDate: parsed.date,
+              matchingSlot: slotNum,
+            },
+          });
+
+          return { tag: /** @type {const} */ ('ok'), pairingResult };
         },
         {
           isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -212,12 +256,31 @@ router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
       throw err;
     }
 
-    if (runResult == null) {
+    if (txResult.tag === 'already_completed') {
+      return res.status(409).json({
+        error: '해당 일자·회차 매칭이 이미 완료되어 다시 실행할 수 없습니다.',
+        code: 'FESTIVAL_ROUND_ALREADY_MATCHED',
+        appliedLocalDateKst: parsed.ymd,
+        matchingSlot: slotNum,
+      });
+    }
+
+    if (txResult.tag === 'no_apps') {
       return res.status(400).json({
         error: '해당 일자·슬롯에 매칭할 APPLIED 신청이 없습니다.',
         code: 'FESTIVAL_NO_APPLICATIONS_TO_MATCH',
       });
     }
+
+    if (txResult.tag === 'round1_incomplete') {
+      return res.status(409).json({
+        error: '1회차(슬롯 1) 매칭이 아직 완료되지 않아 2회차를 실행할 수 없습니다.',
+        code: 'FESTIVAL_ROUND1_INCOMPLETE',
+        appliedLocalDateKst: parsed.ymd,
+      });
+    }
+
+    const runResult = txResult.pairingResult;
 
     const imgId = await getKakaoFriendTalkImageIdFromEnv(FRIEND_TALK_IMG_MATCH_SUCCESS);
     /** @type {{ phone: string, error: string }[]} */

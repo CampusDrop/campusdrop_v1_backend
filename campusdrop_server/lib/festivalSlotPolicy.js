@@ -55,54 +55,6 @@ function dateOnlyFromYmd(ymd) {
 }
 
 /**
- * 제출 순간(now)에 새 신청은 몇 번 슬롯인지 결정합니다.
- * - KST 같은 날: now < 첫 매칭 시각 → 슬롯 1 | 그후 둘째 매칭 이전까지 → 슬롯 2 | 둘째 이후면 null
- *
- * @param {Date} nowUtc
- * @param {string} todayYmd KST yyyy-mm-dd 오늘
- * @param {FestivalSlotHours} hours
- * @returns {{ slot: 1 | 2, appliedLocalDate: Date } | { slot: null, errorMessage: string } }
- */
-function resolveSlotForSubmission(nowUtc, todayYmd, hours) {
-  const { slot1Utc, slot2Utc } = slotUtcStarts(todayYmd, hours);
-  if (!slot1Utc || !slot2Utc) {
-    return { slot: null, errorMessage: '매칭 시각 설정이 올바르지 않습니다.' };
-  }
-  if (slot2Utc.getTime() <= slot1Utc.getTime()) {
-    return { slot: null, errorMessage: '두 번째 슬롯 시각은 첫 슬록보다 늦아야 합니다.' };
-  }
-  const appliedLocalDate = dateOnlyFromYmd(todayYmd);
-  if (nowUtc.getTime() < slot1Utc.getTime()) return { slot: 1, appliedLocalDate };
-  if (nowUtc.getTime() < slot2Utc.getTime()) return { slot: 2, appliedLocalDate };
-  return { slot: null, errorMessage: '오늘 축제 신청 접수(17시 회차 시작 이전까지) 시간이 종료되었습니다.' };
-}
-
-/**
- * GET 표시 규칙: APPLIED 이고 해당 슬롯의 매칭 시각 이후에는 "없음"과 동등 취급.
- *
- * @param {Date} nowUtc
- * @param {Date} appliedLocalDate
- * @param {1 | 2} matchingSlot
- * @param {'APPLIED' | 'MATCHED' | 'DROPPED' | string} status
- * @param {FestivalSlotHours} hours
- */
-function applicationVisibleAfterSlotPass(nowUtc, appliedLocalDate, matchingSlot, status, hours) {
-  if (status === 'MATCHED' || status === 'DROPPED') return { visible: true };
-  const ymd = ymdFromPrismaDateOnly(appliedLocalDate);
-  const { slot1Utc, slot2Utc } = slotUtcStarts(ymd, hours);
-  if (!slot1Utc || !slot2Utc) return { visible: true };
-  if (matchingSlot === 2) {
-    if (status === 'APPLIED' && nowUtc.getTime() >= slot2Utc.getTime()) return { visible: false, closedSlot: 2 };
-    return { visible: true };
-  }
-  if (matchingSlot === 1) {
-    if (status === 'APPLIED' && nowUtc.getTime() >= slot1Utc.getTime()) return { visible: false, closedSlot: 1 };
-    return { visible: true };
-  }
-  return { visible: true };
-}
-
-/**
  * @param {Date} d prisma @db.Date
  * @returns {string} yyyy-mm-dd UTC calendar parts (표준 Date UTC components)
  */
@@ -120,7 +72,5 @@ module.exports = {
   slotUtcStarts,
   todayKstYmd,
   dateOnlyFromYmd,
-  resolveSlotForSubmission,
-  applicationVisibleAfterSlotPass,
   ymdFromPrismaDateOnly,
 };

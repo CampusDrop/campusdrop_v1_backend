@@ -29,6 +29,46 @@ function instagramHandleDisplay(ig) {
 }
 
 /**
+ * 신청 시 `contactPreference`(최대 10자 자유 문자열)로 상대에게 무엇을 알려줄지 분기합니다.
+ * 권장 값: `PHONE` | `IG` | `BOTH` 또는 `전화`·`인스타`·`둘다` 등 한글 키워드.
+ * @returns {'phone'|'instagram'|'both'}
+ */
+function contactRevealMode(contactPreference, hasInstagram) {
+  const s = String(contactPreference ?? '').trim();
+  const u = s.toUpperCase();
+
+  if (['PHONE', 'TEL', 'HP', 'CALL', 'SMS'].includes(u)) return 'phone';
+  if (['INSTAGRAM', 'IG', 'INSTA'].includes(u)) return 'instagram';
+  if (['BOTH', 'ALL'].includes(u)) return 'both';
+
+  if (/인스타/.test(s)) return 'instagram';
+  if (/전화|문자|폰/.test(s)) return 'phone';
+  if (/둘|모두/.test(s)) return 'both';
+
+  return hasInstagram ? 'both' : 'phone';
+}
+
+/**
+ * 매칭 알림문에서 보여 줄 **상대방** 연락 한 줄 (상대의 `contactPreference`·인스타 유무 반영).
+ * @param {{ phone: string, instagram: string | null, contactPreference: string }} partner
+ */
+function buildPartnerContactLine(partner) {
+  const phoneDisp = formatKoMobileDisplay(partner.phone);
+  const igDisp = instagramHandleDisplay(partner.instagram);
+  const hasIg = Boolean(partner.instagram && String(partner.instagram).trim());
+
+  switch (contactRevealMode(partner.contactPreference, hasIg)) {
+    case 'phone':
+      return phoneDisp;
+    case 'instagram':
+      return igDisp || phoneDisp;
+    case 'both':
+    default:
+      return igDisp ? `${phoneDisp} 또는 ${igDisp}` : phoneDisp;
+  }
+}
+
+/**
  * @param {{ receptionId: string, phone: string, vibe?: string }} self
  * @param {{ receptionId: string, phone: string, instagram: string | null, contactPreference: string, peopleCount: number, vibe: string }} partner
  * @param {'M' | 'F'} selfGender
@@ -42,9 +82,9 @@ function buildFestivalMatchFriendTalkText(self, partner, selfGender) {
       ? `두 팀 모두 ${myVibe} 무드를 선택하셨네요. 🥂`
       : `내 팀은 ${myVibe || '—'}, 상대 팀은 ${partnerVibe || '—'} 무드예요. 🥂`;
 
-  const phoneDisp = formatKoMobileDisplay(partner.phone);
-  const igDisp = instagramHandleDisplay(partner.instagram);
-  const partnerContactLine = igDisp ? `${phoneDisp} 또는 ${igDisp}` : phoneDisp;
+  const partnerHasIg = Boolean(partner.instagram && String(partner.instagram).trim());
+  const revealMode = contactRevealMode(partner.contactPreference, partnerHasIg);
+  const partnerContactLine = buildPartnerContactLine(partner);
 
   const raw =
     String(process.env.FESTIVAL_MATCH_FRIENDTALK_TEXT || '').trim() ||
@@ -66,6 +106,7 @@ ${moodLine}
     partnerReceptionId: partner.receptionId,
     partnerPhone: partner.phone,
     partnerContactPreference: partner.contactPreference,
+    partnerContactReveal: revealMode,
     partnerInstagram: partner.instagram ? instagramHandleDisplay(partner.instagram) : '(없음)',
     partnerVibe,
     partnerPeopleCount: String(partner.peopleCount),

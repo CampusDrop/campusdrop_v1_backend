@@ -102,6 +102,17 @@ async function allocateReceptionIdInsideTx(tx) {
 }
 
 /**
+ * 축제 신청 정원: 여성(`F`)은 상한 없음, 남성만 `maxCapacityPerGender` 적용.
+ * @param {number} appliedCnt
+ * @param {number} maxPerGender
+ * @param {'M'|'F'} gender
+ */
+function isFestivalApplyAtCapacity(appliedCnt, maxPerGender, gender) {
+  if (gender === 'F') return false;
+  return appliedCnt >= maxPerGender;
+}
+
+/**
  * @param {import('@prisma/client').FestivalApplication} row
  * @param {import('../lib/festivalSlotPolicy').FestivalSlotHours} hours
  */
@@ -182,6 +193,7 @@ router.get('/me', requireFestivalPhone, async (req, res) => {
       config: {
         matchTargetTime: cfg.matchTargetTime.toISOString(),
         maxCapacityPerGender: cfg.maxCapacityPerGender,
+        femaleCapacityUnlimited: true,
       },
     };
 
@@ -333,7 +345,7 @@ router.post('/mood-apply', async (req, res) => {
 
         if (!existing) {
           const appliedCnt = await countCap();
-          if (appliedCnt >= cfg.maxCapacityPerGender) {
+          if (isFestivalApplyAtCapacity(appliedCnt, cfg.maxCapacityPerGender, form.gender)) {
             return { tag: 'full' };
           }
           const receptionId = await allocateReceptionIdInsideTx(tx);
@@ -346,7 +358,7 @@ router.post('/mood-apply', async (req, res) => {
 
         if (existing.status === 'DROPPED') {
           const appliedCnt = await countCap();
-          if (appliedCnt >= cfg.maxCapacityPerGender) {
+          if (isFestivalApplyAtCapacity(appliedCnt, cfg.maxCapacityPerGender, form.gender)) {
             return { tag: 'full' };
           }
           const receptionId = await allocateReceptionIdInsideTx(tx);
@@ -359,7 +371,7 @@ router.post('/mood-apply', async (req, res) => {
           if (existing.matchingSlot === targetSlot && sameDay) {
             if (existing.gender !== form.gender) {
               const appliedCnt = await countCap();
-              if (appliedCnt >= cfg.maxCapacityPerGender) {
+              if (isFestivalApplyAtCapacity(appliedCnt, cfg.maxCapacityPerGender, form.gender)) {
                 return { tag: 'full' };
               }
             }
@@ -489,8 +501,18 @@ router.get('/status', async (req, res) => {
     const hours = resolveSlotHoursFromConfig(cfg);
     const max = cfg.maxCapacityPerGender;
 
-    let slot1 = { appliedMale: 0, appliedFemale: 0, remainingMale: max, remainingFemale: max };
-    let slot2 = { appliedMale: 0, appliedFemale: 0, remainingMale: max, remainingFemale: max };
+    let slot1 = {
+      appliedMale: 0,
+      appliedFemale: 0,
+      remainingMale: max,
+      remainingFemale: null,
+    };
+    let slot2 = {
+      appliedMale: 0,
+      appliedFemale: 0,
+      remainingMale: max,
+      remainingFemale: null,
+    };
 
     if (appliedLocalDay) {
       const c1 = await slotGenderCounts(appliedLocalDay, 1);
@@ -499,13 +521,13 @@ router.get('/status', async (req, res) => {
         appliedMale: c1.male,
         appliedFemale: c1.female,
         remainingMale: Math.max(0, max - c1.male),
-        remainingFemale: Math.max(0, max - c1.female),
+        remainingFemale: null,
       };
       slot2 = {
         appliedMale: c2.male,
         appliedFemale: c2.female,
         remainingMale: Math.max(0, max - c2.male),
-        remainingFemale: Math.max(0, max - c2.female),
+        remainingFemale: null,
       };
     }
 
@@ -516,6 +538,7 @@ router.get('/status', async (req, res) => {
       appliedLocalDateKst: kstToday,
       matchTargetTime: cfg.matchTargetTime.toISOString(),
       maxCapacityPerGender: max,
+      femaleCapacityUnlimited: true,
       slot1MatchHourKst: hours.slot1MatchHour,
       slot2MatchHourKst: hours.slot2MatchHour,
       slots: {
@@ -525,7 +548,7 @@ router.get('/status', async (req, res) => {
       appliedMale: appliedMaleTotal,
       appliedFemale: appliedFemaleTotal,
       remainingMale: Math.max(0, max - appliedMaleTotal),
-      remainingFemale: Math.max(0, max - appliedFemaleTotal),
+      remainingFemale: null,
       isActive: cfg.isActive,
     });
   } catch (err) {

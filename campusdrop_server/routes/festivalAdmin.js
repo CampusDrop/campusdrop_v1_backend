@@ -46,12 +46,19 @@ function phoneFilterWhere(raw) {
 function festivalDropFriendTalkText() {
   const raw = String(process.env.FESTIVAL_DROP_FRIENDTALK_TEXT || '').trim();
   if (raw) return raw.slice(0, 1000);
-  return `[축제 매칭] 안내 연락드립니다.
+  return `🚨 [매칭부스 경고] 🚨
 
-이번 축제 매칭은 아쉽게도 포함되기 어려운 상태예요.
-자세한 내용은 카카오 채널 등 안내 페이지를 통해 확인 부탁드립니다.
+누군가 당신의 매칭 자리를
+단숨에 빼앗았습니다!
 
-감사합니다.`;
+- - - - - - - - - - - - - - -
+
+기껏 신청해둔 내 자리,
+이대로 뺏기고만 있을 순 없죠. 🔥
+
+다시 부스로 오셔서
+내 자리를 뻔뻔하게 차지한 그 사람을
+다시 밀어내세요! 🥊`.slice(0, 1000);
 }
 
 /**
@@ -289,7 +296,7 @@ router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
     for (const p of runResult.pairs) {
       const { male: m, female: f } = p;
       const textM = buildFestivalMatchFriendTalkText(
-        { receptionId: m.receptionId, phone: m.phone },
+        { receptionId: m.receptionId, phone: m.phone, vibe: m.vibe },
         {
           receptionId: f.receptionId,
           phone: f.phone,
@@ -301,7 +308,7 @@ router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
         'M',
       );
       const textF = buildFestivalMatchFriendTalkText(
-        { receptionId: f.receptionId, phone: f.phone },
+        { receptionId: f.receptionId, phone: f.phone, vibe: f.vibe },
         {
           receptionId: m.receptionId,
           phone: m.phone,

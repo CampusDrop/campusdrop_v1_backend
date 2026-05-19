@@ -25,7 +25,8 @@ function hmacDigestToNumericCode(digest) {
   const use = Math.min(4, digest.length);
   let n = 0;
   for (let i = 0; i < use; i += 1) {
-    n = (n << 8) | digest[i];
+    // JS 비트 시프트는 signed int32 — unsigned로 고정해 음수·`-7343` 형태 방지
+    n = ((n << 8) | digest[i]) >>> 0;
   }
   const mod = 10 ** BOOTH_CODE_LENGTH;
   const codeNum = n % mod;
@@ -116,6 +117,7 @@ function getFestivalBoothCodeForAdmin() {
 module.exports = {
   isFestivalBoothCodeEnabled,
   normalizeBoothCodeInput,
+  hmacDigestToNumericCode,
   verifyFestivalBoothCodeFromRequestBody,
   getFestivalBoothCodeForAdmin,
   computeBoothCodeForInstant,

@@ -43,6 +43,62 @@ function phoneFilterWhere(raw) {
   return {};
 }
 
+/** @param {unknown} body */
+function parseFestivalAdminPhoneBody(body) {
+  const b = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const phoneRaw = typeof b.phone === 'string' ? b.phone.trim() : '';
+  if (!phoneRaw) {
+    return { ok: /** @type {const} */ (false), status: 400, error: 'phone이 필요합니다.' };
+  }
+  const phoneNorm = normalizeKoMobile(phoneRaw);
+  if (!(phoneNorm.length === 11 && phoneNorm.startsWith('01'))) {
+    return {
+      ok: /** @type {const} */ (false),
+      status: 400,
+      error: '휴대폰 번호(010 포함 11자리) 형식이어야 합니다.',
+    };
+  }
+  return { ok: /** @type {const} */ (true), phoneNorm };
+}
+
+/**
+ * @param {string} phoneNorm
+ * @returns {Promise<
+ *   | { tag: 'not_found' }
+ *   | { tag: 'conflict', row: { id: bigint, receptionId: string, phone: string, status: string } }
+ *   | { tag: 'ok', row: { id: bigint, receptionId: string, phone: string, status: string } }
+ * >}
+ */
+async function findLatestActiveFestivalApplicationByPhone(phoneNorm) {
+  const select = {
+    id: true,
+    receptionId: true,
+    phone: true,
+    status: true,
+  };
+  const row =
+    (await prisma.festivalApplication.findFirst({
+      where: {
+        deletedAt: null,
+        phone: phoneNorm,
+        status: 'APPLIED',
+      },
+      select,
+      orderBy: { id: 'desc' },
+    })) ??
+    (await prisma.festivalApplication.findFirst({
+      where: { deletedAt: null, phone: phoneNorm },
+      select,
+      orderBy: { id: 'desc' },
+    }));
+
+  if (!row) return { tag: /** @type {const} */ ('not_found') };
+  if (row.status !== 'APPLIED') {
+    return { tag: /** @type {const} */ ('conflict'), row };
+  }
+  return { tag: /** @type {const} */ ('ok'), row };
+}
+
 function festivalDropFriendTalkText() {
   const raw = String(process.env.FESTIVAL_DROP_FRIENDTALK_TEXT || '').trim();
   if (raw) return raw.slice(0, 1000);
@@ -154,7 +210,7 @@ router.get('/festival/applications', adminAuthMiddleware, async (req, res) => {
     return res.status(200).json({
       appliedLocalDateKst: parsed.ymd,
       noteKst:
-        '한 날짜당 하나의 대기 풀입니다. 관리자가 `match-run`을 실행하면 그 시점의 `APPLIED` 중 이성 쌍을 매칭합니다. `status`를 생략하면 대기 중(`APPLIED`)만 반환합니다.',
+        '한 날짜당 하나의 대기 풀입니다. `match-run`은 남·여 팀 수와 1명팀/다인팀 코호트가 맞을 때만 실행하세요. 무드 우선 매칭 후 친구톡 발송. `status` 생략 시 `APPLIED`만 반환.',
       kst: week,
       defaultStatusFilter: 'APPLIED',
       dayCounts: {
@@ -197,7 +253,9 @@ router.get('/festival/applications', adminAuthMiddleware, async (req, res) => {
 
 /**
  * POST /api/admin/festival/match-run
- * Body: `{ appliedLocalDate: "YYYY-MM-DD" }` 또는 `{ date: "YYYY-MM-DD" }` — 해당 일자 대기 풀에서 `APPLIED` 무작위 이성 1:1 매칭 후 친구톡 발송. 여러 번 실행 가능(남은 APPLIED만 매칭).
+ * Body: `{ appliedLocalDate: "YYYY-MM-DD" }` 또는 `{ date: "YYYY-MM-DD" }`
+ * — `APPLIED` 풀: 남·여 팀 수·1명팀/다인팀 코호트 균형 검증 후,
+ *   같은 인원 버킷 내 무드 우선(도란↔도란, 시끌↔시끌) → 무드 완화 → 1명↔다인 교차, 팀 1:1 매칭·친구톡.
  */
 router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
   try {
@@ -241,6 +299,13 @@ router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
             appliedLocalDate: parsed.date,
           });
 
+          if (pairingResult.tag === 'imbalance') {
+            return {
+              tag: /** @type {const} */ ('imbalance'),
+              validation: pairingResult.validation,
+            };
+          }
+
           return { tag: /** @type {const} */ ('ok'), pairingResult };
         },
         {
@@ -263,6 +328,15 @@ router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
       return res.status(400).json({
         error: '해당 일자에 매칭할 APPLIED 신청이 없습니다.',
         code: 'FESTIVAL_NO_APPLICATIONS_TO_MATCH',
+      });
+    }
+
+    if (txResult.tag === 'imbalance') {
+      const v = txResult.validation;
+      return res.status(400).json({
+        error: v.error,
+        code: v.code,
+        counts: v.counts,
       });
     }
 
@@ -335,6 +409,7 @@ router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
       pairedCount: runResult.pairedCount,
       unmatchedMale: runResult.unmatchedMale,
       unmatchedFemale: runResult.unmatchedFemale,
+      poolCounts: runResult.poolCounts ?? null,
       notifyFailures,
     });
   } catch (err) {
@@ -344,56 +419,84 @@ router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
 });
 
 /**
+ * POST /api/admin/festival/delete
+ * Body `{ "phone": "010-xxxx-xxxx" }` — 상태 APPLIED만 소프트 삭제(DROPPED). 친구톡 미발송.
+ */
+router.post('/festival/delete', adminAuthMiddleware, async (req, res) => {
+  try {
+    const parsed = parseFestivalAdminPhoneBody(req.body);
+    if (!parsed.ok) {
+      return res.status(parsed.status).json({ error: parsed.error });
+    }
+
+    const found = await findLatestActiveFestivalApplicationByPhone(parsed.phoneNorm);
+    if (found.tag === 'not_found') {
+      return res.status(404).json({ error: '해당 번호의 축제 신청을 찾을 수 없습니다.' });
+    }
+    if (found.tag === 'conflict') {
+      return res.status(409).json({
+        error: `이미 처리된 신청입니다. (status:${found.row.status})`,
+        receptionId: found.row.receptionId,
+      });
+    }
+
+    const now = new Date();
+    const updated = await prisma.festivalApplication.update({
+      where: { id: found.row.id },
+      data: {
+        status: 'DROPPED',
+        deletedAt: now,
+      },
+    });
+
+    await writeAccessLog({
+      actorType: 'admin',
+      actorId: req.admin?.adminId ?? null,
+      action: 'FESTIVAL_ADMIN_DELETE',
+      resource: `FestivalApplication:${String(updated.id)}`,
+      ip: req.ip || null,
+      userAgent: typeof req.get === 'function' ? req.get('user-agent') : null,
+      metadata: {
+        receptionId: updated.receptionId,
+        phoneMasked: `${parsed.phoneNorm.slice(0, 4)}***`,
+        notifySent: false,
+      },
+    });
+
+    return res.status(200).json({
+      ok: true,
+      receptionId: updated.receptionId,
+      status: updated.status,
+    });
+  } catch (err) {
+    console.error('admin festival/delete:', err);
+    return res.status(500).json({ error: '삭제 처리 중 오류가 발생했습니다.' });
+  }
+});
+
+/**
  * POST /api/admin/festival/drop
  * Body `{ "phone": "010-xxxx-xxxx" }` — 상태 APPLIED만 Drop 후 친구톡 알림 후 소프트 삭제.
  */
 router.post('/festival/drop', adminAuthMiddleware, async (req, res) => {
   try {
-    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
-    const phoneRaw = typeof body.phone === 'string' ? body.phone.trim() : '';
-    if (!phoneRaw) {
-      return res.status(400).json({ error: 'phone이 필요합니다.' });
+    const parsed = parseFestivalAdminPhoneBody(req.body);
+    if (!parsed.ok) {
+      return res.status(parsed.status).json({ error: parsed.error });
     }
-    const phoneNorm = normalizeKoMobile(phoneRaw);
-    if (!(phoneNorm.length === 11 && phoneNorm.startsWith('01'))) {
-      return res.status(400).json({ error: '휴대폰 번호(010 포함 11자리) 형식이어야 합니다.' });
-    }
+    const { phoneNorm } = parsed;
 
-    let row =
-      (await prisma.festivalApplication.findFirst({
-        where: {
-          deletedAt: null,
-          phone: phoneNorm,
-          status: 'APPLIED',
-        },
-        select: {
-          id: true,
-          receptionId: true,
-          phone: true,
-          status: true,
-        },
-        orderBy: { id: 'desc' },
-      })) ??
-      (await prisma.festivalApplication.findFirst({
-        where: { deletedAt: null, phone: phoneNorm },
-        select: {
-          id: true,
-          receptionId: true,
-          phone: true,
-          status: true,
-        },
-        orderBy: { id: 'desc' },
-      }));
-
-    if (!row) {
+    const found = await findLatestActiveFestivalApplicationByPhone(phoneNorm);
+    if (found.tag === 'not_found') {
       return res.status(404).json({ error: '해당 번호의 축제 신청을 찾을 수 없습니다.' });
     }
-    if (row.status !== 'APPLIED') {
+    if (found.tag === 'conflict') {
       return res.status(409).json({
-        error: `이미 처리된 신청입니다. (status:${row.status})`,
-        receptionId: row.receptionId,
+        error: `이미 처리된 신청입니다. (status:${found.row.status})`,
+        receptionId: found.row.receptionId,
       });
     }
+    const row = found.row;
 
     const cfgMissing = assertSolapiFriendTalkEnv();
     if (cfgMissing) {
@@ -418,10 +521,7 @@ router.post('/festival/drop', adminAuthMiddleware, async (req, res) => {
     const now = new Date();
     const updated = await prisma.festivalApplication.update({
       where: { id: row.id },
-      data: {
-        status: 'DROPPED',
-        deletedAt: now,
-      },
+      data: { status: 'DROPPED', deletedAt: now },
     });
 
     await writeAccessLog({

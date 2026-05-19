@@ -1,56 +1,261 @@
+'use strict';
+
 const crypto = require('crypto');
+const { sameFestivalVibe } = require('./festivalVibe');
+
+/** @typedef {import('@prisma/client').FestivalApplication} FestApp */
+/** @typedef {{ male: FestApp, female: FestApp }} FestPair */
 
 /**
  * @template T
  * @param {T[]} arr
  */
-function shuffleInPlace(arr) {
-  for (let i = arr.length - 1; i > 0; i -= 1) {
+function shuffleCopy(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i -= 1) {
     const j = crypto.randomInt(0, i + 1);
-    const t = arr[i];
-    arr[i] = arr[j];
-    arr[j] = t;
+    const t = a[i];
+    a[i] = a[j];
+    a[j] = t;
   }
-  return arr;
+  return a;
+}
+
+/** @param {FestApp} row */
+function rowKey(row) {
+  return String(row.id);
+}
+
+/** @param {FestApp[]} rows */
+function partitionSoloMulti(rows) {
+  /** @type {FestApp[]} */
+  const solo = [];
+  /** @type {FestApp[]} */
+  const multi = [];
+  for (const r of rows) {
+    if (r.peopleCount === 1) solo.push(r);
+    else multi.push(r);
+  }
+  return { solo, multi };
 }
 
 /**
- * `peopleCount` 기준 버킷 안에서만 이성 1행↔1행 무작위 매칭(DB 업데이트 포함).
- * - `peopleCount === 1` → 1:1 코호트만 서로 짝
- * - `peopleCount >= 2` → 다대다 코호트만 서로 짝 (행 단위 1:1이지만 상대 후보가 같은 버킷으로 한정됨)
- * @param {import('@prisma/client').Prisma.TransactionClient} tx
- * @param {Date} appliedLocalDate
- * @param {number | import('@prisma/client').Prisma.IntFilter} peopleCountFilter
+ * @param {FestApp[]} males
+ * @param {FestApp[]} females
  */
-async function pairAppliedByPeopleCountBucket(tx, appliedLocalDate, peopleCountFilter) {
+function validateFestivalMatchPool(males, females) {
+  if (males.length !== females.length) {
+    return {
+      ok: /** @type {const} */ (false),
+      code: 'FESTIVAL_GENDER_TEAM_IMBALANCE',
+      error: '남·여 팀 수가 같아야 매칭할 수 있습니다.',
+      counts: {
+        appliedMaleTeams: males.length,
+        appliedFemaleTeams: females.length,
+      },
+    };
+  }
+
+  const mPart = partitionSoloMulti(males);
+  const fPart = partitionSoloMulti(females);
+
+  if (mPart.solo.length !== fPart.solo.length) {
+    return {
+      ok: /** @type {const} */ (false),
+      code: 'FESTIVAL_SOLO_COHORT_IMBALANCE',
+      error: '1명 팀(남·여) 수가 같아야 매칭할 수 있습니다.',
+      counts: {
+        soloMaleTeams: mPart.solo.length,
+        soloFemaleTeams: fPart.solo.length,
+      },
+    };
+  }
+
+  if (mPart.multi.length !== fPart.multi.length) {
+    return {
+      ok: /** @type {const} */ (false),
+      code: 'FESTIVAL_MULTI_COHORT_IMBALANCE',
+      error: '2명 이상 팀(남·여) 수가 같아야 매칭할 수 있습니다.',
+      counts: {
+        multiMaleTeams: mPart.multi.length,
+        multiFemaleTeams: fPart.multi.length,
+      },
+    };
+  }
+
+  return {
+    ok: /** @type {const} */ (true),
+    counts: {
+      appliedMaleTeams: males.length,
+      appliedFemaleTeams: females.length,
+      soloMaleTeams: mPart.solo.length,
+      soloFemaleTeams: fPart.solo.length,
+      multiMaleTeams: mPart.multi.length,
+      multiFemaleTeams: fPart.multi.length,
+    },
+  };
+}
+
+/**
+ * @param {FestApp[]} males
+ * @param {FestApp[]} females
+ * @param {(m: FestApp, f: FestApp) => boolean} canPair
+ * @returns {FestPair[]}
+ */
+function maxBipartitePairs(males, females, canPair) {
+  if (males.length === 0 || females.length === 0) return [];
+
+  /** @type {Map<string, FestApp>} femaleId -> male */
+  const matchFemaleToMale = new Map();
+
+  /**
+   * @param {FestApp} m
+   * @param {Set<string>} seenFemaleIds
+   */
+  function dfs(m, seenFemaleIds) {
+    for (const f of females) {
+      if (!canPair(m, f)) continue;
+      const fk = rowKey(f);
+      if (seenFemaleIds.has(fk)) continue;
+      seenFemaleIds.add(fk);
+
+      const prevMale = matchFemaleToMale.get(fk);
+      if (!prevMale || dfs(prevMale, seenFemaleIds)) {
+        matchFemaleToMale.set(fk, m);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  for (const m of shuffleCopy(males)) {
+    dfs(m, new Set());
+  }
+
+  /** @type {Map<string, FestApp>} maleId -> female */
+  const matchMaleToFemale = new Map();
+  for (const [fk, m] of matchFemaleToMale) {
+    const f = females.find((row) => rowKey(row) === fk);
+    if (f) matchMaleToFemale.set(rowKey(m), f);
+  }
+
+  /** @type {FestPair[]} */
+  const pairs = [];
+  for (const m of males) {
+    const f = matchMaleToFemale.get(rowKey(m));
+    if (f) pairs.push({ male: m, female: f });
+  }
+  return pairs;
+}
+
+/** @param {FestApp} m @param {FestApp} f */
+function isSoloMultiCrossPair(m, f) {
+  return (
+    (m.peopleCount === 1 && f.peopleCount >= 2) || (m.peopleCount >= 2 && f.peopleCount === 1)
+  );
+}
+
+/** @param {Set<string>} matchedKeys @param {FestApp[]} rows */
+function filterUnmatched(rows, matchedKeys) {
+  return rows.filter((r) => !matchedKeys.has(rowKey(r)));
+}
+
+/**
+ * 무드 우선(같은 인원 버킷) → 무드 완화 → 1명팀↔다인팀. 팀 1:1만 허용.
+ * @param {FestApp[]} males
+ * @param {FestApp[]} females
+ */
+function computeFestivalPairs(males, females) {
+  const validation = validateFestivalMatchPool(males, females);
+  if (!validation.ok) {
+    return { ok: /** @type {const} */ (false), validation };
+  }
+
+  const { solo: soloM, multi: multiM } = partitionSoloMulti(males);
+  const { solo: soloF, multi: multiF } = partitionSoloMulti(females);
+
+  /** @type {FestPair[]} */
+  const pairs = [];
+  const matchedKeys = new Set();
+
+  /**
+   * @param {FestPair[]} newPairs
+   */
+  function absorbPairs(newPairs) {
+    for (const p of newPairs) {
+      pairs.push(p);
+      matchedKeys.add(rowKey(p.male));
+      matchedKeys.add(rowKey(p.female));
+    }
+  }
+
+  /**
+   * @param {FestApp[]} mCohort
+   * @param {FestApp[]} fCohort
+   */
+  function runCohortVibePhases(mCohort, fCohort) {
+    const mRem = () => filterUnmatched(mCohort, matchedKeys);
+    const fRem = () => filterUnmatched(fCohort, matchedKeys);
+
+    absorbPairs(
+      maxBipartitePairs(mRem(), fRem(), (m, f) => sameFestivalVibe(m.vibe, f.vibe)),
+    );
+    absorbPairs(maxBipartitePairs(mRem(), fRem(), () => true));
+  }
+
+  runCohortVibePhases(soloM, soloF);
+  runCohortVibePhases(multiM, multiF);
+
+  absorbPairs(
+    maxBipartitePairs(filterUnmatched(males, matchedKeys), filterUnmatched(females, matchedKeys), isSoloMultiCrossPair),
+  );
+
+  const unmatchedMale = filterUnmatched(males, matchedKeys).length;
+  const unmatchedFemale = filterUnmatched(females, matchedKeys).length;
+
+  return {
+    ok: /** @type {const} */ (true),
+    pairs,
+    pairedCount: pairs.length,
+    unmatchedMale,
+    unmatchedFemale,
+    poolCounts: validation.counts,
+  };
+}
+
+/**
+ * @param {import('@prisma/client').Prisma.TransactionClient} tx
+ * @param {{ appliedLocalDate: Date }} p
+ */
+async function runFestivalPairing(tx, { appliedLocalDate }) {
   /** @type {import('@prisma/client').Prisma.FestivalApplicationWhereInput} */
   const baseWhere = {
     appliedLocalDate,
     deletedAt: null,
     status: 'APPLIED',
-    peopleCount: peopleCountFilter,
   };
 
-  const males = await tx.festivalApplication.findMany({
-    where: { ...baseWhere, gender: 'M' },
-    orderBy: { id: 'asc' },
-  });
-  const females = await tx.festivalApplication.findMany({
-    where: { ...baseWhere, gender: 'F' },
-    orderBy: { id: 'asc' },
-  });
+  const [males, females] = await Promise.all([
+    tx.festivalApplication.findMany({
+      where: { ...baseWhere, gender: 'M' },
+      orderBy: { id: 'asc' },
+    }),
+    tx.festivalApplication.findMany({
+      where: { ...baseWhere, gender: 'F' },
+      orderBy: { id: 'asc' },
+    }),
+  ]);
 
-  shuffleInPlace(males);
-  shuffleInPlace(females);
+  const computed = computeFestivalPairs(males, females);
+  if (!computed.ok) {
+    return {
+      tag: /** @type {const} */ ('imbalance'),
+      validation: computed.validation,
+    };
+  }
 
-  const n = Math.min(males.length, females.length);
-  /** @type {{ male: import('@prisma/client').FestivalApplication, female: import('@prisma/client').FestivalApplication }[]} */
-  const pairs = [];
   const now = new Date();
-  for (let i = 0; i < n; i += 1) {
-    const m = /** @type {import('@prisma/client').FestivalApplication} */ (males[i]);
-    const f = /** @type {import('@prisma/client').FestivalApplication} */ (females[i]);
-
+  for (const { male: m, female: f } of computed.pairs) {
     await tx.festivalApplication.update({
       where: { id: m.id },
       data: {
@@ -69,32 +274,21 @@ async function pairAppliedByPeopleCountBucket(tx, appliedLocalDate, peopleCountF
         matchedAt: now,
       },
     });
-    pairs.push({ male: m, female: f });
   }
 
   return {
-    pairedCount: n,
-    unmatchedMale: males.length - n,
-    unmatchedFemale: females.length - n,
-    pairs,
+    tag: /** @type {const} */ ('ok'),
+    pairedCount: computed.pairedCount,
+    unmatchedMale: computed.unmatchedMale,
+    unmatchedFemale: computed.unmatchedFemale,
+    pairs: computed.pairs,
+    poolCounts: computed.poolCounts,
   };
 }
 
-/**
- * 이성 무작위 매칭 — `peopleCount`가 1인 신청과 2 이상인 신청은 서로 짝 지어지지 않습니다.
- * @param {import('@prisma/client').Prisma.TransactionClient} tx
- * @param {{ appliedLocalDate: Date }} p
- */
-async function runFestivalPairing(tx, { appliedLocalDate }) {
-  const oneToOne = await pairAppliedByPeopleCountBucket(tx, appliedLocalDate, 1);
-  const multi = await pairAppliedByPeopleCountBucket(tx, appliedLocalDate, { gte: 2 });
-
-  return {
-    pairedCount: oneToOne.pairedCount + multi.pairedCount,
-    unmatchedMale: oneToOne.unmatchedMale + multi.unmatchedMale,
-    unmatchedFemale: oneToOne.unmatchedFemale + multi.unmatchedFemale,
-    pairs: [...oneToOne.pairs, ...multi.pairs],
-  };
-}
-
-module.exports = { runFestivalPairing, shuffleInPlace };
+module.exports = {
+  validateFestivalMatchPool,
+  computeFestivalPairs,
+  maxBipartitePairs,
+  runFestivalPairing,
+};

@@ -26,23 +26,18 @@ test('normalizeFestivalVibeKey: 도란·시끌 계열', () => {
   assert.ok(sameFestivalVibe('도란', '도란도란'));
 });
 
-test('validateFestivalMatchPool: 남녀·1명팀·다인팀 균형', () => {
+test('validateFestivalMatchPool: 1명팀·다인팀 코호트 수 달라도 통과', () => {
   const ok = validateFestivalMatchPool(
-    [team(1, 'M', 1, '도란'), team(2, 'M', 3, '시끌')],
-    [team(3, 'F', 1, '도란'), team(4, 'F', 2, '시끌')],
+    [team(1, 'M', 1, '도란'), team(2, 'M', 1, '도란')],
+    [team(3, 'F', 2, '시끌'), team(4, 'F', 3, '시끌')],
   );
   assert.equal(ok.ok, true);
+  assert.equal(ok.counts?.soloMaleTeams, 2);
+  assert.equal(ok.counts?.soloFemaleTeams, 0);
 
   const badGender = validateFestivalMatchPool([team(1, 'M', 1, '도란')], []);
   assert.equal(badGender.ok, false);
   assert.equal(badGender.code, 'FESTIVAL_GENDER_TEAM_IMBALANCE');
-
-  const badSolo = validateFestivalMatchPool(
-    [team(1, 'M', 1, '도란'), team(2, 'M', 1, '도란')],
-    [team(3, 'F', 2, '시끌'), team(4, 'F', 3, '시끌')],
-  );
-  assert.equal(badSolo.ok, false);
-  assert.equal(badSolo.code, 'FESTIVAL_SOLO_COHORT_IMBALANCE');
 });
 
 test('computeFestivalPairs: 같은 무드 우선, 균형 풀은 전원 매칭', () => {
@@ -69,7 +64,7 @@ test('computeFestivalPairs: 같은 무드 우선, 균형 풀은 전원 매칭', 
   }
 });
 
-test('computeFestivalPairs: 무드 교차(1-2)로 전원 매칭', () => {
+test('computeFestivalPairs: 여 1명팀 무드 교차(2단계)로 전원 매칭', () => {
   const males = [team(1, 'M', 1, '도란'), team(2, 'M', 1, '도란')];
   const females = [team(3, 'F', 1, '시끌'), team(4, 'F', 1, '시끌')];
   const r = computeFestivalPairs(males, females);
@@ -78,7 +73,26 @@ test('computeFestivalPairs: 무드 교차(1-2)로 전원 매칭', () => {
   assert.equal(r.unmatchedMale, 0);
 });
 
-test('computeFestivalPairs: 불균형 시 ok=false', () => {
+test('computeFestivalPairs: 1명팀 남·여 수 달라도 5단계(성별만)로 매칭', () => {
+  const males = [team(1, 'M', 1, '도란'), team(2, 'M', 1, '도란')];
+  const females = [team(3, 'F', 2, '시끌'), team(4, 'F', 3, '시끌')];
+  const r = computeFestivalPairs(males, females);
+  assert.equal(r.ok, true);
+  assert.equal(r.pairedCount, 2);
+  assert.equal(r.unmatchedMale, 0);
+  assert.equal(r.unmatchedFemale, 0);
+});
+
+test('computeFestivalPairs: 여 다인팀 ↔ 남 1명팀 같은 무드(3단계)', () => {
+  const males = [team(1, 'M', 1, '도란')];
+  const females = [team(2, 'F', 2, '도란도란')];
+  const r = computeFestivalPairs(males, females);
+  assert.equal(r.ok, true);
+  assert.equal(r.pairedCount, 1);
+  assert.ok(sameFestivalVibe(r.pairs[0].male.vibe, r.pairs[0].female.vibe));
+});
+
+test('computeFestivalPairs: 남·여 팀 수 불균형 시 ok=false', () => {
   const r = computeFestivalPairs([team(1, 'M', 1, '도란')], []);
   assert.equal(r.ok, false);
   assert.equal(r.validation.code, 'FESTIVAL_GENDER_TEAM_IMBALANCE');

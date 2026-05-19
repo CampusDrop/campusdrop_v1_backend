@@ -40,6 +40,7 @@ function partitionSoloMulti(rows) {
 }
 
 /**
+ * 남·여 전체 팀 수만 검사합니다. 1명팀/다인팀 코호트 수는 달라도 됩니다.
  * @param {FestApp[]} males
  * @param {FestApp[]} females
  */
@@ -58,30 +59,6 @@ function validateFestivalMatchPool(males, females) {
 
   const mPart = partitionSoloMulti(males);
   const fPart = partitionSoloMulti(females);
-
-  if (mPart.solo.length !== fPart.solo.length) {
-    return {
-      ok: /** @type {const} */ (false),
-      code: 'FESTIVAL_SOLO_COHORT_IMBALANCE',
-      error: '1명 팀(남·여) 수가 같아야 매칭할 수 있습니다.',
-      counts: {
-        soloMaleTeams: mPart.solo.length,
-        soloFemaleTeams: fPart.solo.length,
-      },
-    };
-  }
-
-  if (mPart.multi.length !== fPart.multi.length) {
-    return {
-      ok: /** @type {const} */ (false),
-      code: 'FESTIVAL_MULTI_COHORT_IMBALANCE',
-      error: '2명 이상 팀(남·여) 수가 같아야 매칭할 수 있습니다.',
-      counts: {
-        multiMaleTeams: mPart.multi.length,
-        multiFemaleTeams: fPart.multi.length,
-      },
-    };
-  }
 
   return {
     ok: /** @type {const} */ (true),
@@ -148,20 +125,33 @@ function maxBipartitePairs(males, females, canPair) {
   return pairs;
 }
 
-/** @param {FestApp} m @param {FestApp} f */
-function isSoloMultiCrossPair(m, f) {
-  return (
-    (m.peopleCount === 1 && f.peopleCount >= 2) || (m.peopleCount >= 2 && f.peopleCount === 1)
-  );
-}
-
 /** @param {Set<string>} matchedKeys @param {FestApp[]} rows */
 function filterUnmatched(rows, matchedKeys) {
   return rows.filter((r) => !matchedKeys.has(rowKey(r)));
 }
 
+/** 여 1명팀 ↔ 남 1명팀, 같은 무드 */
+function phaseFemaleSoloMaleSoloSameVibe(m, f) {
+  return f.peopleCount === 1 && m.peopleCount === 1 && sameFestivalVibe(m.vibe, f.vibe);
+}
+
+/** 여 1명팀 ↔ 남 1명팀, 무드 무관 */
+function phaseFemaleSoloMaleSoloAnyVibe(m, f) {
+  return f.peopleCount === 1 && m.peopleCount === 1;
+}
+
+/** 여 2명+팀 ↔ 남 1명+팀, 같은 무드 (1:다 포함) */
+function phaseFemaleMultiMaleAnySameVibe(m, f) {
+  return f.peopleCount >= 2 && m.peopleCount >= 1 && sameFestivalVibe(m.vibe, f.vibe);
+}
+
+/** 여 2명+팀 ↔ 남 2명+팀, 무드 무관 */
+function phaseFemaleMultiMaleMultiAnyVibe(m, f) {
+  return f.peopleCount >= 2 && m.peopleCount >= 2;
+}
+
 /**
- * 무드 우선(같은 인원 버킷) → 무드 완화 → 1명팀↔다인팀. 팀 1:1만 허용.
+ * 여팀 기준 5단계 → 최대 이성 매칭. 팀 1:1만 허용.
  * @param {FestApp[]} males
  * @param {FestApp[]} females
  */
@@ -170,9 +160,6 @@ function computeFestivalPairs(males, females) {
   if (!validation.ok) {
     return { ok: /** @type {const} */ (false), validation };
   }
-
-  const { solo: soloM, multi: multiM } = partitionSoloMulti(males);
-  const { solo: soloF, multi: multiF } = partitionSoloMulti(females);
 
   /** @type {FestPair[]} */
   const pairs = [];
@@ -189,26 +176,18 @@ function computeFestivalPairs(males, females) {
     }
   }
 
-  /**
-   * @param {FestApp[]} mCohort
-   * @param {FestApp[]} fCohort
-   */
-  function runCohortVibePhases(mCohort, fCohort) {
-    const mRem = () => filterUnmatched(mCohort, matchedKeys);
-    const fRem = () => filterUnmatched(fCohort, matchedKeys);
-
-    absorbPairs(
-      maxBipartitePairs(mRem(), fRem(), (m, f) => sameFestivalVibe(m.vibe, f.vibe)),
-    );
-    absorbPairs(maxBipartitePairs(mRem(), fRem(), () => true));
+  /** @param {(m: FestApp, f: FestApp) => boolean} canPair */
+  function runPhase(canPair) {
+    const mRem = filterUnmatched(males, matchedKeys);
+    const fRem = filterUnmatched(females, matchedKeys);
+    absorbPairs(maxBipartitePairs(mRem, fRem, canPair));
   }
 
-  runCohortVibePhases(soloM, soloF);
-  runCohortVibePhases(multiM, multiF);
-
-  absorbPairs(
-    maxBipartitePairs(filterUnmatched(males, matchedKeys), filterUnmatched(females, matchedKeys), isSoloMultiCrossPair),
-  );
+  runPhase(phaseFemaleSoloMaleSoloSameVibe);
+  runPhase(phaseFemaleSoloMaleSoloAnyVibe);
+  runPhase(phaseFemaleMultiMaleAnySameVibe);
+  runPhase(phaseFemaleMultiMaleMultiAnyVibe);
+  runPhase(() => true);
 
   const unmatchedMale = filterUnmatched(males, matchedKeys).length;
   const unmatchedFemale = filterUnmatched(females, matchedKeys).length;
@@ -290,5 +269,9 @@ module.exports = {
   validateFestivalMatchPool,
   computeFestivalPairs,
   maxBipartitePairs,
+  phaseFemaleSoloMaleSoloSameVibe,
+  phaseFemaleSoloMaleSoloAnyVibe,
+  phaseFemaleMultiMaleAnySameVibe,
+  phaseFemaleMultiMaleMultiAnyVibe,
   runFestivalPairing,
 };

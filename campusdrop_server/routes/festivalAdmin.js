@@ -210,7 +210,7 @@ router.get('/festival/applications', adminAuthMiddleware, async (req, res) => {
     return res.status(200).json({
       appliedLocalDateKst: parsed.ymd,
       noteKst:
-        '한 날짜당 하나의 대기 풀입니다. `match-run`은 남·여 팀 수와 1명팀/다인팀 코호트가 맞을 때만 실행하세요. 무드 우선 매칭 후 친구톡 발송. `status` 생략 시 `APPLIED`만 반환.',
+        '한 날짜당 하나의 대기 풀입니다. `match-run`은 남·여 전체 팀 수가 같을 때 실행(1명팀/다인팀 수는 각각 달라도 됨). 여팀 기준 5단계 매칭 후 친구톡. `status` 생략 시 `APPLIED`만 반환.',
       kst: week,
       defaultStatusFilter: 'APPLIED',
       dayCounts: {
@@ -254,8 +254,8 @@ router.get('/festival/applications', adminAuthMiddleware, async (req, res) => {
 /**
  * POST /api/admin/festival/match-run
  * Body: `{ appliedLocalDate: "YYYY-MM-DD" }` 또는 `{ date: "YYYY-MM-DD" }`
- * — `APPLIED` 풀: 남·여 팀 수·1명팀/다인팀 코호트 균형 검증 후,
- *   같은 인원 버킷 내 무드 우선(도란↔도란, 시끌↔시끌) → 무드 완화 → 1명↔다인 교차, 팀 1:1 매칭·친구톡.
+ * — `APPLIED` 풀: 남·여 **전체** 팀 수만 같으면 실행(1명팀/다인팀 코호트 수는 달라도 됨).
+ *   여팀 기준 5단계(1명팀 무드→1명팀 무관→다인팀 무드·1명남 포함→다인↔다인→성별만)·친구톡.
  */
 router.post('/festival/match-run', adminAuthMiddleware, async (req, res) => {
   try {
